@@ -94,6 +94,7 @@
 extern USBD_CDC_ItfTypeDef USBD_Interface_fops_HS;
 
 /* USER CODE BEGIN EXPORTED_VARIABLES */
+extern volatile uint8_t cdc_hs_tx_complete;
 
 /* USER CODE END EXPORTED_VARIABLES */
 

@@ -38,7 +38,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
     Middlewares/Third_Party/FreeRTOS/Source/include
     Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
-    Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+    Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM7
     Middlewares/ST/STM32_USB_Device_Library/Core/Inc
     Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
     Drivers/CMSIS/Device/ST/STM32H7xx/Include

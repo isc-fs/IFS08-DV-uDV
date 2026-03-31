@@ -31,7 +31,7 @@
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-
+volatile uint8_t cdc_hs_tx_complete = 1;
 /* USER CODE END PV */
 
 /** @addtogroup STM32_USB_OTG_DEVICE_LIBRARY
@@ -157,7 +157,8 @@ static int8_t CDC_Init_HS(void)
   /* Set Application Buffers */
   USBD_CDC_SetTxBuffer(&hUsbDeviceHS, UserTxBufferHS, 0);
   USBD_CDC_SetRxBuffer(&hUsbDeviceHS, UserRxBufferHS);
-  return (USBD_OK);
+  USBD_CDC_ReceivePacket(&hUsbDeviceHS);
+  return USBD_OK;
   /* USER CODE END 8 */
 }
 
@@ -265,9 +266,9 @@ static int8_t CDC_Receive_HS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 11 */
   usb_cdc_transport_receive(Buf, *Len);
-  USBD_CDC_SetRxBuffer(&hUsbDeviceHS, &Buf[0]);
+  USBD_CDC_SetRxBuffer(&hUsbDeviceHS, UserRxBufferHS);
   USBD_CDC_ReceivePacket(&hUsbDeviceHS);
-  return (USBD_OK);
+  return USBD_OK;
   /* USER CODE END 11 */
 }
 
@@ -283,11 +284,21 @@ uint8_t CDC_Transmit_HS(uint8_t* Buf, uint16_t Len)
   uint8_t result = USBD_OK;
   /* USER CODE BEGIN 12 */
   USBD_CDC_HandleTypeDef *hcdc = (USBD_CDC_HandleTypeDef*)hUsbDeviceHS.pClassData;
-  if (hcdc->TxState != 0){
-    return USBD_BUSY;
-  }
-  USBD_CDC_SetTxBuffer(&hUsbDeviceHS, Buf, Len);
-  result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
+  if (hcdc == NULL) {
+      return USBD_FAIL;
+    }
+
+    if (hcdc->TxState != 0) {
+      return USBD_BUSY;
+    }
+
+    cdc_hs_tx_complete = 0;
+    USBD_CDC_SetTxBuffer(&hUsbDeviceHS, Buf, Len);
+    result = USBD_CDC_TransmitPacket(&hUsbDeviceHS);
+
+    if (result != USBD_OK) {
+      cdc_hs_tx_complete = 1;
+    }
   /* USER CODE END 12 */
   return result;
 }
@@ -311,6 +322,7 @@ static int8_t CDC_TransmitCplt_HS(uint8_t *Buf, uint32_t *Len, uint8_t epnum)
   UNUSED(Buf);
   UNUSED(Len);
   UNUSED(epnum);
+  cdc_hs_tx_complete = 1;
   /* USER CODE END 14 */
   return result;
 }
