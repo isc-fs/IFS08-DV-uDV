@@ -7,62 +7,60 @@ cmake_minimum_required(VERSION 3.22)
 # User is free to modify the file as much as necessary
 #
 
-# Setup compiler settings
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
-
-# Define the build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug")
 endif()
 
-# Set the project name
 set(CMAKE_PROJECT_NAME uDV)
 
-# Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
-# Core project settings
 project(${CMAKE_PROJECT_NAME})
-message("Build type: " ${CMAKE_BUILD_TYPE})
+message("Build type: ${CMAKE_BUILD_TYPE}")
 
-# Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
-# Create an executable object type
+set(MICROROS_DIR ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils)
+
 add_executable(${CMAKE_PROJECT_NAME})
 
-# Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
-# Link directories setup
-target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
-)
-
-# Add sources to executable
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user sources here
-)
-
-# Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
+    Core/Inc
+    USB_DEVICE/App
+    USB_DEVICE/Target
+    Drivers/STM32H7xx_HAL_Driver/Inc
+    Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
+    Middlewares/Third_Party/FreeRTOS/Source/include
+    Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2
+    Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+    Middlewares/ST/STM32_USB_Device_Library/Core/Inc
+    Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
+    Drivers/CMSIS/Device/ST/STM32H7xx/Include
+    Drivers/CMSIS/Include
+    ${MICROROS_DIR}/microros_static_library/libmicroros/microros_include
 )
 
-# Add project symbols (macros)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${MICROROS_DIR}/extra_sources/custom_memory_manager.c
+    ${MICROROS_DIR}/extra_sources/microros_allocators.c
+    ${MICROROS_DIR}/extra_sources/microros_time.c
+)
+
+target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
+)
+
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
 )
 
-# Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
-# Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
-
-    # Add user defined libraries
+    ${MICROROS_DIR}/microros_static_library/libmicroros/libmicroros.a
 )
