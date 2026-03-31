@@ -243,17 +243,6 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir $@		
 
-#######################################
-# clean up
-#######################################
-clean:
-	-rm -fR $(BUILD_DIR)
-  
-#######################################
-# dependencies
-#######################################
--include $(wildcard $(BUILD_DIR)/*.d)
-
 
 #######################################
 # micro-ROS addons
@@ -271,5 +260,17 @@ C_SOURCES += micro_ros_stm32cubemx_utils/extra_sources/microros_transports/dma_t
 
 print_cflags:
   @echo $(CFLAGS)
+
+#######################################
+# clean up
+#######################################
+clean:
+	-rm -fR $(BUILD_DIR)
+  
+#######################################
+# dependencies
+#######################################
+-include $(wildcard $(BUILD_DIR)/*.d)
+
 
 # *** EOF ***
