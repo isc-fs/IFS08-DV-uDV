@@ -1,3 +1,5 @@
 build
 mx.scratch
 !.settings
+.clangd
+.vscode/c_cpp_properties.json
