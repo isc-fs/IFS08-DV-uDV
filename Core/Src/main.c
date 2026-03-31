@@ -36,9 +36,11 @@
 #include <rclc/executor.h>
 #include <uxr/client/transport.h>
 #include <rmw_microxrcedds_c/config.h>
+#include "usb_cdc_transport.h"
 #include <rmw_microros/rmw_microros.h>
 
 #include <std_msgs/msg/int32.h>
+#include "usbd_cdc_if.h"
 
 /* USER CODE END Includes */
 
@@ -60,11 +62,6 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
-bool cubemx_transport_open(struct uxrCustomTransport * transport);
-bool cubemx_transport_close(struct uxrCustomTransport * transport);
-size_t cubemx_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err);
-size_t cubemx_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err);
 
 /* USER CODE END PV */
 
@@ -123,7 +120,17 @@ int main(void)
   MX_I2C2_Init();
   MX_CORDIC_Init();
   /* USER CODE BEGIN 2 */
+  MX_USB_DEVICE_Init();
 
+  HAL_Delay(500);
+
+  rmw_uros_set_custom_transport(
+      true,
+      NULL,
+      cubemx_transport_open,
+      cubemx_transport_close,
+      cubemx_transport_write,
+      cubemx_transport_read);
   /* USER CODE END 2 */
 
   /* Init scheduler */

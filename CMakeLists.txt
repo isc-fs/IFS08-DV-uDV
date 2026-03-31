@@ -50,6 +50,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     ${MICROROS_DIR}/extra_sources/custom_memory_manager.c
     ${MICROROS_DIR}/extra_sources/microros_allocators.c
     ${MICROROS_DIR}/extra_sources/microros_time.c
+    Core/Src/usb_cdc_transport.c
 )
 
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
