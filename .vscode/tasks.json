@@ -2,11 +2,23 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build",
+            "label": "CMake Configure",
             "type": "shell",
-            "command": "make",
+            "command": "cmake",
             "args": [
-                "GCC_PATH=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin",
+                "--preset",
+                "Configure preset using toolchain file"
+            ],
+            "problemMatcher": [],
+            "detail": "Configure CMake with ARM toolchain"
+        },
+        {
+            "label": "Build (CMake)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "out/build/Configure preset using toolchain file",
                 "-j8"
             ],
             "group": {
@@ -14,10 +26,35 @@
                 "isDefault": true
             },
             "problemMatcher": "$gcc",
-            "detail": "Build firmware using arm-none-eabi-gcc"
+            "detail": "Build firmware using CMake + Ninja",
+            "dependsOn": "CMake Configure"
         },
         {
-            "label": "Clean",
+            "label": "Build (Make)",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "GCC_PATH=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin",
+                "-j8"
+            ],
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "detail": "Build firmware using Makefile (needed for micro-ROS Docker builder)"
+        },
+        {
+            "label": "Clean (CMake)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "out/build/Configure preset using toolchain file",
+                "--target",
+                "clean"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean (Make)",
             "type": "shell",
             "command": "make",
             "args": ["clean"],

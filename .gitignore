@@ -1,6 +1,8 @@
 build
+out
 mx.scratch
 !.settings
 .clangd
 .vscode/c_cpp_properties.json
 microros_agent_ws/*
+.claude
