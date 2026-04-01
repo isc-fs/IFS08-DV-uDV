@@ -134,9 +134,12 @@ void StartDefaultTask(void *argument)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
 
+  // Wait for USB CDC to enumerate on the host
+  osDelay(2000);
+
   // micro-ROS custom transport (USB CDC, no framing needed)
   rmw_uros_set_custom_transport(
-    false,
+    true,
     NULL,
     cubemx_transport_open,
     cubemx_transport_close,
