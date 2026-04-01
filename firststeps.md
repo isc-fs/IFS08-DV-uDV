@@ -88,17 +88,6 @@ You should see incrementing `Int32` values being published at 100 Hz.
 | Agent shows `create_client` then disconnects | Stack overflow or transport error | Verify FreeRTOS task stack >= 3000 words (12 KB) |
 | Permission denied on `/dev/ttyACM0` | User not in dialout group | Run `sudo usermod -aG dialout $USER` and re-login |
 
-## macOS Notes
-
-On macOS the device path is different:
-
-```bash
-ls /dev/cu.usbmodem*
-ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/cu.usbmodem<ID>
-```
-
-The micro-ROS agent can be built on macOS with the same steps, ensuring ROS 2 Humble is sourced from your local installation or conda environment.
-
 ## Rebuilding the micro-ROS Static Library
 
 If you need to regenerate the micro-ROS static library (e.g., after changing ROS message types), run from the project root:
