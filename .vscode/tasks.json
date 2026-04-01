@@ -18,7 +18,7 @@
             "command": "cmake",
             "args": [
                 "--build",
-                "out/build/Configure preset using toolchain file",
+                "build/binaries",
                 "-j8"
             ],
             "group": {
@@ -47,7 +47,7 @@
             "command": "cmake",
             "args": [
                 "--build",
-                "out/build/Configure preset using toolchain file",
+                "build/binaries",
                 "--target",
                 "clean"
             ],
