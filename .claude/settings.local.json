@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/raulmoran/Documents/Github/IFS08-DV-uDV log --oneline)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/Core/Src/freertos.c\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/Core/Src/main.c\")",
+      "Bash(curl -s \"https://api.github.com/repos/lFatality/stm32_micro_ros_setup/contents/f429_microros/Core/Src\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/Core/Src/usart.c\")",
+      "Bash(curl -s \"https://api.github.com/repos/lFatality/stm32_micro_ros_setup/contents/f429_microros\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/README.md\")",
+      "Bash(curl -s \"https://api.github.com/repos/lFatality/stm32_micro_ros_setup/contents/f429_microros/micro_ros_stm32cubemx_utils\")",
+      "Bash(curl -s \"https://api.github.com/repos/lFatality/stm32_micro_ros_setup/contents/f429_microros/micro_ros_stm32cubemx_utils/extra_sources\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_transport_serial.c\")",
+      "Bash(curl -s \"https://api.github.com/repos/lFatality/stm32_micro_ros_setup/contents/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_transports\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_transports/microros_cubemx_transport.c\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_transports/dma_transport.c\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_allocators.c\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/lFatality/stm32_micro_ros_setup/main/f429_microros/micro_ros_stm32cubemx_utils/extra_sources/microros_time.c\")",
+      "Bash(make)",
+      "Bash(make -j4)",
+      "Bash(make clean:*)",
+      "WebSearch",
+      "WebFetch(domain:community.st.com)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(gh api:*)",
+      "Bash(find /Users/raulmoran/Documents/Github/IFS08_PRIVATE/GPS_TEST -type f -name *task*.c -o -name *Task*.c)",
+      "Bash(find /Users/raulmoran/Documents/Github/IFS08_PRIVATE/GPS_TEST -type f \\\\\\(-name README* -o -name *.txt -o -name *.doc* \\\\\\))"
+    ]
+  }
+}
