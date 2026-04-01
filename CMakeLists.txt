@@ -26,6 +26,10 @@ set(C_SOURCES
     Core/Src/cordic.c
     Core/Src/fdcan.c
     Core/Src/i2c.c
+    Core/Src/bmi088.c
+    Core/Src/i2c_utils.c
+    Core/Src/imu_service.c
+    Core/Src/attitude.c
     Core/Src/stm32h7xx_it.c
     Core/Src/stm32h7xx_hal_msp.c
     Core/Src/stm32h7xx_hal_timebase_tim.c
