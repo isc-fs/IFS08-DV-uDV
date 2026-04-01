@@ -4,4 +4,5 @@ mx.scratch
 .clangd
 .vscode/c_cpp_properties.json
 microros_agent_ws/*
-.claude
+.claude/*
+.claude/settings.local.json
