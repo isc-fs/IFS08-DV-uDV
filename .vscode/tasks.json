@@ -1,0 +1,27 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "GCC_PATH=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin",
+                "-j8"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "detail": "Build firmware using arm-none-eabi-gcc"
+        },
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "make",
+            "args": ["clean"],
+            "problemMatcher": []
+        }
+    ]
+}
