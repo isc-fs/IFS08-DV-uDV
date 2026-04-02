@@ -34,6 +34,7 @@
 #include <uxr/client/transport.h>
 #include <rmw_microxrcedds_c/config.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rmw_microros/time_sync.h>
 #include <rosidl_runtime_c/string_functions.h>
 
 #include <sensor_msgs/msg/imu.h>
@@ -55,6 +56,14 @@
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
 #define IMU_QUEUE_DEPTH 16
+#define TIME_SYNC_TIMEOUT_MS  1000
+#define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
+
+// High-resolution microsecond timestamp using DWT cycle counter
+static inline uint64_t dwt_micros(void)
+{
+  return (uint64_t)DWT->CYCCNT / (SystemCoreClock / 1000000U);
+}
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -155,6 +164,11 @@ void StartDefaultTask(void *argument)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
 
+  // Enable DWT cycle counter for high-res timestamps
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
   // Wait for USB CDC to enumerate on the host
   osDelay(2000);
 
@@ -187,6 +201,9 @@ void StartDefaultTask(void *argument)
   rclc_support_init(&support, 0, NULL, &allocator);
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
+  // Initial time synchronization with the agent (NTP-like)
+  rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+
   // IMU publisher (best-effort QoS for maximum throughput)
   rcl_publisher_t imu_pub;
   rclc_publisher_init_best_effort(
@@ -218,6 +235,15 @@ void StartDefaultTask(void *argument)
     imu_sample_t sample;
     if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
     {
+      // High-res timestamp: epoch offset from sync + DWT microseconds
+      // rmw_uros_epoch_nanos() gives current synced time; we adjust by the
+      // difference between now and the sample capture moment for precise stamping
+      int64_t now_us = (int64_t)dwt_micros();
+      int64_t age_us = now_us - (int64_t)sample.timestamp_us;
+      int64_t stamp_ns = rmw_uros_epoch_nanos() - (age_us * 1000LL);
+      imu_msg.header.stamp.sec = (int32_t)(stamp_ns / 1000000000LL);
+      imu_msg.header.stamp.nanosec = (uint32_t)(stamp_ns % 1000000000LL);
+
       // Linear acceleration: g -> m/s^2
       imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
       imu_msg.linear_acceleration.y = sample.imu.ay_g * G_TO_MS2;
@@ -230,14 +256,16 @@ void StartDefaultTask(void *argument)
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-      // Publish debug status at ~1Hz (every 400th sample)
-      static uint16_t debug_counter = 0;
-      if (++debug_counter >= 400)
+      // Periodic time re-sync and debug publish (~every 10s)
+      static uint16_t sync_counter = 0;
+      if (++sync_counter >= TIME_SYNC_INTERVAL)
       {
+        rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+
         extern volatile int32_t imu_debug_status;
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
-        debug_counter = 0;
+        sync_counter = 0;
       }
     }
   }
@@ -271,11 +299,15 @@ void StartImuTask(void *argument)
     // Wait for TIM2 ISR to release the semaphore (400Hz, zero jitter)
     osSemaphoreAcquire(imuSemHandle, osWaitForever);
 
+    // Capture high-res timestamp at exact sampling moment
+    uint64_t ts_us = dwt_micros();
+
     imu_sample_t sample;
     bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
     imu_debug_status = (int32_t)step_st;
     if (step_st == BMI088_OK)
     {
+      sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
     }
   }
