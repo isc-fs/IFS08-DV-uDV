@@ -81,7 +81,7 @@ ros2 topic list
 | Topic | Type | Rate | Description |
 |---|---|---|---|
 | `/imu/data_raw` | `sensor_msgs/msg/Imu` | 400 Hz | BMI088 accelerometer and gyroscope data |
-| `/imu/status` | `std_msgs/msg/Int32` | ~100 Hz | IMU driver status code (0 = OK, see below) |
+| `/imu/status` | `std_msgs/msg/Int32` | ~1 Hz | IMU driver status code (0 = OK, see below) |
 
 ### Check IMU data
 
@@ -91,11 +91,43 @@ ros2 topic echo /imu/data_raw
 
 You should see `linear_acceleration` (m/s^2) and `angular_velocity` (rad/s) values updating at 400 Hz. The `orientation` field is not populated (covariance[0] = -1).
 
+The IMU publisher uses **best-effort QoS** for maximum throughput. To subscribe, match the QoS:
+
+```bash
+ros2 topic echo /imu/data_raw --qos-profile sensor_data
+```
+
 ```bash
 ros2 topic hz /imu/data_raw
 ```
 
-Should report ~400 Hz with minimal jitter (sampling is driven by a hardware timer interrupt).
+Should report ~400 Hz with minimal jitter (sampling is driven by a hardware timer interrupt via TIM2 + semaphore).
+
+### Timestamps
+
+Messages carry epoch-synchronized timestamps with sub-microsecond precision:
+- Clock synchronized with the agent via NTP-like `rmw_uros_sync_session` protocol
+- Timestamps captured at the exact TIM2 interrupt moment using the DWT cycle counter (528 MHz)
+- Re-synced every ~10 seconds to correct crystal drift
+- Deterministic 2.5ms intervals between samples for SLAM pre-integration
+
+### Startup Sequence
+
+After flashing and connecting, the board goes through:
+1. **USB CDC enumeration** (~2 seconds)
+2. **micro-ROS agent connection** (~1 second)
+3. **Clock synchronization** (retries until success)
+4. **Gyro bias calibration** (~6 seconds, board must be stationary)
+5. **Publishing begins** at 400 Hz
+
+Total startup time: ~10 seconds. Keep the board still during this period.
+
+### Covariance Values
+
+The IMU message includes covariance matrices populated from the BMI088 datasheet:
+- Accelerometer: 8.25e-4 (m/s^2)^2 per axis (175 ug/sqrt(Hz) noise density)
+- Gyroscope: 1.37e-5 (rad/s)^2 per axis (0.014 deg/s/sqrt(Hz) noise density)
+- Orientation: covariance[0] = -1 (not available)
 
 ### Check IMU status
 
