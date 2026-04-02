@@ -81,7 +81,12 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  // Zero RAM_D1 BSS section (startup only clears DTCMRAM .bss)
+  {
+    extern uint8_t _sram_d1_bss, _eram_d1_bss;
+    uint8_t *p = &_sram_d1_bss;
+    while (p < &_eram_d1_bss) *p++ = 0;
+  }
   /* USER CODE END Init */
 
   /* Configure the system clock */
