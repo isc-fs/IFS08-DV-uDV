@@ -310,6 +310,31 @@ void StartImuTask(void *argument)
   bmi088_status_t init_st = imu_service_start(&imu_svc);
   imu_debug_status = (int32_t)init_st;
 
+  // Gyro bias calibration: collect 300 samples over 6s while stationary
+  if (init_st == BMI088_OK)
+  {
+    const int CAL_SAMPLES = 300;
+    const float GYR_LSB_PER_DPS = 16.4f;  // ±2000 dps range
+    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+
+    for (int i = 0; i < CAL_SAMPLES; i++)
+    {
+      bmi088_raw_t raw;
+      if (bmi088_read_raw(&imu_svc.bmi, &raw) == BMI088_OK)
+      {
+        gx_sum += raw.gx;
+        gy_sum += raw.gy;
+        gz_sum += raw.gz;
+      }
+      osDelay(20);
+    }
+
+    float gx_bias = (float)gx_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gy_bias = (float)gy_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gz_bias = (float)gz_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    attitude_set_gyro_bias_dps(&imu_svc.att, gx_bias, gy_bias, gz_bias);
+  }
+
   // Start TIM2 interrupt for deterministic 400Hz sampling
   HAL_TIM_Base_Start_IT(&htim2);
 
