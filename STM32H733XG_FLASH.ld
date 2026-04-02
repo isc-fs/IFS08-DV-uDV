@@ -185,6 +185,17 @@ SECTIONS
     __bss_end__ = _ebss;
   } >DTCMRAM
 
+  /* RAM_D1 BSS section for large buffers (micro-ROS heap, etc.) */
+  .ram_d1_bss (NOLOAD) :
+  {
+    . = ALIGN(4);
+    _sram_d1_bss = .;
+    *(.ram_d1_bss)
+    *(.ram_d1_bss*)
+    . = ALIGN(4);
+    _eram_d1_bss = .;
+  } >RAM_D1
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
   {

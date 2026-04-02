@@ -69,15 +69,47 @@ On successful connection you should see output similar to:
 
 ## 5. Verify Communication
 
-In a new terminal, check the topic is available and data is flowing:
+In a new terminal, check the topics are available and data is flowing:
 
 ```bash
 source /opt/ros/humble/setup.bash
 ros2 topic list
-ros2 topic echo /cubemx_publisher
 ```
 
-You should see incrementing `Int32` values being published at 100 Hz.
+### Available Topics
+
+| Topic | Type | Rate | Description |
+|---|---|---|---|
+| `/imu/data_raw` | `sensor_msgs/msg/Imu` | 400 Hz | BMI088 accelerometer and gyroscope data |
+| `/imu/status` | `std_msgs/msg/Int32` | ~100 Hz | IMU driver status code (0 = OK, see below) |
+
+### Check IMU data
+
+```bash
+ros2 topic echo /imu/data_raw
+```
+
+You should see `linear_acceleration` (m/s^2) and `angular_velocity` (rad/s) values updating at 400 Hz. The `orientation` field is not populated (covariance[0] = -1).
+
+```bash
+ros2 topic hz /imu/data_raw
+```
+
+Should report ~400 Hz with minimal jitter (sampling is driven by a hardware timer interrupt).
+
+### Check IMU status
+
+```bash
+ros2 topic echo /imu/status
+```
+
+| Value | Meaning |
+|---|---|
+| `0` | `BMI088_OK` — sensor reads working normally |
+| `-1` | `BMI088_ERR_PARAM` — initialization parameter error |
+| `-2` | `BMI088_ERR_I2C` — I2C bus communication failure |
+| `-3` | `BMI088_ERR_ID` — unexpected chip ID (not a BMI088) |
+| `-99` | imuTask has not started (likely insufficient FreeRTOS heap) |
 
 ## Troubleshooting
 
