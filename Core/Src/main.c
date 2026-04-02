@@ -23,6 +23,7 @@
 #include "cordic.h"
 #include "fdcan.h"
 #include "i2c.h"
+#include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -104,6 +105,7 @@ int main(void)
   MX_ADC3_Init();
   MX_I2C2_Init();
   MX_CORDIC_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -209,7 +211,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-
+  if (htim->Instance == TIM2)
+  {
+    extern osSemaphoreId_t imuSemHandle;
+    if (imuSemHandle != NULL)
+    {
+      osSemaphoreRelease(imuSemHandle);
+    }
+  }
   /* USER CODE END Callback 1 */
 }
 

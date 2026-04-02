@@ -42,6 +42,7 @@
 #include "imu_service.h"
 #include "i2c.h"
 #include "cordic.h"
+#include "tim.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -71,6 +72,7 @@ const osThreadAttr_t imuTask_attributes = {
 };
 
 osMessageQueueId_t imuQueueHandle;
+osSemaphoreId_t imuSemHandle;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -115,7 +117,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
+  imuSemHandle = osSemaphoreNew(1, 0, NULL);
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -258,8 +260,14 @@ void StartImuTask(void *argument)
   bmi088_status_t init_st = imu_service_start(&imu_svc);
   imu_debug_status = (int32_t)init_st;
 
+  // Start TIM2 interrupt for deterministic 400Hz sampling
+  HAL_TIM_Base_Start_IT(&htim2);
+
   for (;;)
   {
+    // Wait for TIM2 ISR to release the semaphore (400Hz, zero jitter)
+    osSemaphoreAcquire(imuSemHandle, osWaitForever);
+
     imu_sample_t sample;
     bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
     imu_debug_status = (int32_t)step_st;
@@ -267,7 +275,6 @@ void StartImuTask(void *argument)
     {
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
     }
-    osDelay(25);
   }
 }
 
