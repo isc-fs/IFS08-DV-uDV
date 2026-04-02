@@ -201,8 +201,18 @@ void StartDefaultTask(void *argument)
   rclc_support_init(&support, 0, NULL, &allocator);
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
-  // Initial time synchronization with the agent (NTP-like)
-  rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+  // Time synchronization: compute offset between local clock and agent epoch
+  // Retry until sync succeeds, then capture the epoch offset
+  while (!rmw_uros_epoch_synchronized()) {
+    rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+    if (!rmw_uros_epoch_synchronized()) {
+      osDelay(100);
+    }
+  }
+  // Capture offset: agent_epoch - local_dwt at the sync moment
+  int64_t sync_epoch_ns = rmw_uros_epoch_nanos();
+  uint64_t sync_dwt_us = dwt_micros();
+  int64_t epoch_offset_ns = sync_epoch_ns - (int64_t)sync_dwt_us * 1000LL;
 
   // IMU publisher (best-effort QoS for maximum throughput)
   rcl_publisher_t imu_pub;
@@ -235,12 +245,8 @@ void StartDefaultTask(void *argument)
     imu_sample_t sample;
     if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
     {
-      // High-res timestamp: epoch offset from sync + DWT microseconds
-      // rmw_uros_epoch_nanos() gives current synced time; we adjust by the
-      // difference between now and the sample capture moment for precise stamping
-      int64_t now_us = (int64_t)dwt_micros();
-      int64_t age_us = now_us - (int64_t)sample.timestamp_us;
-      int64_t stamp_ns = rmw_uros_epoch_nanos() - (age_us * 1000LL);
+      // Timestamp: DWT capture moment + epoch offset from sync
+      int64_t stamp_ns = epoch_offset_ns + (int64_t)sample.timestamp_us * 1000LL;
       imu_msg.header.stamp.sec = (int32_t)(stamp_ns / 1000000000LL);
       imu_msg.header.stamp.nanosec = (uint32_t)(stamp_ns % 1000000000LL);
 
@@ -261,6 +267,10 @@ void StartDefaultTask(void *argument)
       if (++sync_counter >= TIME_SYNC_INTERVAL)
       {
         rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+        // Refresh epoch offset
+        int64_t new_epoch_ns = rmw_uros_epoch_nanos();
+        uint64_t new_dwt_us = dwt_micros();
+        epoch_offset_ns = new_epoch_ns - (int64_t)new_dwt_us * 1000LL;
 
         extern volatile int32_t imu_debug_status;
         debug_msg.data = imu_debug_status;
