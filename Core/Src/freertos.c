@@ -59,10 +59,19 @@
 #define TIME_SYNC_TIMEOUT_MS  1000
 #define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
 
-// High-resolution microsecond timestamp using DWT cycle counter
+// High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
+// DWT->CYCCNT is 32-bit at 528MHz, wraps every ~8.13s.
+// Must be called at least once per wrap period (400Hz imuTask guarantees this).
+static uint32_t dwt_last = 0;
+static uint64_t dwt_overflow_count = 0;
+
 static inline uint64_t dwt_micros(void)
 {
-  return (uint64_t)DWT->CYCCNT / (SystemCoreClock / 1000000U);
+  uint32_t now = DWT->CYCCNT;
+  if (now < dwt_last) dwt_overflow_count++;
+  dwt_last = now;
+  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
+  return total_cycles / (SystemCoreClock / 1000000U);
 }
 /* USER CODE END PD */
 
