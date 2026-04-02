@@ -37,6 +37,7 @@
 #include <rosidl_runtime_c/string_functions.h>
 
 #include <sensor_msgs/msg/imu.h>
+#include <std_msgs/msg/int32.h>
 
 #include "imu_service.h"
 #include "i2c.h"
@@ -65,15 +66,8 @@
 osThreadId_t imuTaskHandle;
 const osThreadAttr_t imuTask_attributes = {
   .name = "imuTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityAboveNormal,
-};
-
-osThreadId_t rosTaskHandle;
-const osThreadAttr_t rosTask_attributes = {
-  .name = "rosTask",
-  .stack_size = 4000 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
 };
 
 osMessageQueueId_t imuQueueHandle;
@@ -99,7 +93,6 @@ void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
 
 void StartImuTask(void *argument);
-void StartRosTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -139,7 +132,6 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
-  rosTaskHandle = osThreadNew(StartRosTask, NULL, &rosTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -160,41 +152,7 @@ void StartDefaultTask(void *argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
-  for(;;)
-  {
-    osDelay(1000);
-  }
-  /* USER CODE END StartDefaultTask */
-}
 
-/* Private application code --------------------------------------------------*/
-/* USER CODE BEGIN Application */
-
-void StartImuTask(void *argument)
-{
-  extern I2C_HandleTypeDef hi2c2;
-  extern CORDIC_HandleTypeDef hcordic;
-
-  imu_service_t imu_svc;
-  imu_service_init(&imu_svc, &hi2c2,
-                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
-                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
-                   &hcordic, 0.98f);
-  imu_service_start(&imu_svc);
-
-  for (;;)
-  {
-    imu_sample_t sample;
-    if (imu_service_step(&imu_svc, &sample) == BMI088_OK)
-    {
-      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
-    }
-    osDelay(10);
-  }
-}
-
-void StartRosTask(void *argument)
-{
   // Wait for USB CDC to enumerate on the host
   osDelay(2000);
 
@@ -235,6 +193,16 @@ void StartRosTask(void *argument)
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
     "imu/data_raw");
 
+  // IMU debug status publisher
+  rcl_publisher_t imu_debug_pub;
+  std_msgs__msg__Int32 debug_msg;
+  debug_msg.data = 0;
+  rclc_publisher_init_default(
+    &imu_debug_pub,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    "imu/status");
+
   // Prepare IMU message (set static fields once)
   sensor_msgs__msg__Imu imu_msg;
   memset(&imu_msg, 0, sizeof(imu_msg));
@@ -246,7 +214,8 @@ void StartRosTask(void *argument)
   for (;;)
   {
     imu_sample_t sample;
-    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
+    osStatus_t qst = osMessageQueueGet(imuQueueHandle, &sample, NULL, 100);
+    if (qst == osOK)
     {
       // Linear acceleration: g -> m/s^2
       imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
@@ -257,9 +226,48 @@ void StartRosTask(void *argument)
       imu_msg.angular_velocity.x = sample.imu.gx_dps * DPS_TO_RAD;
       imu_msg.angular_velocity.y = sample.imu.gy_dps * DPS_TO_RAD;
       imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
-
-      (void)rcl_publish(&imu_pub, &imu_msg, NULL);
     }
+    // Publish IMU data (last known values if queue timed out)
+    (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+
+    // Publish debug status
+    extern volatile int32_t imu_debug_status;
+    debug_msg.data = imu_debug_status;
+    (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
+    osDelay(10);
+  }
+  /* USER CODE END StartDefaultTask */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+
+// Shared debug status visible from defaultTask via orientation.w
+volatile int32_t imu_debug_status = -99;
+
+void StartImuTask(void *argument)
+{
+  extern I2C_HandleTypeDef hi2c2;
+  extern CORDIC_HandleTypeDef hcordic;
+
+  imu_service_t imu_svc;
+  imu_service_init(&imu_svc, &hi2c2,
+                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
+                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
+                   &hcordic, 0.98f);
+  bmi088_status_t init_st = imu_service_start(&imu_svc);
+  imu_debug_status = (int32_t)init_st;
+
+  for (;;)
+  {
+    imu_sample_t sample;
+    bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
+    imu_debug_status = (int32_t)step_st;
+    if (step_st == BMI088_OK)
+    {
+      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
+    }
+    osDelay(25);
   }
 }
 
