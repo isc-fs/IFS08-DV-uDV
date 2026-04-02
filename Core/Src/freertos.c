@@ -249,6 +249,17 @@ void StartDefaultTask(void *argument)
   // Orientation not available from complementary filter (no quaternion)
   imu_msg.orientation_covariance[0] = -1.0;
 
+  // BMI088 datasheet noise specs (diagonal covariance matrices):
+  // Accel noise density ~175 µg/√Hz, BW ~280Hz → variance ≈ 8.25e-4 (m/s²)²
+  imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
+  imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
+  imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
+
+  // Gyro noise density ~0.014 °/s/√Hz, BW ~230Hz → variance ≈ 1.37e-5 (rad/s)²
+  imu_msg.angular_velocity_covariance[0] = 1.37e-5;
+  imu_msg.angular_velocity_covariance[4] = 1.37e-5;
+  imu_msg.angular_velocity_covariance[8] = 1.37e-5;
+
   for (;;)
   {
     imu_sample_t sample;
