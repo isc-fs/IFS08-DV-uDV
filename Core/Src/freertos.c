@@ -34,6 +34,7 @@
 #include <uxr/client/transport.h>
 #include <rmw_microxrcedds_c/config.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rmw_microros/time_sync.h>
 #include <rosidl_runtime_c/string_functions.h>
 
 #include <sensor_msgs/msg/imu.h>
@@ -55,6 +56,23 @@
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
 #define IMU_QUEUE_DEPTH 16
+#define TIME_SYNC_TIMEOUT_MS  1000
+#define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
+
+// High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
+// DWT->CYCCNT is 32-bit at 528MHz, wraps every ~8.13s.
+// Must be called at least once per wrap period (400Hz imuTask guarantees this).
+static uint32_t dwt_last = 0;
+static uint64_t dwt_overflow_count = 0;
+
+static inline uint64_t dwt_micros(void)
+{
+  uint32_t now = DWT->CYCCNT;
+  if (now < dwt_last) dwt_overflow_count++;
+  dwt_last = now;
+  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
+  return total_cycles / (SystemCoreClock / 1000000U);
+}
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -155,6 +173,11 @@ void StartDefaultTask(void *argument)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
 
+  // Enable DWT cycle counter for high-res timestamps
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
   // Wait for USB CDC to enumerate on the host
   osDelay(2000);
 
@@ -187,6 +210,19 @@ void StartDefaultTask(void *argument)
   rclc_support_init(&support, 0, NULL, &allocator);
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
+  // Time synchronization: compute offset between local clock and agent epoch
+  // Retry until sync succeeds, then capture the epoch offset
+  while (!rmw_uros_epoch_synchronized()) {
+    rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+    if (!rmw_uros_epoch_synchronized()) {
+      osDelay(100);
+    }
+  }
+  // Capture offset: agent_epoch - local_dwt at the sync moment
+  int64_t sync_epoch_ns = rmw_uros_epoch_nanos();
+  uint64_t sync_dwt_us = dwt_micros();
+  int64_t epoch_offset_ns = sync_epoch_ns - (int64_t)sync_dwt_us * 1000LL;
+
   // IMU publisher (best-effort QoS for maximum throughput)
   rcl_publisher_t imu_pub;
   rclc_publisher_init_best_effort(
@@ -213,11 +249,27 @@ void StartDefaultTask(void *argument)
   // Orientation not available from complementary filter (no quaternion)
   imu_msg.orientation_covariance[0] = -1.0;
 
+  // BMI088 datasheet noise specs (diagonal covariance matrices):
+  // Accel noise density ~175 µg/√Hz, BW ~280Hz → variance ≈ 8.25e-4 (m/s²)²
+  imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
+  imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
+  imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
+
+  // Gyro noise density ~0.014 °/s/√Hz, BW ~230Hz → variance ≈ 1.37e-5 (rad/s)²
+  imu_msg.angular_velocity_covariance[0] = 1.37e-5;
+  imu_msg.angular_velocity_covariance[4] = 1.37e-5;
+  imu_msg.angular_velocity_covariance[8] = 1.37e-5;
+
   for (;;)
   {
     imu_sample_t sample;
     if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
     {
+      // Timestamp: DWT capture moment + epoch offset from sync
+      int64_t stamp_ns = epoch_offset_ns + (int64_t)sample.timestamp_us * 1000LL;
+      imu_msg.header.stamp.sec = (int32_t)(stamp_ns / 1000000000LL);
+      imu_msg.header.stamp.nanosec = (uint32_t)(stamp_ns % 1000000000LL);
+
       // Linear acceleration: g -> m/s^2
       imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
       imu_msg.linear_acceleration.y = sample.imu.ay_g * G_TO_MS2;
@@ -230,14 +282,20 @@ void StartDefaultTask(void *argument)
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-      // Publish debug status at ~1Hz (every 400th sample)
-      static uint16_t debug_counter = 0;
-      if (++debug_counter >= 400)
+      // Periodic time re-sync and debug publish (~every 10s)
+      static uint16_t sync_counter = 0;
+      if (++sync_counter >= TIME_SYNC_INTERVAL)
       {
+        rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
+        // Refresh epoch offset
+        int64_t new_epoch_ns = rmw_uros_epoch_nanos();
+        uint64_t new_dwt_us = dwt_micros();
+        epoch_offset_ns = new_epoch_ns - (int64_t)new_dwt_us * 1000LL;
+
         extern volatile int32_t imu_debug_status;
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
-        debug_counter = 0;
+        sync_counter = 0;
       }
     }
   }
@@ -263,6 +321,31 @@ void StartImuTask(void *argument)
   bmi088_status_t init_st = imu_service_start(&imu_svc);
   imu_debug_status = (int32_t)init_st;
 
+  // Gyro bias calibration: collect 300 samples over 6s while stationary
+  if (init_st == BMI088_OK)
+  {
+    const int CAL_SAMPLES = 300;
+    const float GYR_LSB_PER_DPS = 16.4f;  // ±2000 dps range
+    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+
+    for (int i = 0; i < CAL_SAMPLES; i++)
+    {
+      bmi088_raw_t raw;
+      if (bmi088_read_raw(&imu_svc.bmi, &raw) == BMI088_OK)
+      {
+        gx_sum += raw.gx;
+        gy_sum += raw.gy;
+        gz_sum += raw.gz;
+      }
+      osDelay(20);
+    }
+
+    float gx_bias = (float)gx_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gy_bias = (float)gy_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gz_bias = (float)gz_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    attitude_set_gyro_bias_dps(&imu_svc.att, gx_bias, gy_bias, gz_bias);
+  }
+
   // Start TIM2 interrupt for deterministic 400Hz sampling
   HAL_TIM_Base_Start_IT(&htim2);
 
@@ -271,11 +354,15 @@ void StartImuTask(void *argument)
     // Wait for TIM2 ISR to release the semaphore (400Hz, zero jitter)
     osSemaphoreAcquire(imuSemHandle, osWaitForever);
 
+    // Capture high-res timestamp at exact sampling moment
+    uint64_t ts_us = dwt_micros();
+
     imu_sample_t sample;
     bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
     imu_debug_status = (int32_t)step_st;
     if (step_st == BMI088_OK)
     {
+      sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
     }
   }

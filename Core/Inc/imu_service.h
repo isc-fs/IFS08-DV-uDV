@@ -13,6 +13,7 @@ typedef struct {
 
 typedef struct {
   uint32_t t_ms;
+  uint64_t timestamp_us;  // high-res DWT microsecond timestamp
   bmi088_scaled_t imu;
   float roll_deg;
   float pitch_deg;
