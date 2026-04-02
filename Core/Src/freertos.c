@@ -230,10 +230,15 @@ void StartDefaultTask(void *argument)
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-      // Publish debug status
-      extern volatile int32_t imu_debug_status;
-      debug_msg.data = imu_debug_status;
-      (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
+      // Publish debug status at ~1Hz (every 400th sample)
+      static uint16_t debug_counter = 0;
+      if (++debug_counter >= 400)
+      {
+        extern volatile int32_t imu_debug_status;
+        debug_msg.data = imu_debug_status;
+        (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
+        debug_counter = 0;
+      }
     }
   }
   /* USER CODE END StartDefaultTask */
