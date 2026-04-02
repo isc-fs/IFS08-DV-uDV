@@ -25,6 +25,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <math.h>
+
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
@@ -32,8 +34,13 @@
 #include <uxr/client/transport.h>
 #include <rmw_microxrcedds_c/config.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rosidl_runtime_c/string_functions.h>
 
-#include <std_msgs/msg/int32.h>
+#include <sensor_msgs/msg/imu.h>
+
+#include "imu_service.h"
+#include "i2c.h"
+#include "cordic.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -43,7 +50,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define G_TO_MS2   9.80665f
+#define DPS_TO_RAD (float)(M_PI / 180.0)
+#define IMU_QUEUE_DEPTH 4
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,7 +62,21 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+osThreadId_t imuTaskHandle;
+const osThreadAttr_t imuTask_attributes = {
+  .name = "imuTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
 
+osThreadId_t rosTaskHandle;
+const osThreadAttr_t rosTask_attributes = {
+  .name = "rosTask",
+  .stack_size = 4000 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
+osMessageQueueId_t imuQueueHandle;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -74,6 +97,9 @@ void * microros_allocate(size_t size, void * state);
 void microros_deallocate(void * pointer, void * state);
 void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
+
+void StartImuTask(void *argument);
+void StartRosTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -104,7 +130,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+  imuQueueHandle = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -112,7 +138,8 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
+  rosTaskHandle = osThreadNew(StartRosTask, NULL, &rosTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -133,11 +160,45 @@ void StartDefaultTask(void *argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
+  for(;;)
+  {
+    osDelay(1000);
+  }
+  /* USER CODE END StartDefaultTask */
+}
 
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+
+void StartImuTask(void *argument)
+{
+  extern I2C_HandleTypeDef hi2c2;
+  extern CORDIC_HandleTypeDef hcordic;
+
+  imu_service_t imu_svc;
+  imu_service_init(&imu_svc, &hi2c2,
+                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
+                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
+                   &hcordic, 0.98f);
+  imu_service_start(&imu_svc);
+
+  for (;;)
+  {
+    imu_sample_t sample;
+    if (imu_service_step(&imu_svc, &sample) == BMI088_OK)
+    {
+      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
+    }
+    osDelay(10);
+  }
+}
+
+void StartRosTask(void *argument)
+{
   // Wait for USB CDC to enumerate on the host
   osDelay(2000);
 
-  // micro-ROS custom transport (USB CDC, no framing needed)
+  // micro-ROS custom transport (USB CDC, HDLC framing)
   rmw_uros_set_custom_transport(
     true,
     NULL,
@@ -154,45 +215,53 @@ void StartDefaultTask(void *argument)
   freeRTOS_allocator.zero_allocate = microros_zero_allocate;
 
   if (!rcutils_set_default_allocator(&freeRTOS_allocator)) {
-    // Error setting allocators
-    for(;;) { osDelay(1000); }
+    for (;;) { osDelay(1000); }
   }
 
-  // micro-ROS app
-  rcl_publisher_t publisher;
-  std_msgs__msg__Int32 msg;
+  // micro-ROS node
   rclc_support_t support;
   rcl_allocator_t allocator;
   rcl_node_t node;
 
   allocator = rcl_get_default_allocator();
-
-  // Create init_options
   rclc_support_init(&support, 0, NULL, &allocator);
-
-  // Create node
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
-  // Create publisher
+  // IMU publisher
+  rcl_publisher_t imu_pub;
   rclc_publisher_init_default(
-    &publisher,
+    &imu_pub,
     &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "cubemx_publisher");
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
+    "imu/data_raw");
 
-  msg.data = 0;
+  // Prepare IMU message (set static fields once)
+  sensor_msgs__msg__Imu imu_msg;
+  memset(&imu_msg, 0, sizeof(imu_msg));
+  rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
 
-  for(;;)
+  // Orientation not available from complementary filter (no quaternion)
+  imu_msg.orientation_covariance[0] = -1.0;
+
+  for (;;)
   {
-    (void)rcl_publish(&publisher, &msg, NULL);
-    msg.data++;
-    osDelay(10);
-  }
-  /* USER CODE END StartDefaultTask */
-}
+    imu_sample_t sample;
+    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
+    {
+      // Linear acceleration: g -> m/s^2
+      imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
+      imu_msg.linear_acceleration.y = sample.imu.ay_g * G_TO_MS2;
+      imu_msg.linear_acceleration.z = sample.imu.az_g * G_TO_MS2;
 
-/* Private application code --------------------------------------------------*/
-/* USER CODE BEGIN Application */
+      // Angular velocity: dps -> rad/s
+      imu_msg.angular_velocity.x = sample.imu.gx_dps * DPS_TO_RAD;
+      imu_msg.angular_velocity.y = sample.imu.gy_dps * DPS_TO_RAD;
+      imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
+
+      (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+    }
+  }
+}
 
 /* USER CODE END Application */
 
