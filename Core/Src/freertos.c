@@ -54,7 +54,7 @@
 /* USER CODE BEGIN PD */
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
-#define IMU_QUEUE_DEPTH 4
+#define IMU_QUEUE_DEPTH 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -187,9 +187,9 @@ void StartDefaultTask(void *argument)
   rclc_support_init(&support, 0, NULL, &allocator);
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
-  // IMU publisher
+  // IMU publisher (best-effort QoS for maximum throughput)
   rcl_publisher_t imu_pub;
-  rclc_publisher_init_default(
+  rclc_publisher_init_best_effort(
     &imu_pub,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
@@ -216,8 +216,7 @@ void StartDefaultTask(void *argument)
   for (;;)
   {
     imu_sample_t sample;
-    osStatus_t qst = osMessageQueueGet(imuQueueHandle, &sample, NULL, 100);
-    if (qst == osOK)
+    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
     {
       // Linear acceleration: g -> m/s^2
       imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
@@ -228,15 +227,14 @@ void StartDefaultTask(void *argument)
       imu_msg.angular_velocity.x = sample.imu.gx_dps * DPS_TO_RAD;
       imu_msg.angular_velocity.y = sample.imu.gy_dps * DPS_TO_RAD;
       imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
-    }
-    // Publish IMU data (last known values if queue timed out)
-    (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-    // Publish debug status
-    extern volatile int32_t imu_debug_status;
-    debug_msg.data = imu_debug_status;
-    (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
-    osDelay(10);
+      (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+
+      // Publish debug status
+      extern volatile int32_t imu_debug_status;
+      debug_msg.data = imu_debug_status;
+      (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
+    }
   }
   /* USER CODE END StartDefaultTask */
 }
