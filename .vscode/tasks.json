@@ -1,0 +1,64 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--preset",
+                "Configure preset using toolchain file"
+            ],
+            "problemMatcher": [],
+            "detail": "Configure CMake with ARM toolchain"
+        },
+        {
+            "label": "Build (CMake)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build/binaries",
+                "-j8"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "detail": "Build firmware using CMake + Ninja",
+            "dependsOn": "CMake Configure"
+        },
+        {
+            "label": "Build (Make)",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "GCC_PATH=/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin",
+                "-j8"
+            ],
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "detail": "Build firmware using Makefile (needed for micro-ROS Docker builder)"
+        },
+        {
+            "label": "Clean (CMake)",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build/binaries",
+                "--target",
+                "clean"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "Clean (Make)",
+            "type": "shell",
+            "command": "make",
+            "args": ["clean"],
+            "problemMatcher": []
+        }
+    ]
+}
