@@ -25,6 +25,8 @@ set(C_SOURCES
     Core/Src/adc.c
     Core/Src/cordic.c
     Core/Src/fdcan.c
+    Core/Src/can_service.c
+    Core/Src/ws2812.c
     Core/Src/i2c.c
     Core/Src/bmi088.c
     Core/Src/i2c_utils.c
@@ -66,6 +68,8 @@ set(C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
     Middlewares/Third_Party/FreeRTOS/Source/croutine.c
     Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
     Middlewares/Third_Party/FreeRTOS/Source/list.c
@@ -107,7 +111,7 @@ set(INCLUDE_DIRS
     Drivers/CMSIS/Device/ST/STM32H7xx/Include
     Drivers/CMSIS/Include
     # micro-ROS includes
-    micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/microros_include
+    micro_ros_stm32cubemx_utils/microros_static_library_ide/libmicroros/include
 )
 
 # Executable
@@ -126,7 +130,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.s
 
 # micro-ROS static library
 target_link_libraries(${PROJECT_NAME}.elf
-    ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/libmicroros.a
+    ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library_ide/libmicroros/libmicroros.a
 )
 
 # Generate HEX and BIN

@@ -80,4 +80,34 @@ void HAL_MspInit(void)
 
 /* USER CODE BEGIN 1 */
 
+/**
+  * @brief SPI MSP Init — configures GPIO and clock for SPI1 (WS2812)
+  *        MOSI: PA7 (AF5) — only pin needed for TX-only WS2812 driving
+  */
+void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
+{
+  if (hspi->Instance == SPI1)
+  {
+    __HAL_RCC_SPI1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin       = GPIO_PIN_7;          /* PA7 = SPI1_MOSI */
+    gpio.Mode      = GPIO_MODE_AF_PP;
+    gpio.Pull      = GPIO_NOPULL;
+    gpio.Speed     = GPIO_SPEED_FREQ_MEDIUM;
+    gpio.Alternate = GPIO_AF5_SPI1;
+    HAL_GPIO_Init(GPIOA, &gpio);
+  }
+}
+
+void HAL_SPI_MspDeInit(SPI_HandleTypeDef *hspi)
+{
+  if (hspi->Instance == SPI1)
+  {
+    __HAL_RCC_SPI1_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_7);
+  }
+}
+
 /* USER CODE END 1 */

@@ -5,9 +5,13 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
 # Toolchain path - override with -DTOOLCHAIN_PATH=<path> if not in PATH
 if(NOT DEFINED TOOLCHAIN_PATH)
-    # Default: check common macOS install location
-    if(EXISTS "/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin")
+    # Default: check common macOS install locations
+    if(EXISTS "/Applications/ArmGNUToolchain/bin/arm-none-eabi-gcc")
+        set(TOOLCHAIN_PATH "/Applications/ArmGNUToolchain/bin")
+    elseif(EXISTS "/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin")
         set(TOOLCHAIN_PATH "/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi/bin")
+    elseif(EXISTS "/opt/homebrew/bin/arm-none-eabi-gcc")
+        set(TOOLCHAIN_PATH "/opt/homebrew/bin")
     endif()
 endif()
 
