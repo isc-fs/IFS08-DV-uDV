@@ -110,7 +110,7 @@ set(INCLUDE_DIRS
     Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
     Drivers/CMSIS/Device/ST/STM32H7xx/Include
     Drivers/CMSIS/Include
-    # micro-ROS includes
+    # micro-ROS includes (NOT _ide path — use Docker Makefile builder, not CubeIDE)
     micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/microros_include
 )
 
@@ -130,6 +130,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.s
 
 # micro-ROS static library
 target_link_libraries(${PROJECT_NAME}.elf
+    # NOT _ide path — built via Docker Makefile builder
     ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/libmicroros.a
 )
 
