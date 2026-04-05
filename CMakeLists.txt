@@ -111,7 +111,7 @@ set(INCLUDE_DIRS
     Drivers/CMSIS/Device/ST/STM32H7xx/Include
     Drivers/CMSIS/Include
     # micro-ROS includes
-    micro_ros_stm32cubemx_utils/microros_static_library_ide/libmicroros/include
+    micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/microros_include
 )
 
 # Executable
@@ -130,7 +130,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.s
 
 # micro-ROS static library
 target_link_libraries(${PROJECT_NAME}.elf
-    ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library_ide/libmicroros/libmicroros.a
+    ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/libmicroros.a
 )
 
 # Generate HEX and BIN
