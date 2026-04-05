@@ -9,7 +9,7 @@
 ## 1. Clone
 
 ```bash
-git clone --recurse-submodules git@github.com:isc-fs/IFS08-DV-uDV.git
+git clone --recurse-submodules -b dev git@github.com:isc-fs/IFS08-DV-uDV.git
 cd IFS08-DV-uDV
 ```
 
