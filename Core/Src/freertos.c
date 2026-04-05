@@ -41,6 +41,8 @@
 #include <std_msgs/msg/int32.h>
 
 #include "imu_service.h"
+#include "can_service.h"
+#include "ws2812.h"
 #include "i2c.h"
 #include "cordic.h"
 #include "tim.h"
@@ -89,8 +91,26 @@ const osThreadAttr_t imuTask_attributes = {
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
+osThreadId_t canTaskHandle;
+const osThreadAttr_t canTask_attributes = {
+  .name = "canTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+
+osThreadId_t amiTaskHandle;
+const osThreadAttr_t amiTask_attributes = {
+  .name = "amiTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
 osMessageQueueId_t imuQueueHandle;
+osMessageQueueId_t canRxQueueHandle;
 osSemaphoreId_t imuSemHandle;
+
+/* Mission index shared between canTask (writer) and amiTask (reader) */
+volatile uint8_t g_mission_index = 0xFF;  /* 0xFF = no mission received */
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -113,6 +133,8 @@ void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
 
 void StartImuTask(void *argument);
+void StartCanTask(void *argument);
+void StartAmiTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -144,6 +166,7 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_QUEUES */
   imuQueueHandle = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
+  canRxQueueHandle = osMessageQueueNew(32, sizeof(can_msg_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -152,6 +175,8 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_THREADS */
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
+  canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
+  amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -364,6 +389,55 @@ void StartImuTask(void *argument)
     {
       sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
+    }
+  }
+}
+
+void StartCanTask(void *argument)
+{
+  can_service_init();
+
+  for (;;)
+  {
+    can_msg_t msg;
+    if (osMessageQueueGet(canRxQueueHandle, &msg, NULL, osWaitForever) == osOK)
+    {
+      can_rx_dispatch(&msg);
+    }
+  }
+}
+
+void StartAmiTask(void *argument)
+{
+  extern SPI_HandleTypeDef hspi1;
+  ws2812_init(&hspi1);
+
+  /* Idle demo: dim white to show the node is alive */
+  ws2812_set_all(20, 20, 20);
+  ws2812_show();
+
+  uint8_t last_mission = 0xFF;
+
+  for (;;)
+  {
+    /* Wait for canTask to update g_mission_index via thread notification */
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+
+    uint8_t current = g_mission_index;
+
+    if (current != last_mission)
+    {
+      if (current == 0xFF)
+      {
+        /* No mission — idle dim white */
+        ws2812_set_all(20, 20, 20);
+        ws2812_show();
+      }
+      else
+      {
+        ws2812_set_mission_color(current);
+      }
+      last_mission = current;
     }
   }
 }
