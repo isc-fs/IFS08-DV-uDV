@@ -127,7 +127,10 @@ set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${MCU_FLAGS} -Wall -fdata-sections -ffun
 set(CMAKE_C_FLAGS_DEBUG "-g -gdwarf-2")
 
 # Linker flags
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.specs -T${LINKER_SCRIPT} -lc -lm -Wl,-Map=\"${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map\",--cref -Wl,--gc-sections")
+# micro-ROS usb_cdc_transport.c (submodule) expects FS-named USB symbols.
+# Our CubeMX project uses USB HS, so alias FS symbols to the HS instances
+# at link time.  This avoids modifying the submodule.
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.specs -T${LINKER_SCRIPT} -lc -lm -Wl,-Map=\"${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map\",--cref -Wl,--gc-sections -Wl,--defsym=hUsbDeviceFS=hUsbDeviceHS -Wl,--defsym=USBD_Interface_fops_FS=USBD_Interface_fops_HS")
 
 # micro-ROS static library
 target_link_libraries(${PROJECT_NAME}.elf
