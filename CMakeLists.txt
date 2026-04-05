@@ -33,6 +33,7 @@ set(C_SOURCES
     Core/Src/imu_service.c
     Core/Src/attitude.c
     Core/Src/tim.c
+    Core/Src/spi.c
     Core/Src/stm32h7xx_it.c
     Core/Src/stm32h7xx_hal_msp.c
     Core/Src/stm32h7xx_hal_timebase_tim.c
