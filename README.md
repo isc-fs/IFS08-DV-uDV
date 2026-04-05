@@ -2,7 +2,7 @@
 
 # IFS08 - DV_uDV
 
-Embedded firmware for the **micro Driverless Vehicle (uDV)** node of the IFS08, developed on STM32H7 with micro-ROS.
+Embedded firmware for the **micro Driverless Vehicle (uDV)** node of the IFS08, developed on STM32H7 with micro-ROS. For project setup instructions (clone, build, flash), see [firststeps.md](firststeps.md). For full technical documentation, see [changelog.md](changelog.md).
 
 ---
 
