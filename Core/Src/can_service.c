@@ -10,7 +10,9 @@
  * --------------------------------------------------------------------------- */
 /* FDCAN3 — AMI + Steering bus */
 #define CAN_ID_MISSION_SELECT  0x503u
-#define CAN_ID_STEERING        0x2B0u
+#define CAN_ID_STEERING        0x2B0u  /* LWS sensor → steering controller → uDV */
+#define CAN_ID_STEER_MOTOR     0x010u  /* uDV → steering: motor start/stop       */
+#define CAN_ID_STEER_CMD       0x020u  /* uDV → steering: desired angle           */
 
 /* FDCAN1 — RES CANopen (Node-ID 0x11) */
 #define RES_NODE_ID            0x11u
@@ -189,6 +191,25 @@ void can_rx_dispatch(const can_msg_t *msg)
     default:
         break;
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Steering TX commands (FDCAN3)
+ * --------------------------------------------------------------------------- */
+void steering_motor_cmd(uint8_t start)
+{
+    can_tx_send(&hfdcan3, CAN_ID_STEER_MOTOR, &start, 1);
+}
+
+void steering_angle_cmd(float angle_deg)
+{
+    int32_t scaled = (int32_t)(angle_deg * 100.0f);
+    uint8_t data[4];
+    data[0] = (uint8_t)(scaled & 0xFF);
+    data[1] = (uint8_t)((scaled >> 8) & 0xFF);
+    data[2] = (uint8_t)((scaled >> 16) & 0xFF);
+    data[3] = (uint8_t)((scaled >> 24) & 0xFF);
+    can_tx_send(&hfdcan3, CAN_ID_STEER_CMD, data, 4);
 }
 
 /* ---------------------------------------------------------------------------
