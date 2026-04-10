@@ -57,6 +57,12 @@ void res_rx_dispatch(const can_msg_t *msg);
 void can_tx_send(FDCAN_HandleTypeDef *hfdcan, uint32_t id,
                  const uint8_t *data, uint8_t dlc);
 
+/* Steering motor start/stop (0x10): 0=stop, 1=start — FDCAN3 */
+void steering_motor_cmd(uint8_t start);
+
+/* Steering desired angle (0x20): int32 LE, scale 1/100 deg — FDCAN3 */
+void steering_angle_cmd(float angle_deg);
+
 /* Transmit Data Logger messages (0x500/0x501/0x502) on FDCAN1 */
 void datalogger_tx(void);
 
