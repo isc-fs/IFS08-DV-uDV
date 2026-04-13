@@ -256,7 +256,7 @@ $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	$(BIN) $< $@	
 	
 $(BUILD_DIR):
-	mkdir -p $@		
+	@if not exist "$@" mkdir "$@"		
 
 #######################################
 # clean up
