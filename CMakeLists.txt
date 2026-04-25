@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Project
-project(uDV C ASM)
+project(uDV C CXX ASM)
 
 # MCU flags
 set(MCU_FLAGS "-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard")
@@ -92,6 +92,21 @@ set(C_SOURCES
     micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c
 )
 
+# C++ sources
+set(CXX_SOURCES
+    Core/Src/cpp_example_task.cpp
+    Core/Src/AppTask.cpp
+    Core/Src/CanTask.cpp
+    Core/Src/CanGlobals.cpp
+    Core/Src/CanInterface.cpp
+    Core/Src/RosTask.cpp
+    Core/Src/RosGlobals.cpp
+    Core/Src/RosInterface.cpp
+    Core/Src/StateManager.cpp
+    Core/Src/EbsManager.cpp
+    Core/Src/HardwareIO.cpp
+)
+
 # ASM sources
 set(ASM_SOURCES
     startup_stm32h733xx.s
@@ -116,11 +131,12 @@ set(INCLUDE_DIRS
 )
 
 # Executable
-add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${ASM_SOURCES})
+add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${CXX_SOURCES} ${ASM_SOURCES})
 target_include_directories(${PROJECT_NAME}.elf PRIVATE ${INCLUDE_DIRS})
 
 # Compiler flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MCU_FLAGS} -Og -Wall -fdata-sections -ffunction-sections")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MCU_FLAGS} -Og -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${MCU_FLAGS} -Wall -fdata-sections -ffunction-sections")
 
 # Debug flags
