@@ -47,6 +47,13 @@ public:
     // Reset to initial state
     void reset();
 
+    /**
+     * @brief Convert ASState to ASSI status code for CAN message
+     * @param state AS state to convert
+     * @return ASSI status code (0x00=OFF, 0x02=READY, 0x03=DRIVING, 0x01=EMERGENCY, 0x04=FINISHED)
+     */
+    static uint8_t getAssiStatusCode(ASState state);
+
     // Delete copy constructor and assignment operator
     StateManager(const StateManager&) = delete;
     StateManager& operator=(const StateManager&) = delete;

@@ -103,3 +103,23 @@ void StateManager::reset()
     state_ = ASState::OFF;
     updateSignals();
 }
+
+uint8_t StateManager::getAssiStatusCode(ASState state)
+{
+    // Convert AS state to ASSI (Autonomous System Status Indicator) CAN message code
+    switch (state)
+    {
+        case ASState::OFF:
+            return 0x00;
+        case ASState::READY:
+            return 0x02;
+        case ASState::DRIVING:
+            return 0x03;
+        case ASState::EMERGENCY:
+            return 0x01;
+        case ASState::FINISHED:
+            return 0x04;
+        default:
+            return 0x00;
+    }
+}

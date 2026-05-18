@@ -22,11 +22,11 @@
 #include "task.h"
 #include "main.h"
 #include "cmsis_os.h"
-#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <math.h>
+#include <stdbool.h>
 
 #include "imu_service.h"
 #include "can_service.h"
@@ -42,6 +42,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+struct uxrCustomTransport;
 
 /* USER CODE END PTD */
 
@@ -79,6 +80,13 @@ const osThreadAttr_t amiTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
+osThreadId_t appTaskHandle;
+const osThreadAttr_t appTask_attributes = {
+  .name = "appTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
 osThreadId_t rosTaskHandle;
 const osThreadAttr_t rosTask_attributes = {
   .name = "rosTask",
@@ -99,13 +107,6 @@ const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .stack_size = 3000 * 4,
   .priority = (osPriority_t) osPriorityNormal,
-};
-
-osThreadId_t appTaskHandle;
-const osThreadAttr_t appTask_attributes = {
-  .name = "appTask",
-  .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
 /* Private function prototypes -----------------------------------------------*/

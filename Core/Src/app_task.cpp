@@ -4,16 +4,17 @@
  */
 
 #include "app_task.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h"
-#include "cmsis_os.h"
 
 #include <cstdint>
 #include <cstring>
 
 extern "C" {
+    #include "FreeRTOS.h"
+    #include "task.h"
+    #include "queue.h"
+    #include "cmsis_os.h"
     #include "hardware_io.h"
+    #include "watchdog_monitor.h"
 }
 
 #include "state_manager.hpp"
@@ -90,18 +91,22 @@ extern "C" void StartAppTask(void *argument)
 
     EBSInitState ebs_state = EBSInitState::Start;
     ASState as_state = ASState::OFF;
+    ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
     uint32_t ready_start_time = 0;
+
+    // Send initial OFF status via CAN queue
+    send_can_assi_status(StateManager::getAssiStatusCode(as_state));
 
     // Wait until CAN task creates its queue
     while (g_can_cmd_queue == NULL)
     {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        osDelay(10);
     }
 
     // Wait until ROS task creates its queue
     while (g_ros_cmd_queue == NULL)
     {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        osDelay(10);
     }
 
     // Main control loop
@@ -113,15 +118,35 @@ extern "C" void StartAppTask(void *argument)
             reset_all();
         }
 
+        // Check if hardware watchdog timer ISR has been triggered (app stalled >50ms)
+        // ISR already activated EBS and opened SDC; app just needs to update state machine
+        if (g_watchdog_triggered)
+        {
+            // Cancel any active mission
+            if (g_mission_going_cmd.load())
+            {
+                send_cancel_mission_command();
+            }
+            
+            g_watchdog_triggered = false;
+        }
+
         // Update state machine with all current signals
         state_mgr.update();
         as_state = state_mgr.getState();
         const StateManagerSignals& signals = state_mgr.getSignals();
 
-        // Toggle watchdog (required for safety; max loop time ~50ms before watchdog triggers)
+        // Send ASSI status if state changed (via CAN task queue)
+        if (as_state != last_as_state)
+        {
+            send_can_assi_status(StateManager::getAssiStatusCode(as_state));
+            last_as_state = as_state;
+        }
+
+        // Kick watchdog (required for safety; max loop time ~50ms before watchdog triggers)
         if (ebs_state != EBSInitState::WaitLow)
         {
-            hardware_io_toggle_watchdog();
+            hardware_io_kick_watchdog();
         }
 
         // State machine dispatcher
@@ -220,6 +245,6 @@ extern "C" void StartAppTask(void *argument)
         }
 
         // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
-        vTaskDelay(pdMS_TO_TICKS(1));
+        osDelay(1);
     }
 }

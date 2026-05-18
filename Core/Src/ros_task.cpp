@@ -87,6 +87,6 @@ extern "C" void StartRosTask(void *argument)
 
         // Spin the ROS executor (process callbacks)
         ros_if.spin_some();
-        vTaskDelay(pdMS_TO_TICKS(2));
+        osDelay(2);
     }
 }

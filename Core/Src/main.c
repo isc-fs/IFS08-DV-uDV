@@ -27,6 +27,7 @@
 #include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
+#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -108,6 +109,7 @@ int main(void)
   MX_CORDIC_Init();
   MX_TIM2_Init();
   MX_SPI1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -220,6 +222,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     {
       osSemaphoreRelease(imuSemHandle);
     }
+  }
+  if (htim->Instance == TIM3)
+  {
+    extern volatile bool g_watchdog_triggered;
+    g_watchdog_triggered = true;
   }
   /* USER CODE END Callback 1 */
 }

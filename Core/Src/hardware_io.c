@@ -7,6 +7,7 @@
 #include "gpio.h"
 #include "adc.h"
 #include "main.h"
+#include "watchdog_monitor.h"
 
 /* ADC conversion buffer and calibration constants */
 static float adc_scale_factor = 1.0f;  // Can be calibrated based on ADC reference
@@ -15,7 +16,8 @@ void hardware_io_init(void)
 {
     // GPIO already initialized by MX_GPIO_Init()
     // ADC already initialized by MX_ADC1_Init()
-    // Watchdog can be initialized here if needed
+    // Initialize software watchdog monitor
+    watchdog_monitor_init();
 }
 
 /* Digital Outputs */
@@ -39,11 +41,12 @@ void hardware_io_enable_ebs_actuator_2(bool enable)
     HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, enable ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void hardware_io_toggle_watchdog(void)
+void hardware_io_kick_watchdog(void)
 {
-    // Watchdog toggle (independent watchdog or external circuit)
-    // Example: Toggle a GPIO pin
-    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
+    // Kick the software watchdog to indicate app is responsive.
+    // This must be called every loop iteration. If >50ms passes without a kick,
+    // the watchdog expires and emergency state is triggered.
+    watchdog_monitor_kick();
 }
 
 /* Digital Inputs */

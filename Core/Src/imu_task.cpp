@@ -4,16 +4,16 @@
  */
 
 #include "imu_task.h"
-#include "FreeRTOS.h"
-#include "task.h"
-#include "cmsis_os.h"
 
 #include <cstring>
 #include <math.h>
 
 extern "C" {
-#include "imu_service.h"
-#include "tim.h"
+    #include "FreeRTOS.h"
+    #include "task.h"
+    #include "cmsis_os.h"
+    #include "imu_service.h"
+    #include "tim.h"
 }
 
 #include "can_interface.hpp"

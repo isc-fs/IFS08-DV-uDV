@@ -62,6 +62,10 @@ extern "C" void StartCanTask(void *argument)
                     can.sendControl(msg.accel, msg.steer);
                     break;
 
+                case CAN_CMD_SEND_ASSI_STATUS:
+                    CanInterface::sendAssiStatus(msg.status);
+                    break;
+
                 default:
                     break;
             }
@@ -74,6 +78,6 @@ extern "C" void StartCanTask(void *argument)
             can_rx_dispatch(&rx_msg);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        osDelay(5);
     }
 }

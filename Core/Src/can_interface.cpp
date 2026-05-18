@@ -1,11 +1,14 @@
 #include "can_interface.hpp"
-#include "main.h"
 #include <cstring>
-#include "stm32h7xx_hal.h"
-#include "stm32h7xx_hal_fdcan.h"
-#include "can_service.h"
 
-extern FDCAN_HandleTypeDef hfdcan1;
+extern "C" {
+    #include "main.h"
+    #include "stm32h7xx_hal.h"
+    #include "stm32h7xx_hal_fdcan.h"
+    #include "can_service.h"
+}
+
+extern "C" FDCAN_HandleTypeDef hfdcan1;
 
 void CanInterface::init()
 {
@@ -106,6 +109,29 @@ void CanInterface::sendRawCANFrame(uint32_t can_id, const uint8_t *data, uint8_t
     TxHeader.MessageMarker = 0;
 
     memcpy(TxData, data, dlc);
+
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData);
+}
+
+void CanInterface::sendAssiStatus(uint8_t status)
+{
+    // Send generic ASSI status message
+    // Codes: 0x00=OFF, 0x02=READY, 0x03=DRIVING, 0x01=EMERGENCY, 0x04=FINISHED
+    
+    FDCAN_TxHeaderTypeDef TxHeader;
+    uint8_t TxData[1];
+
+    TxHeader.Identifier = 0x100;  // Adjust to match your CAN protocol
+    TxHeader.IdType = FDCAN_STANDARD_ID;
+    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+    TxHeader.DataLength = FDCAN_DLC_BYTES_1;
+    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
+    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    TxHeader.MessageMarker = 0;
+
+    TxData[0] = status;
 
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData);
 }
