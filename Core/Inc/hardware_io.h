@@ -37,18 +37,16 @@ void hardware_io_kick_watchdog(void);
  * @brief Digital inputs (sensors/signals)
  */
 bool hardware_io_read_sdc_is_ready(void);
-bool hardware_io_read_ts_activated(void);
 bool hardware_io_read_asms_on(void);
 bool hardware_io_read_sdc_res_open(void);
+bool hardware_io_read_go_res(void);
 
 /**
  * @brief Analog inputs (pressure sensors via ADC)
  * @return Pressure in bar
  */
-float hardware_io_read_main_storage_pressure(void);
 float hardware_io_read_actuator1_storage_pressure(void);
 float hardware_io_read_actuator2_storage_pressure(void);
-float hardware_io_read_brake_pressure(void);
 
 /**
  * @brief Time helper

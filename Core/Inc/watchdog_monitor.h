@@ -31,10 +31,26 @@ void watchdog_monitor_init(void);
 void watchdog_monitor_kick(void);
 
 /**
- * @brief Global flag set by ISR when watchdog expires
- *        App task should check this and handle emergency
+ * @brief Notify that watchdog has been triggered (to be called from ISR)
  */
-extern volatile bool g_watchdog_triggered;
+void watchdog_set_triggered(void);
+
+/**
+ * @brief Query whether watchdog has been triggered.
+ * @return true if the watchdog has been triggered.
+ */
+bool watchdog_is_triggered(void);
+
+/**
+ * @brief Clear the watchdog triggered flag (set to false).
+ */
+void watchdog_clear_triggered(void);
+
+/**
+ * @brief Atomically consume the watchdog triggered flag (read-and-clear).
+ * @return true if the watchdog had been triggered prior to clear.
+ */
+bool watchdog_consume_triggered(void);
 
 #ifdef __cplusplus
 }

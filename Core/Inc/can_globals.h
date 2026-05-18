@@ -14,6 +14,8 @@ extern std::atomic<bool> g_can_r2d;
 extern std::atomic<bool> g_can_vehicle_standstill;
 extern std::atomic<int>  g_can_mission_id;
 extern std::atomic<bool> g_can_listen_go;
+extern std::atomic<bool> g_can_ts_active;
+extern std::atomic<float> g_can_brake_pressure;
 extern std::atomic<bool> g_reset_cmd;
 
 // CAN command queue

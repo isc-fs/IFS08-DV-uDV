@@ -59,10 +59,8 @@ private:
     EbsManager();
 
     // Pressure thresholds (bar)
-    static constexpr float MAIN_STORAGE_THRESHOLD = 10.0f;
     static constexpr float ACTUATOR_STORAGE_THRESHOLD = 1.0f;
     static constexpr float BRAKE_PRESSURE_THRESHOLD = 1.0f;
-    static constexpr float EMPTY_MAIN_STORAGE_THRESHOLD = 0.1f;
     static constexpr float EMPTY_ACTUATOR_STORAGE_THRESHOLD = 0.1f;
 
     // Timing constants (ms)

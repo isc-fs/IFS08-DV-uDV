@@ -120,7 +120,8 @@ Core/Src/can_globals.cpp \
 Core/Src/can_interface.cpp \
 Core/Src/ebs_manager.cpp \
 Core/Src/state_manager.cpp \
-Core/Src/app_task.cpp
+Core/Src/app_task.cpp \
+Core/Src/watchdog_monitor_atomic.cpp
 
 # ASM sources
 ASM_SOURCES =  \

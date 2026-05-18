@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include <stdbool.h>
 #include "fdcan.h"
 #include "cmsis_os2.h"
 #include <stdint.h>
@@ -19,6 +20,12 @@ typedef struct {
 
 /* Queue handle — created in freertos.c, used by ISR and canTask */
 extern osMessageQueueId_t canRxQueueHandle;
+
+/* CAN-backed shared state setters/getters used by hardware_io and state code */
+void can_set_ts_active(bool active);
+bool can_get_ts_active(void);
+void can_set_brake_pressure(float pressure);
+float can_get_brake_pressure(void);
 
 /* Initialize FDCAN3 runtime: filter, start, enable RX notification */
 void can_service_init(void);

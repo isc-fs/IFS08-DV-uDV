@@ -225,8 +225,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   }
   if (htim->Instance == TIM3)
   {
-    extern volatile bool g_watchdog_triggered;
-    g_watchdog_triggered = true;
+    extern void watchdog_set_triggered(void);
+    watchdog_set_triggered();
   }
   /* USER CODE END Callback 1 */
 }

@@ -120,21 +120,19 @@ extern "C" void StartAppTask(void *argument)
 
         // Check if hardware watchdog timer ISR has been triggered (app stalled >50ms)
         // ISR already activated EBS and opened SDC; app just needs to update state machine
-        if (g_watchdog_triggered)
+        if (watchdog_consume_triggered())
         {
             // Cancel any active mission
             if (g_mission_going_cmd.load())
             {
                 send_cancel_mission_command();
             }
-            
-            g_watchdog_triggered = false;
         }
 
         // Update state machine with all current signals
         state_mgr.update();
         as_state = state_mgr.getState();
-        const StateManagerSignals& signals = state_mgr.getSignals();
+        StateManagerSignals signals = state_mgr.getSignals(); // copy for snapshot safety
 
         // Send ASSI status if state changed (via CAN task queue)
         if (as_state != last_as_state)

@@ -14,6 +14,8 @@ extern "C" {
 extern std::atomic<bool> g_can_r2d;
 extern std::atomic<bool> g_can_vehicle_standstill;
 extern std::atomic<int> g_can_mission_id;
+extern std::atomic<bool> g_can_ts_active;
+extern std::atomic<float> g_can_brake_pressure;
 extern std::atomic<bool> g_finished_cmd;
 
 StateManager::StateManager()
@@ -26,7 +28,7 @@ void StateManager::updateSignals()
 {
     // Read from HardwareIO (digital inputs)
     signals_.asms_on = hardware_io_read_asms_on();
-    signals_.ts_active = hardware_io_read_ts_activated();
+    signals_.ts_active = g_can_ts_active.load();
     signals_.sdc_res_open = hardware_io_read_sdc_res_open();
 
     // Read from EbsManager

@@ -9,8 +9,6 @@
 #include "main.h"
 #include "hardware_io.h"
 
-// Global flag set by ISR when watchdog expires
-volatile bool g_watchdog_triggered = false;
 
 // Timer handle (provided by CubeMX-generated tim.c)
 extern TIM_HandleTypeDef htim3;  // TIM3 configured as watchdog timer
@@ -28,4 +26,5 @@ void watchdog_monitor_kick(void)
     // This prevents the timer from expiring
     __HAL_TIM_SET_COUNTER(&htim3, 0);
 }
+
 

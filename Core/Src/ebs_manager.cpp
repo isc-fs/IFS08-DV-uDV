@@ -4,6 +4,10 @@
  */
 
 #include "ebs_manager.hpp"
+#include <atomic>
+
+extern std::atomic<bool> g_can_ts_active;
+extern std::atomic<float> g_can_brake_pressure;
 
 EbsManager::EbsManager()
 {
@@ -50,7 +54,7 @@ EBSInitState EbsManager::initSequenceStep()
             break;
 
         case EBSInitState::WaitTS:
-            if (hardware_io_read_ts_activated())
+            if (g_can_ts_active.load())
             {
                 init_state_ = EBSInitState::CheckActuator1;
                 hardware_io_enable_ebs_actuator_1(false);
@@ -93,18 +97,16 @@ EBSInitState EbsManager::initSequenceStep()
 
 bool EbsManager::checkStoragePressures()
 {
-    float main_p = hardware_io_read_main_storage_pressure();
     float a1_p = hardware_io_read_actuator1_storage_pressure();
     float a2_p = hardware_io_read_actuator2_storage_pressure();
 
-    return (main_p > MAIN_STORAGE_THRESHOLD) &&
-           (a1_p > ACTUATOR_STORAGE_THRESHOLD) &&
+    return (a1_p > ACTUATOR_STORAGE_THRESHOLD) &&
            (a2_p > ACTUATOR_STORAGE_THRESHOLD);
 }
 
 bool EbsManager::checkBrakeLinePressure()
 {
-    float b_p = hardware_io_read_brake_pressure();
+    float b_p = g_can_brake_pressure.load();
     return (b_p > BRAKE_PRESSURE_THRESHOLD);
 }
 
@@ -115,12 +117,10 @@ bool EbsManager::ASBChecksOK()
 
 bool EbsManager::SafeManual()
 {
-    float main_p = hardware_io_read_main_storage_pressure();
     float a1_p = hardware_io_read_actuator1_storage_pressure();
     float a2_p = hardware_io_read_actuator2_storage_pressure();
 
-    return (main_p < EMPTY_MAIN_STORAGE_THRESHOLD) &&
-           (a1_p < EMPTY_ACTUATOR_STORAGE_THRESHOLD) &&
+    return (a1_p < EMPTY_ACTUATOR_STORAGE_THRESHOLD) &&
            (a2_p < EMPTY_ACTUATOR_STORAGE_THRESHOLD);
 }
 

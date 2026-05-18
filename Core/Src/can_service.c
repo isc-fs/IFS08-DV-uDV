@@ -8,6 +8,8 @@
  * CAN IDs — add new IDs here as the bus grows
  * --------------------------------------------------------------------------- */
 #define CAN_ID_MISSION_SELECT  0x503u
+#define CAN_ID_TS_ACTIVE       0x504u
+#define CAN_ID_BRAKE_PRESSURE  0x505u
 
 /* ---------------------------------------------------------------------------
  * FDCAN3 runtime bring-up
@@ -75,6 +77,19 @@ void can_rx_dispatch(const can_msg_t *msg)
         if (amiTaskHandle != NULL)
         {
             xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
+        }
+        break;
+
+    case CAN_ID_TS_ACTIVE:
+        can_set_ts_active(msg->data[0] != 0U);
+        break;
+
+    case CAN_ID_BRAKE_PRESSURE:
+        if (msg->dlc >= 4U)
+        {
+            float brake_pressure = 0.0f;
+            memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
+            can_set_brake_pressure(brake_pressure);
         }
         break;
 
