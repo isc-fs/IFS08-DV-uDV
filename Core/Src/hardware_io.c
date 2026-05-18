@@ -76,14 +76,6 @@ void hardware_io_enable_ebs_actuator_2(bool enable)
     HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, enable ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-void hardware_io_kick_watchdog(void)
-{
-    // Kick the software watchdog to indicate app is responsive.
-    // This must be called every loop iteration. If >50ms passes without a kick,
-    // the watchdog expires and emergency state is triggered.
-    watchdog_monitor_kick();
-}
-
 /* Digital Inputs */
 
 bool hardware_io_read_sdc_is_ready(void)

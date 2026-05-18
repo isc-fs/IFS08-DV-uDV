@@ -144,7 +144,7 @@ extern "C" void StartAppTask(void *argument)
         // Kick watchdog (required for safety; max loop time ~50ms before watchdog triggers)
         if (ebs_state != EBSInitState::WaitLow)
         {
-            hardware_io_kick_watchdog();
+            watchdog_monitor_kick();
         }
 
         // State machine dispatcher

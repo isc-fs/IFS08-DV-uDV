@@ -27,13 +27,6 @@ void hardware_io_enable_ebs_actuator_1(bool enable);
 void hardware_io_enable_ebs_actuator_2(bool enable);
 
 /**
- * @brief Software watchdog: kick/refresh to indicate app is responsive
- *        Call this every loop iteration. If >50ms passes without a kick,
- *        the app is considered stalled and emergency state is triggered.
- */
-void hardware_io_kick_watchdog(void);
-
-/**
  * @brief Digital inputs (sensors/signals)
  */
 bool hardware_io_read_sdc_is_ready(void);
