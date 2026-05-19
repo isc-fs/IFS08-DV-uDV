@@ -25,7 +25,6 @@ set(C_SOURCES
     Core/Src/adc.c
     Core/Src/cordic.c
     Core/Src/fdcan.c
-    Core/Src/can_service.c
     Core/Src/ws2812.c
     Core/Src/i2c.c
     Core/Src/bmi088.c
@@ -94,17 +93,15 @@ set(C_SOURCES
 
 # C++ sources
 set(CXX_SOURCES
-    Core/Src/cpp_example_task.cpp
-    Core/Src/AppTask.cpp
-    Core/Src/CanTask.cpp
-    Core/Src/CanGlobals.cpp
-    Core/Src/CanInterface.cpp
-    Core/Src/RosTask.cpp
-    Core/Src/RosGlobals.cpp
-    Core/Src/RosInterface.cpp
-    Core/Src/StateManager.cpp
-    Core/Src/EbsManager.cpp
-    Core/Src/HardwareIO.cpp
+    Core/Src/can_task.cpp
+    Core/Src/can_globals.cpp
+    Core/Src/can_interface.cpp
+    Core/Src/ros_task.cpp
+    Core/Src/ros_globals.cpp
+    Core/Src/ros_interface.cpp
+    Core/Src/state_manager.cpp
+    Core/Src/ebs_manager.cpp
+    Core/Src/hardware_io.cpp
 )
 
 # ASM sources

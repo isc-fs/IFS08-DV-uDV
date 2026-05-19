@@ -35,6 +35,7 @@
 
 /* C wrapper to call into CanInterface from ISR */
 extern void can_interface_send_assi_emergency_from_isr(void);
+extern void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -272,3 +273,11 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+  if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
+  {
+    can_interface_rx_isr_callback(hfdcan);
+  }
+}

@@ -29,7 +29,6 @@
 #include <stdbool.h>
 
 #include "imu_service.h"
-#include "can_service.h"
 #include "ws2812.h"
 #include "i2c.h"
 #include "cordic.h"
@@ -37,6 +36,7 @@
 #include "imu_task.h"
 #include "ros_task.h"
 #include "can_task.h"
+#include "can_globals.h"
 #include "app_task.h"
 /* USER CODE END Includes */
 

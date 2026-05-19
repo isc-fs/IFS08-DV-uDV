@@ -19,7 +19,8 @@ extern "C" {
 #include "state_manager.hpp"
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
-#include "can_task_commands.h"
+#include "can_interface.hpp"
+#include "can_task.h"
 #include "ros_globals.h"
 #include "can_globals.h"
 
@@ -94,7 +95,7 @@ extern "C" void StartAppTask(void *argument)
     uint32_t ready_start_time = 0;
 
     // Send initial OFF status via CAN queue
-    send_can_assi_status(StateManager::getAssiStatusCode(as_state));
+    CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
     // Wait until CAN task creates its queue
     while (g_can_cmd_queue == NULL)
@@ -122,10 +123,10 @@ extern "C" void StartAppTask(void *argument)
         as_state = state_mgr.getState();
         StateManagerSignals signals = state_mgr.getSignals(); // copy for snapshot safety
 
-        // Send ASSI status if state changed (via CAN task queue)
+        // Send ASSI status if state changed
         if (as_state != last_as_state)
         {
-            send_can_assi_status(StateManager::getAssiStatusCode(as_state));
+            CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(as_state));
             last_as_state = as_state;
         }
 
@@ -150,7 +151,7 @@ extern "C" void StartAppTask(void *argument)
             // Send zero control when not driving (safety)
             if (as_state != ASState::DRIVING)
             {
-                send_can_control(0.0f, 0.0f);
+                CanInterface::getInstance().sendControl(0.0f, 0.0f);
             }
 
             // State-specific logic
@@ -199,7 +200,7 @@ extern "C" void StartAppTask(void *argument)
                         else
                         {
                             // Send control commands continuously (ECU expects constant stream)
-                            send_can_control(g_accel_cmd.load(), g_steer_cmd.load());
+                            CanInterface::getInstance().sendControl(g_accel_cmd.load(), g_steer_cmd.load());
                         }
                     }
                     break;
