@@ -7,7 +7,6 @@
 #include "gpio.h"
 #include "adc.h"
 #include "main.h"
-#include "watchdog_monitor.h"
 
 /* ADC conversion buffer and calibration constants */
 static float adc_scale_factor = 1.0f;  // Can be calibrated based on ADC reference
@@ -49,14 +48,6 @@ static uint32_t hardware_io_read_adc_raw(uint32_t channel)
 static bool hardware_io_read_adc_level(uint32_t channel)
 {
     return hardware_io_read_adc_raw(channel) >= adc_digital_threshold;
-}
-
-void hardware_io_init(void)
-{
-    // GPIO already initialized by MX_GPIO_Init()
-    // ADC already initialized by MX_ADC1_Init()
-    // Initialize software watchdog monitor
-    watchdog_monitor_init();
 }
 
 /* Digital Outputs */
@@ -123,4 +114,22 @@ float hardware_io_read_actuator2_storage_pressure(void)
 uint32_t hardware_io_now_ms(void)
 {
     return HAL_GetTick();
+}
+
+// Timer handle (provided by CubeMX-generated tim.c)
+extern TIM_HandleTypeDef htim3;  // TIM3 configured as watchdog timer
+
+void hardware_io_watchdog_kick(void)
+{
+    // Reset the timer counter to start from ARR again
+    // This prevents the timer from expiring
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+}
+
+bool hardware_io_is_ebs_active(void)
+{
+    GPIO_PinState p1 = HAL_GPIO_ReadPin(D1_GPIO_Port, D1_Pin);
+    GPIO_PinState p2 = HAL_GPIO_ReadPin(D2_GPIO_Port, D2_Pin);
+    /* EBS actuators are driven low to activate braking */
+    return (p1 == GPIO_PIN_RESET) || (p2 == GPIO_PIN_RESET);
 }

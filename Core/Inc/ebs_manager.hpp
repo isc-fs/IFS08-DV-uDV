@@ -49,7 +49,6 @@ public:
 
     // Status queries
     EBSInitState getInitState() const { return init_state_; }
-    bool isActive() const { return is_active_; }
 
     // Delete copy constructor and assignment operator
     EbsManager(const EbsManager&) = delete;
@@ -70,7 +69,6 @@ private:
     // State variables
     EBSInitState init_state_ = EBSInitState::Start;
     uint32_t start_time_ = 0;
-    bool is_active_ = false;
 };
 
 #endif /* INC_EBS_MANAGER_HPP_ */

@@ -39,6 +39,25 @@ C_SOURCES =  \
 Core/Src/main.c \
 Core/Src/gpio.c \
 Core/Src/freertos.c \
+Core/Src/adc.c \
+Core/Src/cordic.c \
+Core/Src/fdcan.c \
+Core/Src/i2c.c \
+Core/Src/bmi088.c \
+Core/Src/i2c_utils.c \
+Core/Src/imu_service.c \
+Core/Src/attitude.c \
+Core/Src/can_service.c \
+Core/Src/ws2812.c \
+Core/Src/stm32h7xx_it.c \
+Core/Src/stm32h7xx_hal_msp.c \
+Core/Src/stm32h7xx_hal_timebase_tim.c \
+Core/Src/system_stm32h7xx.c \
+Core/Src/hardware_io.c \
+Core/Src/sysmem.c \
+Core/Src/syscalls.c \
+Core/Src/tim.c \
+Core/Src/spi.c \
 Middlewares/Third_Party/FreeRTOS/Source/list.c \
 Middlewares/Third_Party/FreeRTOS/Source/queue.c \
 Middlewares/Third_Party/FreeRTOS/Source/tasks.c \
@@ -49,9 +68,10 @@ Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c \
 Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c \
 Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c \
-Core/Src/adc.c \
-Core/Src/cordic.c \
-Core/Src/fdcan.c \
+Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c \
+Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c \
+Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
+Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c \
@@ -79,35 +99,14 @@ Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c \
-Core/Src/i2c.c \
-Core/Src/bmi088.c \
-Core/Src/i2c_utils.c \
-Core/Src/imu_service.c \
-Core/Src/attitude.c \
-Core/Src/can_service.c \
-Core/Src/ws2812.c \
-Core/Src/stm32h7xx_it.c \
-Core/Src/stm32h7xx_hal_msp.c \
-Core/Src/stm32h7xx_hal_timebase_tim.c \
-Core/Src/system_stm32h7xx.c \
-Core/Src/hardware_io.c \
-Core/Src/watchdog_monitor.c \
 USB_DEVICE/App/usb_device.c \
 USB_DEVICE/App/usbd_desc.c \
 USB_DEVICE/App/usbd_cdc_if.c \
 USB_DEVICE/Target/usbd_conf.c \
-Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_core.c \
-Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ctlreq.c \
-Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c \
-Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c \
-Core/Src/sysmem.c \
-Core/Src/syscalls.c \
 micro_ros_stm32cubemx_utils/extra_sources/custom_memory_manager.c \
 micro_ros_stm32cubemx_utils/extra_sources/microros_allocators.c \
 micro_ros_stm32cubemx_utils/extra_sources/microros_time.c \
-micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c \
-Core/Src/tim.c \
-Core/Src/spi.c
+micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c
 
 # C++ sources
 CPP_SOURCES =  \
@@ -120,8 +119,7 @@ Core/Src/can_globals.cpp \
 Core/Src/can_interface.cpp \
 Core/Src/ebs_manager.cpp \
 Core/Src/state_manager.cpp \
-Core/Src/app_task.cpp \
-Core/Src/watchdog_monitor_atomic.cpp
+Core/Src/app_task.cpp
 
 # ASM sources
 ASM_SOURCES =  \

@@ -14,7 +14,6 @@ extern "C" {
     #include "queue.h"
     #include "cmsis_os.h"
     #include "hardware_io.h"
-    #include "watchdog_monitor.h"
 }
 
 #include "state_manager.hpp"
@@ -118,17 +117,6 @@ extern "C" void StartAppTask(void *argument)
             reset_all();
         }
 
-        // Check if hardware watchdog timer ISR has been triggered (app stalled >50ms)
-        // ISR already activated EBS and opened SDC; app just needs to update state machine
-        if (watchdog_consume_triggered())
-        {
-            // Cancel any active mission
-            if (g_mission_going_cmd.load())
-            {
-                send_cancel_mission_command();
-            }
-        }
-
         // Update state machine with all current signals
         state_mgr.update();
         as_state = state_mgr.getState();
@@ -144,7 +132,7 @@ extern "C" void StartAppTask(void *argument)
         // Kick watchdog (required for safety; max loop time ~50ms before watchdog triggers)
         if (ebs_state != EBSInitState::WaitLow)
         {
-            watchdog_monitor_kick();
+            hardware_io_watchdog_kick();
         }
 
         // State machine dispatcher

@@ -14,7 +14,6 @@ EbsManager::EbsManager()
     // Ensure all members are properly initialized
     init_state_ = EBSInitState::Start;
     start_time_ = 0;
-    is_active_ = false;
 }
 
 EBSInitState EbsManager::initSequenceStep()
@@ -87,8 +86,10 @@ EBSInitState EbsManager::initSequenceStep()
             break;
 
         case EBSInitState::Failed:
+            // Terminal state - no action
+            break;
         case EBSInitState::Done:
-            // Terminal states - no action
+            // Terminal state - no action
             break;
     }
 
@@ -128,19 +129,16 @@ void EbsManager::activateEBS()
 {
     hardware_io_enable_ebs_actuator_1(false);
     hardware_io_enable_ebs_actuator_2(false);
-    is_active_ = true;
 }
 
 void EbsManager::deactivateEBS()
 {
     hardware_io_enable_ebs_actuator_1(true);
     hardware_io_enable_ebs_actuator_2(true);
-    is_active_ = false;
 }
 
 void EbsManager::reset()
 {
     init_state_ = EBSInitState::Start;
-    is_active_ = false;
     deactivateEBS();
 }

@@ -31,7 +31,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "hardware_io.h"
 
+/* C wrapper to call into CanInterface from ISR */
+extern void can_interface_send_assi_emergency_from_isr(void);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,7 +114,8 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-
+  // Start watchdog timer interrupt (50ms timeout for app stall detection)
+  HAL_TIM_Base_Start_IT(&htim3);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -225,8 +229,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   }
   if (htim->Instance == TIM3)
   {
-    extern void watchdog_set_triggered(void);
-    watchdog_set_triggered();
+    // Watchdog timeout - immediately trigger emergency actions (independent of app_task)
+    hardware_io_set_as_close_sdc(false);        // Open SDC (disconnect power)
+    hardware_io_enable_ebs_actuator_1(false);   // Activate EBS actuator 1
+    hardware_io_enable_ebs_actuator_2(false);   // Activate EBS actuator 2
+
+    // Send ASSI emergency status CAN frame directly from ISR so external
+    // systems are immediately notified even if app_task is stalled.
+    // Use CanInterface helper (C wrapper) to send ASSI emergency compactly
+    can_interface_send_assi_emergency_from_isr();
   }
   /* USER CODE END Callback 1 */
 }

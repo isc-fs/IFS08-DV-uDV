@@ -135,3 +135,9 @@ void CanInterface::sendAssiStatus(uint8_t status)
 
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, TxData);
 }
+
+// C-compatible wrapper so C code (ISR) can request an ASSI emergency transmit
+extern "C" void can_interface_send_assi_emergency_from_isr(void)
+{
+    CanInterface::sendAssiEmergency();
+}

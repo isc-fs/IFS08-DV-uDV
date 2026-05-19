@@ -31,8 +31,15 @@ void StateManager::updateSignals()
     signals_.ts_active = g_can_ts_active.load();
     signals_.sdc_res_open = hardware_io_read_sdc_res_open();
 
-    // Read from EbsManager
-    signals_.ebs_activated = ebs_.isActive();
+    // Read from EbsManager and hardware pins.
+    // Do NOT trust the hardware readback while the EBS initialization is
+    // actively exercising the actuators (these states drive the pins low):
+    //   CheckActuator1, WaitInterActuatorCheck, CheckActuator2
+    EBSInitState es = ebs_.getInitState();
+    const bool in_actuator_check = (es == EBSInitState::CheckActuator1 ||
+                                   es == EBSInitState::WaitInterActuatorCheck ||
+                                   es == EBSInitState::CheckActuator2);
+    signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
     signals_.abs_checks_ok = ebs_.ASBChecksOK();
     signals_.brakes_engaged = ebs_.checkBrakeLinePressure();
 

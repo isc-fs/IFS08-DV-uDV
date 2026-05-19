@@ -15,16 +15,17 @@ extern "C" {
 #include <stdbool.h>
 
 /**
- * @brief Initialize hardware I/O (GPIO, ADC, watchdog)
- */
-void hardware_io_init(void);
-
-/**
  * @brief Digital outputs
  */
 void hardware_io_set_as_close_sdc(bool on);
 void hardware_io_enable_ebs_actuator_1(bool enable);
 void hardware_io_enable_ebs_actuator_2(bool enable);
+
+/*
+ * Readbacks for outputs (useful when app stalled):
+ * - `hardware_io_is_ebs_active()` returns true when any EBS actuator indicates braking active
+ */
+bool hardware_io_is_ebs_active(void);
 
 /**
  * @brief Digital inputs (sensors/signals)
@@ -46,6 +47,12 @@ float hardware_io_read_actuator2_storage_pressure(void);
  * @return Milliseconds since boot (from HAL_GetTick)
  */
 uint32_t hardware_io_now_ms(void);
+
+/**
+ * @brief Watchdog kick/refresh (call regularly to prevent watchdog timeout)
+ *        Resets the hardware timer countdown to prevent ISR from triggering
+ */
+void hardware_io_watchdog_kick(void);
 
 #ifdef __cplusplus
 }
