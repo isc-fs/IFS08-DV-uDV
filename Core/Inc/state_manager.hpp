@@ -7,6 +7,11 @@
 #define INC_STATE_MANAGER_HPP_
 
 #include "ebs_manager.hpp"
+#include <cstdint>
+
+// Visible control for brake-engaged pressure threshold (CAN-provided).
+// TODO: adjust this threshold to the correct value for your vehicle.
+extern float g_brake_pressure_threshold;
 
 enum class ASState {
     OFF,        // Autonomous system off
@@ -17,16 +22,16 @@ enum class ASState {
 };
 
 struct StateManagerSignals {
-    bool asms_on = false;           // ASMS on signal (from HardwareIO)
-    bool ts_active = false;         // Tractive System active (from HardwareIO)
-    bool sdc_res_open = false;      // SDC resistor open (from HardwareIO)
-    bool ebs_activated = false;     // EBS activated (from EbsManager)
-    bool abs_checks_ok = false;     // All brake system checks passed (from EbsManager)
-    bool brakes_engaged = false;    // Brakes actively engaged (from EbsManager)
-    bool mission_selected = false;  // Mission selected (from CanInterface via can_globals)
-    bool r2d = false;               // Ready to Drive signal (from CanInterface via can_globals)
-    bool vehicle_standstill = true; // Vehicle velocity near zero (from IMU via can_globals)
-    bool mission_finished = false;  // Mission finished (from RosInterface via ros_globals)
+    bool asms_on = false;           // ASMS on signal (hardware io)
+    bool ts_active = false;         // Tractive System active (can)
+    bool sdc_res_open = false;      // SDC resistor open (can)
+    bool ebs_activated = false;     // EBS activated (hardware io)
+    bool abs_checks_ok = false;     // All brake system checks passed (hardware io)
+    bool brakes_engaged = false;    // Brakes actively engaged (can)
+    bool mission_selected = false;  // Mission selected (can)
+    bool r2d = false;               // Ready to Drive signal (can)
+    bool vehicle_standstill = true; // Vehicle velocity near zero (can)
+    bool mission_finished = false;  // Mission finished (ros)
 };
 
 class StateManager {
@@ -40,8 +45,6 @@ public:
     // Update state machine
     void update();
 
-    // Query current state and signals
-    const StateManagerSignals& getSignals() const { return signals_; }
     ASState getState() const { return state_; }
 
     // Reset to initial state
@@ -68,7 +71,7 @@ private:
     // State variables
     StateManagerSignals signals_;
     ASState state_ = ASState::OFF;
-    EbsManager& ebs_ = EbsManager::getInstance();
+    EbsManager& ebs_;
 };
 
 #endif /* INC_STATE_MANAGER_HPP_ */

@@ -4,21 +4,20 @@
  */
 
 #include "state_manager.hpp"
+#include "can_globals.h"
+#include "ros_globals.h"
 #include <atomic>
 
 extern "C" {
     #include "hardware_io.h"
 }
 
-// External globals from other modules
-extern std::atomic<bool> g_can_r2d;
-extern std::atomic<bool> g_can_vehicle_standstill;
-extern std::atomic<int> g_can_mission_id;
-extern std::atomic<bool> g_can_ts_active;
-extern std::atomic<float> g_can_brake_pressure;
-extern std::atomic<bool> g_finished_cmd;
+// Visible threshold for considering brakes engaged (CAN pressure, units as per CAN message)
+// TODO: tune this value to the real system requirement
+float g_brake_pressure_threshold = 1.0f;
 
 StateManager::StateManager()
+    : ebs_(EbsManager::getInstance())
 {
     // Initialize with default signals and OFF state
     state_ = ASState::OFF;
@@ -26,10 +25,10 @@ StateManager::StateManager()
 
 void StateManager::updateSignals()
 {
-    // Read from HardwareIO (digital inputs)
+    // Read from HardwareIO (digital inputs) and CAN atomics
     signals_.asms_on = hardware_io_read_asms_on();
     signals_.ts_active = g_can_ts_active.load();
-    signals_.sdc_res_open = hardware_io_read_sdc_res_open();
+    signals_.sdc_res_open = g_can_sdc_res_open.load();
 
     // Read from EbsManager and hardware pins.
     // Do NOT trust the hardware readback while the EBS initialization is
@@ -41,7 +40,7 @@ void StateManager::updateSignals()
                                    es == EBSInitState::CheckActuator2);
     signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
     signals_.abs_checks_ok = ebs_.ASBChecksOK();
-    signals_.brakes_engaged = ebs_.checkBrakeLinePressure();
+    signals_.brakes_engaged = (g_can_brake_pressure.load() >= g_brake_pressure_threshold);
 
     // Read from CAN globals (via atomics)
     signals_.r2d = g_can_r2d.load();

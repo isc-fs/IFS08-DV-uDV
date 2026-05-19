@@ -29,6 +29,7 @@ extern std::atomic<int>  g_can_mission_id;
 extern std::atomic<bool> g_can_listen_go;
 extern std::atomic<bool> g_can_ts_active;
 extern std::atomic<float> g_can_brake_pressure;
+extern std::atomic<bool> g_can_sdc_res_open;
 extern std::atomic<bool> g_reset_cmd;
 
 /* CAN command queue is a C type and can be declared here for both C/C++ */
@@ -42,6 +43,7 @@ extern volatile int  g_can_mission_id;
 extern volatile bool g_can_listen_go;
 extern volatile bool g_can_ts_active;
 extern volatile float g_can_brake_pressure;
+extern volatile bool g_can_sdc_res_open;
 extern volatile bool g_reset_cmd;
 
 extern QueueHandle_t g_can_cmd_queue;

@@ -10,28 +10,13 @@
 #define CAN_ID_MISSION_SELECT  0x503u
 #define CAN_ID_TS_ACTIVE       0x504u
 #define CAN_ID_BRAKE_PRESSURE  0x505u
+#define CAN_ID_SDC_RES_OPEN    0x506u
 
 extern FDCAN_HandleTypeDef hfdcan3;
 
 /* amiTask handle and shared mission index — defined in freertos.c */
 extern osThreadId_t amiTaskHandle;
 extern volatile uint8_t g_mission_index;
-
-void CanInterface::set_ts_active(bool active) {
-    m_ts_active = active;
-}
-
-bool CanInterface::get_ts_active(void) {
-    return m_ts_active;
-}
-
-void CanInterface::set_brake_pressure(float pressure) {
-    m_brake_pressure = pressure;
-}
-
-float CanInterface::get_brake_pressure(void) {
-    return m_brake_pressure;
-}
 
 void CanInterface::init()
 {
@@ -180,14 +165,22 @@ void CanInterface::rx_dispatch(const can_msg_t *msg)
         break;
 
     case CAN_ID_TS_ACTIVE:
-        set_ts_active(msg->data[0] != 0U);
+        g_can_ts_active.store(msg->data[0] != 0U);
         break;
 
     case CAN_ID_BRAKE_PRESSURE:
         if (msg->dlc >= 4U) {
             float brake_pressure = 0.0f;
             memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
-            set_brake_pressure(brake_pressure);
+            g_can_brake_pressure.store(brake_pressure);
+        }
+        break;
+
+    case CAN_ID_SDC_RES_OPEN:
+        if (msg->dlc >= 1U) {
+            bool sdc_open = (msg->data[0] != 0U);
+            // Update CAN global so StateManager reads it
+            g_can_sdc_res_open.store(sdc_open);
         }
         break;
 

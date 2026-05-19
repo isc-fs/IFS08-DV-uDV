@@ -121,7 +121,7 @@ extern "C" void StartAppTask(void *argument)
         // Update state machine with all current signals
         state_mgr.update();
         as_state = state_mgr.getState();
-        StateManagerSignals signals = state_mgr.getSignals(); // copy for snapshot safety
+        bool asms_on = hardware_io_read_asms_on();
 
         // Send ASSI status if state changed
         if (as_state != last_as_state)
@@ -137,7 +137,7 @@ extern "C" void StartAppTask(void *argument)
         }
 
         // State machine dispatcher
-        if (signals.asms_on)
+        if (asms_on)
         {
             // Autonomous mode enabled
 
