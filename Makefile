@@ -110,6 +110,7 @@ micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.
 # C++ sources
 CPP_SOURCES =  \
 Core/Src/imu_task.cpp \
+Core/Src/ami_task.cpp \
 Core/Src/ros_task.cpp \
 Core/Src/ros_globals.cpp \
 Core/Src/ros_interface.cpp \

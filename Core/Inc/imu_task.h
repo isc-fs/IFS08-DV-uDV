@@ -8,6 +8,8 @@
 #ifndef INC_IMU_TASK_H_
 #define INC_IMU_TASK_H_
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -18,6 +20,9 @@ extern "C" {
  * @retval None
  */
 void StartImuTask(void *argument);
+
+/* Shared IMU debug status published over ROS diagnostics. */
+extern volatile int32_t imu_debug_status;
 
 #ifdef __cplusplus
 }

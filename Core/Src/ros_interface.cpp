@@ -1,4 +1,5 @@
 #include "ros_interface.hpp"
+#include "imu_task.h"
 #include <string.h>
 #include <stdlib.h>
 #include <cmath>
@@ -186,7 +187,6 @@ void RosInterface::publishImuSample(const imu_sample_t *sample)
         uint64_t new_dwt_us = dwt_micros_internal();
         epoch_offset_ns = new_epoch_ns - (int64_t)new_dwt_us * 1000LL;
 
-        extern volatile int32_t imu_debug_status;
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
         sync_counter = 0;

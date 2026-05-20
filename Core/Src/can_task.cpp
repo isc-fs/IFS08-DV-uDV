@@ -57,7 +57,8 @@ extern "C" void StartCanTask(void *argument)
             switch (msg.cmd)
             {
                 case CAN_CMD_SEND_CONTROL:
-                    can.sendControl(msg.accel, msg.steer);
+                    can.sendAccel(msg.accel);
+                    can.sendSteer(msg.steer);
                     break;
 
                 case CAN_CMD_SEND_ASSI_STATUS:

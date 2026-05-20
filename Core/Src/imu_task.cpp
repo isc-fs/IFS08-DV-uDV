@@ -17,6 +17,7 @@ extern "C" {
 }
 
 #include "can_interface.hpp"
+#include "can_globals.h"
 
 /* Defines */
 #define G_TO_MS2   9.80665f
@@ -25,7 +26,9 @@ extern "C" {
 /* External declarations (defined in freertos.c) */
 extern osMessageQueueId_t imuQueueHandle;
 extern osSemaphoreId_t imuSemHandle;
-extern volatile int32_t imu_debug_status;
+
+/* Shared IMU debug status visible to ROS diagnostics. */
+volatile int32_t imu_debug_status = -99;
 
 /* High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
  * DWT->CYCCNT is 32-bit at 528MHz, wraps every ~8.13s.
@@ -98,24 +101,29 @@ void StartImuTask(void *argument)
     if (step_st == BMI088_OK)
     {
       sample.timestamp_us = ts_us;
-      
+
+      // TODO: set vehicle standstill atomic
+      // Determine vehicle standstill from IMU: low angular rates and
+      // acceleration magnitude near 1g (gravity) within small tolerance
+      float ax = sample.imu.ax_g;
+      float ay = sample.imu.ay_g;
+      float az = sample.imu.az_g;
+      float acc_g = sqrtf(ax*ax + ay*ay + az*az);
+      float gx = sample.imu.gx_dps;
+      float gy = sample.imu.gy_dps;
+      float gz = sample.imu.gz_dps;
+      float gyro_max = fmaxf(fmaxf(fabsf(gx), fabsf(gy)), fabsf(gz));
+
+      const float ACC_TOL_G = 0.05f;   // 0.05 g tolerance
+      const float GYRO_TOL_DPS = 2.0f; // 2 dps tolerance
+
+      bool imu_standstill = (fabsf(acc_g - 1.0f) <= ACC_TOL_G) && (gyro_max <= GYRO_TOL_DPS);
+      g_imu_vehicle_standstill.store(imu_standstill);
       // Publish to ROS via imuQueueHandle (consumed by defaultTask)
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
       
-      // Pack IMU data to CAN frame (accel: milli-g, gyro: 0.1 dps)
-      uint8_t can_data[8];
-      int16_t ax_scaled = (int16_t)(sample.imu.ax_g * 1000.0f);
-      int16_t ay_scaled = (int16_t)(sample.imu.ay_g * 1000.0f);
-      int16_t az_scaled = (int16_t)(sample.imu.az_g * 1000.0f);
-      int16_t gx_scaled = (int16_t)(sample.imu.gx_dps * 10.0f);
-      
-      memcpy(&can_data[0], &ax_scaled, sizeof(int16_t));
-      memcpy(&can_data[2], &ay_scaled, sizeof(int16_t));
-      memcpy(&can_data[4], &az_scaled, sizeof(int16_t));
-      memcpy(&can_data[6], &gx_scaled, sizeof(int16_t));
-      
-      // Send to CAN bus via generic interface
-      CanInterface::sendRawCANFrame(0x001, can_data, 8);
+      // Send IMU data to CAN via the dedicated interface
+      CanInterface::sendIMU(sample.imu);
     }
   }
 }

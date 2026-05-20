@@ -44,7 +44,7 @@ void StateManager::updateSignals()
 
     // Read from CAN globals (via atomics)
     signals_.r2d = g_can_r2d.load();
-    signals_.vehicle_standstill = g_can_vehicle_standstill.load();
+    signals_.vehicle_standstill = g_imu_vehicle_standstill.load();
     int mission_id = g_can_mission_id.load();
     signals_.mission_selected = (mission_id > 0);
 

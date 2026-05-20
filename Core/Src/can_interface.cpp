@@ -1,4 +1,5 @@
 #include "can_interface.hpp"
+#include "state_manager.hpp"
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -7,16 +8,20 @@
 #include "task.h"
 
 /* CAN IDs */
-#define CAN_ID_MISSION_SELECT  0x503u
-#define CAN_ID_TS_ACTIVE       0x504u
-#define CAN_ID_BRAKE_PRESSURE  0x505u
-#define CAN_ID_SDC_RES_OPEN    0x506u
+static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
+static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u;
+static constexpr uint32_t CAN_ID_BRAKE_PRESSURE    = 0x505u;
+static constexpr uint32_t CAN_ID_SDC_RES_OPEN      = 0x506u;
+static constexpr uint32_t CAN_ID_CONTROL_ACCEL     = 0x507u;
+static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u;
+static constexpr uint32_t CAN_ID_R2D               = 0x509u;
+static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
+static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 
 extern FDCAN_HandleTypeDef hfdcan3;
 
-/* amiTask handle and shared mission index — defined in freertos.c */
+/* amiTask handle — defined in freertos.c */
 extern osThreadId_t amiTaskHandle;
-extern volatile uint8_t g_mission_index;
 
 void CanInterface::init()
 {
@@ -48,13 +53,20 @@ void CanInterface::init()
 
 void CanInterface::sendControl(float accel, float steer)
 {
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[8];
+    // Backwards-compatible helper: send two separate frames for accel and steer
+    sendAccel(accel);
+    sendSteer(steer);
+}
 
-    TxHeader.Identifier = 0x000; // TODO: Define proper CAN ID
+void CanInterface::sendAccel(float accel)
+{
+    FDCAN_TxHeaderTypeDef TxHeader;
+    uint8_t TxData[4];
+
+    TxHeader.Identifier = CAN_ID_CONTROL_ACCEL;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_8;
+    TxHeader.DataLength = FDCAN_DLC_BYTES_4;
     TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
     TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
     TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
@@ -62,7 +74,28 @@ void CanInterface::sendControl(float accel, float steer)
     TxHeader.MessageMarker = 0;
 
     memcpy(&TxData[0], &accel, sizeof(float));
-    memcpy(&TxData[4], &steer, sizeof(float));
+
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+void CanInterface::sendSteer(float steer)
+{
+    FDCAN_TxHeaderTypeDef TxHeader;
+    uint8_t TxData[4];
+
+    TxHeader.Identifier = CAN_ID_CONTROL_STEER;
+    TxHeader.IdType = FDCAN_STANDARD_ID;
+    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+    TxHeader.DataLength = FDCAN_DLC_BYTES_4;
+    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
+    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    TxHeader.MessageMarker = 0;
+
+    memcpy(&TxData[0], &steer, sizeof(float));
 
     if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
         Error_Handler();
@@ -74,7 +107,7 @@ void CanInterface::sendR2D(bool r2d)
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[1];
 
-    TxHeader.Identifier = 0x000; // TODO: Define proper CAN ID
+    TxHeader.Identifier = CAN_ID_R2D;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
     TxHeader.DataLength = FDCAN_DLC_BYTES_1;
@@ -93,24 +126,33 @@ void CanInterface::sendR2D(bool r2d)
     }
 }
 
-void CanInterface::sendRawCANFrame(uint32_t can_id, const uint8_t *data, uint8_t dlc)
+void CanInterface::sendIMU(const bmi088_scaled_t &imu)
 {
-    if (data == nullptr || dlc == 0 || dlc > 8) return;
-
     FDCAN_TxHeaderTypeDef TxHeader;
-    
-    TxHeader.Identifier = can_id;
+    uint8_t TxData[8];
+
+    const int16_t ax_scaled = (int16_t)(imu.ax_g * 1000.0f);
+    const int16_t ay_scaled = (int16_t)(imu.ay_g * 1000.0f);
+    const int16_t az_scaled = (int16_t)(imu.az_g * 1000.0f);
+    const int16_t gx_scaled = (int16_t)(imu.gx_dps * 10.0f);
+
+    memcpy(&TxData[0], &ax_scaled, sizeof(int16_t));
+    memcpy(&TxData[2], &ay_scaled, sizeof(int16_t));
+    memcpy(&TxData[4], &az_scaled, sizeof(int16_t));
+    memcpy(&TxData[6], &gx_scaled, sizeof(int16_t));
+
+    TxHeader.Identifier = CAN_ID_IMU;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = (uint32_t)dlc << 16; // FDCAN DLC encoding
+    TxHeader.DataLength = FDCAN_DLC_BYTES_8;
     TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
     TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
     TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
     TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     TxHeader.MessageMarker = 0;
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, (uint8_t*)data) != HAL_OK) {
-        // Optional: Error handling
+    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
+        Error_Handler();
     }
 }
 
@@ -119,7 +161,7 @@ void CanInterface::sendAssiStatus(uint8_t status)
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[1];
 
-    TxHeader.Identifier = 0x100; // ASSI Status CAN ID
+    TxHeader.Identifier = CAN_ID_ASSI;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
     TxHeader.DataLength = FDCAN_DLC_BYTES_1;
@@ -132,7 +174,7 @@ void CanInterface::sendAssiStatus(uint8_t status)
     TxData[0] = status;
 
     if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        // Optional: Error handling
+        Error_Handler();
     }
 }
 
@@ -148,6 +190,17 @@ void CanInterface::isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
     msg.id  = rxh.Identifier;
     msg.dlc = (uint8_t)(rxh.DataLength >> 16);
     memcpy(msg.data, rxdata, 8);
+    /* Tag the message with its source FDCAN bus so downstream dispatch
+     * can distinguish messages from multiple CAN peripherals. */
+    if (hfdcan->Instance == FDCAN1) {
+        msg.bus = 1;
+    } else if (hfdcan->Instance == FDCAN2) {
+        msg.bus = 2;
+    } else if (hfdcan->Instance == FDCAN3) {
+        msg.bus = 3;
+    } else {
+        msg.bus = 0;
+    }
 
     osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
 }
@@ -157,7 +210,7 @@ void CanInterface::rx_dispatch(const can_msg_t *msg)
     switch (msg->id)
     {
     case CAN_ID_MISSION_SELECT:
-        g_mission_index = msg->data[0];
+        g_can_mission_id.store((int)msg->data[0]);
         HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
         if (amiTaskHandle != NULL) {
             xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
@@ -199,6 +252,6 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 
 extern "C" void can_interface_send_assi_emergency_from_isr(void)
 {
-    CanInterface::getInstance().sendAssiEmergency();
+    CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(ASState::EMERGENCY));
 }
 

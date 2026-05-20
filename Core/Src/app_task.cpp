@@ -44,7 +44,7 @@ static void reset_can_globals(void)
     g_can_listen_go.store(false);
     g_can_mission_id.store(0);
     g_can_r2d.store(false);
-    g_can_vehicle_standstill.store(true);
+    g_imu_vehicle_standstill.store(true);
 }
 
 /**
@@ -151,7 +151,8 @@ extern "C" void StartAppTask(void *argument)
             // Send zero control when not driving (safety)
             if (as_state != ASState::DRIVING)
             {
-                CanInterface::getInstance().sendControl(0.0f, 0.0f);
+                CanInterface::getInstance().sendAccel(0.0f);
+                CanInterface::getInstance().sendSteer(0.0f);
             }
 
             // State-specific logic
@@ -200,7 +201,8 @@ extern "C" void StartAppTask(void *argument)
                         else
                         {
                             // Send control commands continuously (ECU expects constant stream)
-                            CanInterface::getInstance().sendControl(g_accel_cmd.load(), g_steer_cmd.load());
+                            CanInterface::getInstance().sendAccel(g_accel_cmd.load());
+                            CanInterface::getInstance().sendSteer(g_steer_cmd.load());
                         }
                     }
                     break;

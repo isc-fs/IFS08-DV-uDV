@@ -1,6 +1,7 @@
 #pragma once
 
 #include "can_globals.h"
+#include "bmi088.h"
 #include <cstdint>
 #include "fdcan.h"
 #include "cmsis_os2.h"
@@ -14,21 +15,12 @@ public:
     }
 
     void init();
-    void sendControl(float accel, float steer);
-    void sendR2D(bool r2d);
-    static void sendRawCANFrame(uint32_t can_id, const uint8_t *data, uint8_t dlc);
-
-    /**
-     * @brief Send ASSI status message
-     * @param status Status code (0x00=OFF, 0x02=READY, 0x03=DRIVING, 0x01=EMERGENCY, 0x04=FINISHED)
-     */
-    void sendAssiStatus(uint8_t status);
-
-    /**
-     * @brief Send ASSI emergency status message (triggered by watchdog)
-     *        Immediately notifies other systems of emergency state
-     */
-    void sendAssiEmergency() { sendAssiStatus(0x01); }
+    static void sendControl(float accel, float steer);
+    static void sendAccel(float accel);
+    static void sendSteer(float steer);
+    static void sendR2D(bool r2d);
+    static void sendIMU(const bmi088_scaled_t &imu);
+    static void sendAssiStatus(uint8_t status);
 
     /* Called from HAL_FDCAN_RxFifo0Callback (ISR context) */
     void isr_push_rx(FDCAN_HandleTypeDef *hfdcan);
@@ -43,4 +35,7 @@ private:
     CanInterface& operator=(const CanInterface&) = delete;
 };
 
-
+extern "C" {
+    void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan);
+    void can_interface_send_assi_emergency_from_isr(void);
+}
