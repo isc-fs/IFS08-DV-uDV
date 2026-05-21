@@ -24,9 +24,7 @@ typedef struct {
 
 /* Queue handle — created in freertos.c, used by ISR and canTask */
 extern osMessageQueueId_t canRxQueueHandle;
-
-/* CAN command queue is shared by C and C++ translation units. */
-extern QueueHandle_t g_can_cmd_queue;
+/* CAN command queue removed — callers should call `CanInterface` directly. */
 
 /* For C++ builds expose std::atomic variables; for C builds provide
  * volatile fallbacks. Do NOT wrap the C++ declarations in extern "C"

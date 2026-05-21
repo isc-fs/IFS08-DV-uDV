@@ -102,7 +102,6 @@ void StartImuTask(void *argument)
     {
       sample.timestamp_us = ts_us;
 
-      // TODO: set vehicle standstill atomic
       // Determine vehicle standstill from IMU: low angular rates and
       // acceleration magnitude near 1g (gravity) within small tolerance
       float ax = sample.imu.ax_g;
@@ -123,7 +122,7 @@ void StartImuTask(void *argument)
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
       
       // Send IMU data to CAN via the dedicated interface
-      CanInterface::sendIMU(sample.imu);
+      Can::sendIMU(sample.imu);
     }
   }
 }

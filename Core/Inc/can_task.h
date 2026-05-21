@@ -18,45 +18,9 @@ void StartCanTask(void *argument);
  */
 #include "can_globals.h"
 #include <stdint.h>
-
-typedef enum {
-	CAN_CMD_NONE = 0,
-	CAN_CMD_SEND_CONTROL,
-	CAN_CMD_SEND_ASSI_STATUS,
-} CanCmd;
-
-typedef struct {
-	CanCmd cmd;
-	float accel;
-	float steer;
-	uint8_t status;  // For ASSI status messages
-} CanCommandMessage;
-
-static inline void send_can_control(float accel, float steer)
-{
-	if (g_can_cmd_queue == NULL) return;
-
-	CanCommandMessage msg;
-	msg.cmd = CAN_CMD_SEND_CONTROL;
-	msg.accel = accel;
-	msg.steer = steer;
-	msg.status = 0;
-
-	xQueueSend(g_can_cmd_queue, &msg, 0);
-}
-
-static inline void send_can_assi_status(uint8_t status)
-{
-	if (g_can_cmd_queue == NULL) return;
-
-	CanCommandMessage msg;
-	msg.cmd = CAN_CMD_SEND_ASSI_STATUS;
-	msg.accel = 0.0f;
-	msg.steer = 0.0f;
-	msg.status = status;
-
-	xQueueSend(g_can_cmd_queue, &msg, 0);
-}
+/* Legacy queue-based helpers removed — callers should call `CanInterface`
+ * directly in C++ or implement appropriate C wrappers.
+ */
 
 #ifdef __cplusplus
 }

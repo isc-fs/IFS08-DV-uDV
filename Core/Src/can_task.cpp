@@ -30,51 +30,17 @@ extern "C" void StartCanTask(void *argument)
 {
     (void)argument;  // Unused parameter
 
-    // Get singleton CanInterface
-    CanInterface &can = CanInterface::getInstance();
-    can.init();
-
-    // Create the queue for AppTask to send commands
-    g_can_cmd_queue = xQueueCreate(8, sizeof(CanCommandMessage));
-
-    if (g_can_cmd_queue == NULL)
-    {
-        // Queue creation failed - enter error loop
-        while (1)
-        {
-            osDelay(1000);
-        }
-    }
-
-    CanCommandMessage msg;
+    // Initialize CAN interface namespace
+    Can::init();
 
     // Task loop - runs indefinitely until the task is deleted
     while (1)
     {
-        // Process commands from AppTask (short timeout for responsiveness)
-        if (xQueueReceive(g_can_cmd_queue, &msg, pdMS_TO_TICKS(10)) == pdPASS)
-        {
-            switch (msg.cmd)
-            {
-                case CAN_CMD_SEND_CONTROL:
-                    can.sendAccel(msg.accel);
-                    can.sendSteer(msg.steer);
-                    break;
-
-                case CAN_CMD_SEND_ASSI_STATUS:
-                    can.sendAssiStatus(msg.status);
-                    break;
-
-                default:
-                    break;
-            }
-        }
-
-        // Process incoming CAN messages from ISR queue
+        // Process incoming CAN messages from ISR queue and dispatch
         can_msg_t rx_msg;
         if (osMessageQueueGet(canRxQueueHandle, &rx_msg, NULL, 0) == osOK)
         {
-            can.rx_dispatch(&rx_msg);
+            Can::rx_dispatch(&rx_msg);
         }
 
         osDelay(5);

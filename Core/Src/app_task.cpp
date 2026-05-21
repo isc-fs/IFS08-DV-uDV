@@ -71,10 +71,6 @@ static void reset_all(void)
     {
         xQueueReset(g_ros_cmd_queue);
     }
-    if (g_can_cmd_queue != NULL)
-    {
-        xQueueReset(g_can_cmd_queue);
-    }
 
     g_reset_cmd.store(false);
 }
@@ -94,14 +90,8 @@ extern "C" void StartAppTask(void *argument)
     ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
     uint32_t ready_start_time = 0;
 
-    // Send initial OFF status via CAN queue
-    CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(as_state));
-
-    // Wait until CAN task creates its queue
-    while (g_can_cmd_queue == NULL)
-    {
-        osDelay(10);
-    }
+    // Send initial OFF status via CAN
+    Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
     // Wait until ROS task creates its queue
     while (g_ros_cmd_queue == NULL)
@@ -126,7 +116,7 @@ extern "C" void StartAppTask(void *argument)
         // Send ASSI status if state changed
         if (as_state != last_as_state)
         {
-            CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(as_state));
+            Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
             last_as_state = as_state;
         }
 
@@ -151,8 +141,8 @@ extern "C" void StartAppTask(void *argument)
             // Send zero control when not driving (safety)
             if (as_state != ASState::DRIVING)
             {
-                CanInterface::getInstance().sendAccel(0.0f);
-                CanInterface::getInstance().sendSteer(0.0f);
+                Can::sendAccel(0.0f);
+                Can::sendSteer(0.0f);
             }
 
             // State-specific logic
@@ -201,8 +191,8 @@ extern "C" void StartAppTask(void *argument)
                         else
                         {
                             // Send control commands continuously (ECU expects constant stream)
-                            CanInterface::getInstance().sendAccel(g_accel_cmd.load());
-                            CanInterface::getInstance().sendSteer(g_steer_cmd.load());
+                            Can::sendAccel(g_accel_cmd.load());
+                            Can::sendSteer(g_steer_cmd.load());
                         }
                     }
                     break;

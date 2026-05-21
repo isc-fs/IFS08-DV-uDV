@@ -23,7 +23,9 @@ extern FDCAN_HandleTypeDef hfdcan3;
 /* amiTask handle — defined in freertos.c */
 extern osThreadId_t amiTaskHandle;
 
-void CanInterface::init()
+namespace Can {
+
+void init()
 {
     // Configure FDCAN3 for both TX and RX
     FDCAN_FilterTypeDef filter = {
@@ -51,14 +53,14 @@ void CanInterface::init()
     }
 }
 
-void CanInterface::sendControl(float accel, float steer)
+void sendControl(float accel, float steer)
 {
     // Backwards-compatible helper: send two separate frames for accel and steer
     sendAccel(accel);
     sendSteer(steer);
 }
 
-void CanInterface::sendAccel(float accel)
+void sendAccel(float accel)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[4];
@@ -80,7 +82,7 @@ void CanInterface::sendAccel(float accel)
     }
 }
 
-void CanInterface::sendSteer(float steer)
+void sendSteer(float steer)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[4];
@@ -101,32 +103,7 @@ void CanInterface::sendSteer(float steer)
         Error_Handler();
     }
 }
-
-void CanInterface::sendR2D(bool r2d)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[1];
-
-    TxHeader.Identifier = CAN_ID_R2D;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_1;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    TxData[0] = r2d;
-
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        Error_Handler();
-    } else {
-        g_can_r2d.store(true);
-    }
-}
-
-void CanInterface::sendIMU(const bmi088_scaled_t &imu)
+void sendIMU(const bmi088_scaled_t &imu)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[8];
@@ -156,7 +133,7 @@ void CanInterface::sendIMU(const bmi088_scaled_t &imu)
     }
 }
 
-void CanInterface::sendAssiStatus(uint8_t status)
+void sendAssiStatus(uint8_t status)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[1];
@@ -178,7 +155,7 @@ void CanInterface::sendAssiStatus(uint8_t status)
     }
 }
 
-void CanInterface::isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
+void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 {
     FDCAN_RxHeaderTypeDef rxh;
     uint8_t rxdata[8];
@@ -205,7 +182,7 @@ void CanInterface::isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
     osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
 }
 
-void CanInterface::rx_dispatch(const can_msg_t *msg)
+void rx_dispatch(const can_msg_t *msg)
 {
     switch (msg->id)
     {
@@ -237,21 +214,33 @@ void CanInterface::rx_dispatch(const can_msg_t *msg)
         }
         break;
 
+    case CAN_ID_R2D:
+        if (msg->dlc >= 1U) {
+            bool r2d_received = (msg->data[0] != 0U);
+            // Only accept external R2D when app_task has enabled listening
+            if (r2d_received && g_can_listen_go.load()) {
+                g_can_r2d.store(true);
+            }
+        }
+        break;
+
     default:
         break;
     }
 }
 
+} // namespace Can
+
 // C-compatible wrapper for ISR
 extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 {
     if (hfdcan->Instance == FDCAN3) {
-        CanInterface::getInstance().isr_push_rx(hfdcan);
+        Can::isr_push_rx(hfdcan);
     }
 }
 
 extern "C" void can_interface_send_assi_emergency_from_isr(void)
 {
-    CanInterface::getInstance().sendAssiStatus(StateManager::getAssiStatusCode(ASState::EMERGENCY));
+    Can::sendAssiStatus(StateManager::getAssiStatusCode(ASState::EMERGENCY));
 }
 

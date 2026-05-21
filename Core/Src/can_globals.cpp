@@ -10,6 +10,4 @@ std::atomic<float> g_can_brake_pressure{0.0f};
 std::atomic<bool> g_can_sdc_res_open{false};
 std::atomic<bool> g_reset_cmd{false};
 
-// CAN command queue
-QueueHandle_t g_can_cmd_queue = nullptr;
 
