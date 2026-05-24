@@ -12,12 +12,17 @@ on:
 
 jobs:
   build:
-    name: arm-none-eabi-gcc 14.3 / STM32H733XG
-    runs-on: ubuntu-latest
+    name: arm-none-eabi-gcc 14.3 / STM32H733XG (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -30,7 +35,8 @@ jobs:
         run: arm-none-eabi-gcc --version
 
       - name: Build (make -j)
-        run: make -j$(nproc)
+        # getconf _NPROCESSORS_ONLN is POSIX (works on Linux + macOS, unlike nproc)
+        run: make -j$(getconf _NPROCESSORS_ONLN)
 
       - name: Verify firmware artifacts exist
         run: |
@@ -42,7 +48,10 @@ jobs:
         run: arm-none-eabi-size build/binaries/uDV.elf
 
       - name: Upload firmware artifacts
-        uses: actions/upload-artifact@v4
+        # Only upload from the Linux runner to avoid artifact name collisions
+        # and because the elf/bin/hex are byte-identical across host OSes.
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
         with:
           name: uDV-firmware
           path: |
