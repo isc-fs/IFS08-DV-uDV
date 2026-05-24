@@ -17,9 +17,50 @@ Embedded firmware for the **micro Driverless Vehicle (uDV)** node of the IFS08, 
      - [Atlassian Git Tutorial](https://www.atlassian.com/git/tutorials/)
    - Keep a copy of [GitHub's Git Cheat Sheet](https://services.github.com/kit/downloads/github-git-cheat-sheet.pdf) handy as a reference.
 
-3. Clone this repository to your machine:
-   - SSH: `git@github.com:isc-fs/IFS08-DV-uDV.git`
-   - HTTPS: `https://github.com/isc-fs/IFS08-DV-uDV.git`
+3. Clone this repository to your machine **with submodules**:
+   ```bash
+   git clone --recurse-submodules -b dev git@github.com:isc-fs/IFS08-DV-uDV.git
+   ```
+   The `--recurse-submodules` flag is required — see
+   [Repository layout](#repository-layout) below for what lives in
+   the submodule.  If you cloned without it, run
+   `git submodule update --init --recursive` from inside the repo.
+
+---
+
+## Repository layout
+
+### Submodule: `micro_ros_stm32cubemx_utils`
+
+Pinned to [`isc-fs/micro_ros_stm32cubemx_utils`](https://github.com/isc-fs/micro_ros_stm32cubemx_utils)
+on the **`humble-isc`** branch.  This is our fork of the upstream
+[micro-ROS / micro_ros_stm32cubemx_utils](https://github.com/micro-ROS/micro_ros_stm32cubemx_utils)
+repo, with two differences:
+
+- Tracks a **prebuilt `libmicroros.a` + `microros_include/`** in
+  the working tree (upstream gitignores them).  This means
+  `git clone --recurse-submodules` is enough to build the firmware
+  on any machine with the ARM toolchain — no Docker step needed.
+- Includes our custom ROS interface package(s) compiled into
+  libmicroros so `ros_interface.cpp` links cleanly.
+
+Updating libmicroros (only needed when changing interface schemas) is
+documented in [`firststeps.md`](firststeps.md#rebuilding-libmicroros).
+The submodule fork has its own sanity-check CI that catches
+conflict markers and the .gitignore over-matching class of bug.
+
+### Continuous integration
+
+Every push to `main`, `dev`, `feat/**`, `fix/**`, and every pull
+request runs the **Build firmware** workflow
+(`.github/workflows/build.yml`):
+
+- arm-none-eabi-gcc 14.3.Rel1 on both `ubuntu-latest` and `macos-latest`
+- runs `make -j` and asserts `uDV.elf` / `uDV.bin` / `uDV.hex` exist
+- uploads the artifacts under `uDV-firmware`
+
+`dev` branch protection requires both runners to be green before a
+PR can merge — so if CI is red, the merge button is greyed out.
 
 ---
 
