@@ -1,0 +1,52 @@
+name: Build firmware
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: arm-none-eabi-gcc 14.3 / STM32H733XG
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install arm-none-eabi-gcc 14.3
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.3.Rel1'
+
+      - name: Show toolchain version
+        run: arm-none-eabi-gcc --version
+
+      - name: Build (make -j)
+        run: make -j$(nproc)
+
+      - name: Verify firmware artifacts exist
+        run: |
+          test -f build/binaries/uDV.elf
+          test -f build/binaries/uDV.bin
+          test -f build/binaries/uDV.hex
+
+      - name: Print firmware size
+        run: arm-none-eabi-size build/binaries/uDV.elf
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: uDV-firmware
+          path: |
+            build/binaries/uDV.elf
+            build/binaries/uDV.bin
+            build/binaries/uDV.hex
+          if-no-files-found: error
