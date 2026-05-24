@@ -1,0 +1,138 @@
+/**
+ * @file    imu_task.cpp
+ * @brief   IMU task implementation - 400Hz BMI088 acquisition with CAN/ROS output
+ */
+
+#include "imu_task.h"
+
+#include <cstring>
+#include <math.h>
+
+extern "C" {
+    #include "FreeRTOS.h"
+    #include "task.h"
+    #include "cmsis_os.h"
+    #include "imu_service.h"
+    #include "tim.h"
+    #include "dwt_time.h"
+}
+
+#include "can_interface.hpp"
+#include "can_globals.h"
+#include "ros_globals.h"
+
+/* Defines */
+#define G_TO_MS2   9.80665f
+#define DPS_TO_RAD (float)(M_PI / 180.0)
+
+/* CAN IMU broadcast downsample.  The IMU sampler runs at 400 Hz because
+ * the autonomy stack consumes it over micro-ROS at full rate, but
+ * blasting all 400 Hz onto the CAN bus would be ~11 % bus utilisation
+ * at 500 kbit/s — wasteful when the only CAN consumer (the DataLogger)
+ * only needs telemetry-rate samples.  50 Hz is the FS-DV convention
+ * for logged IMU.  Adjust IMU_CAN_RATE_HZ if other CAN consumers need
+ * higher (or lower) bandwidth. */
+#define IMU_SAMPLE_RATE_HZ    400
+#define IMU_CAN_RATE_HZ        50
+#define IMU_CAN_DOWNSAMPLE     (IMU_SAMPLE_RATE_HZ / IMU_CAN_RATE_HZ)
+
+/* External declarations (defined in freertos.c) */
+extern osMessageQueueId_t imuQueueHandle;
+extern osSemaphoreId_t imuSemHandle;
+
+/* Shared IMU debug status visible to ROS diagnostics. */
+volatile int32_t imu_debug_status = -99;
+
+void StartImuTask(void *argument)
+{
+  extern I2C_HandleTypeDef hi2c2;
+  extern CORDIC_HandleTypeDef hcordic;
+
+  imu_service_t imu_svc;
+  imu_service_init(&imu_svc, &hi2c2,
+                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
+                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
+                   &hcordic, 0.98f);
+  bmi088_status_t init_st = imu_service_start(&imu_svc);
+  imu_debug_status = (int32_t)init_st;
+
+  // Gyro bias calibration: collect 300 samples over 6s while stationary
+  if (init_st == BMI088_OK)
+  {
+    const int CAL_SAMPLES = 300;
+    const float GYR_LSB_PER_DPS = 16.4f;  // ±2000 dps range
+    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
+
+    for (int i = 0; i < CAL_SAMPLES; i++)
+    {
+      bmi088_raw_t raw;
+      if (bmi088_read_raw(&imu_svc.bmi, &raw) == BMI088_OK)
+      {
+        gx_sum += raw.gx;
+        gy_sum += raw.gy;
+        gz_sum += raw.gz;
+      }
+      osDelay(20);
+    }
+
+    float gx_bias = (float)gx_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gy_bias = (float)gy_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    float gz_bias = (float)gz_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
+    attitude_set_gyro_bias_dps(&imu_svc.att, gx_bias, gy_bias, gz_bias);
+  }
+
+  // Start TIM2 interrupt for deterministic 400Hz sampling
+  HAL_TIM_Base_Start_IT(&htim2);
+
+  // Counter used to downsample the CAN IMU broadcast from 400 Hz to
+  // IMU_CAN_RATE_HZ (see top of file).
+  uint16_t can_imu_counter = 0;
+
+  for (;;)
+  {
+    // Wait for TIM2 ISR to release the semaphore (400Hz, zero jitter)
+    osSemaphoreAcquire(imuSemHandle, osWaitForever);
+
+    // Capture high-res timestamp at exact sampling moment
+    uint64_t ts_us = dwt_micros();
+
+    imu_sample_t sample;
+    bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
+    imu_debug_status = (int32_t)step_st;
+    if (step_st == BMI088_OK)
+    {
+      sample.timestamp_us = ts_us;
+
+      // Determine vehicle standstill from IMU: low angular rates and
+      // acceleration magnitude near 1g (gravity) within small tolerance
+      float ax = sample.imu.ax_g;
+      float ay = sample.imu.ay_g;
+      float az = sample.imu.az_g;
+      float acc_g = sqrtf(ax*ax + ay*ay + az*az);
+      float gx = sample.imu.gx_dps;
+      float gy = sample.imu.gy_dps;
+      float gz = sample.imu.gz_dps;
+      float gyro_max = fmaxf(fmaxf(fabsf(gx), fabsf(gy)), fabsf(gz));
+
+      const float ACC_TOL_G = 0.05f;   // 0.05 g tolerance
+      const float GYRO_TOL_DPS = 2.0f; // 2 dps tolerance
+
+      bool imu_standstill = (fabsf(acc_g - 1.0f) <= ACC_TOL_G) && (gyro_max <= GYRO_TOL_DPS);
+      g_imu_vehicle_standstill.store(imu_standstill);
+      // Publish to ROS via imuQueueHandle (consumed by ros_task).  Non-blocking:
+      // if ros_task is back-pressured by USB CDC, the queue fills and samples
+      // get dropped silently — count them so the drop rate is observable.
+      if (osMessageQueuePut(imuQueueHandle, &sample, 0, 0) != osOK)
+      {
+        g_imu_drop_count.fetch_add(1, std::memory_order_relaxed);
+      }
+
+      // Send IMU data to CAN at IMU_CAN_RATE_HZ (downsampled from sample rate).
+      if (++can_imu_counter >= IMU_CAN_DOWNSAMPLE)
+      {
+        Can::sendIMU(sample.imu);
+        can_imu_counter = 0;
+      }
+    }
+  }
+}

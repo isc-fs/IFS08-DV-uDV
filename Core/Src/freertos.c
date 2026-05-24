@@ -26,57 +26,30 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <math.h>
-
-#include <rcl/rcl.h>
-#include <rcl/error_handling.h>
-#include <rclc/rclc.h>
-#include <rclc/executor.h>
-#include <uxr/client/transport.h>
-#include <rmw_microxrcedds_c/config.h>
-#include <rmw_microros/rmw_microros.h>
-#include <rmw_microros/time_sync.h>
-#include <rosidl_runtime_c/string_functions.h>
-
-#include <sensor_msgs/msg/imu.h>
-#include <std_msgs/msg/int32.h>
-#include <std_msgs/msg/float32.h>
+#include <stdbool.h>
 
 #include "imu_service.h"
-#include "can_service.h"
-#include "ws2812.h"
 #include "i2c.h"
 #include "cordic.h"
 #include "tim.h"
+#include "imu_task.h"
+#include "ros_task.h"
+#include "can_task.h"
+#include "ami_task.h"
+#include "can_globals.h"
+#include "app_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+struct uxrCustomTransport;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define G_TO_MS2   9.80665f
-#define DPS_TO_RAD (float)(M_PI / 180.0)
 #define IMU_QUEUE_DEPTH 16
-#define TIME_SYNC_TIMEOUT_MS  1000
-#define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
-#define SLOW_PUB_INTERVAL     40    // publish steering/RES/AMI every 40 IMU samples (~10 Hz)
-#define DL_TX_INTERVAL_MS     100   // Data Logger TX period
-#define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
 
-// High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
-static uint32_t dwt_last = 0;
-static uint64_t dwt_overflow_count = 0;
-
-static inline uint64_t dwt_micros(void)
-{
-  uint32_t now = DWT->CYCCNT;
-  if (now < dwt_last) dwt_overflow_count++;
-  dwt_last = now;
-  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
-  return total_cycles / (SystemCoreClock / 1000000U);
-}
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -107,13 +80,24 @@ const osThreadAttr_t amiTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
-osMessageQueueId_t imuQueueHandle;
-osMessageQueueId_t canRxQueueHandle;
-osMessageQueueId_t resRxQueueHandle;
-osSemaphoreId_t imuSemHandle;
+osThreadId_t appTaskHandle;
+const osThreadAttr_t appTask_attributes = {
+  .name = "appTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
-/* Mission index shared between canTask (writer) and amiTask (reader) */
-volatile uint8_t g_mission_index = 0xFF;  /* 0xFF = no mission received */
+osThreadId_t rosTaskHandle;
+const osThreadAttr_t rosTask_attributes = {
+  .name = "rosTask",
+  .stack_size = 4096 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+
+osMessageQueueId_t imuQueueHandle;
+osMessageQueueId_t canRxQueueHandle;  /* FDCAN3 (AMI + steering bus) */
+osMessageQueueId_t resRxQueueHandle;  /* FDCAN1 (RES CANopen bus)    */
+osSemaphoreId_t imuSemHandle;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -135,9 +119,12 @@ void microros_deallocate(void * pointer, void * state);
 void * microros_reallocate(void * pointer, size_t size, void * state);
 void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
 
-void StartImuTask(void *argument);
+
 void StartCanTask(void *argument);
+void StartImuTask(void *argument);
 void StartAmiTask(void *argument);
+void StartRosTask(void *argument);
+void StartAppTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -170,6 +157,8 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_QUEUES */
   imuQueueHandle   = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
   canRxQueueHandle = osMessageQueueNew(32, sizeof(can_msg_t), NULL);
+  /* RES CANopen PDOs arrive every ~30 ms — 8 slots is enough headroom
+   * for canTask to keep up at its 5 ms poll cadence. */
   resRxQueueHandle = osMessageQueueNew(8, sizeof(can_msg_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
@@ -178,9 +167,11 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
   amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
+  rosTaskHandle = osThreadNew(StartRosTask, NULL, &rosTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -196,348 +187,22 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
-
-/* --------------------------------------------------------------------------
- * /cmd_test subscriber callback: toggle OK_STATUS LED (PD14)
- * -------------------------------------------------------------------------- */
-static void cmd_test_callback(const void *msgin)
-{
-  (void)msgin;
-  HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
-}
-
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
 
-  // Enable DWT cycle counter for high-res timestamps
-  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-  DWT->CYCCNT = 0;
-  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-
-  // Wait for USB CDC to enumerate on the host
-  osDelay(2000);
-
-  // micro-ROS custom transport (USB CDC, HDLC framing)
-  rmw_uros_set_custom_transport(
-    true,
-    NULL,
-    cubemx_transport_open,
-    cubemx_transport_close,
-    cubemx_transport_write,
-    cubemx_transport_read);
-
-  // Set FreeRTOS-compatible allocators for micro-ROS
-  rcl_allocator_t freeRTOS_allocator = rcutils_get_zero_initialized_allocator();
-  freeRTOS_allocator.allocate = microros_allocate;
-  freeRTOS_allocator.deallocate = microros_deallocate;
-  freeRTOS_allocator.reallocate = microros_reallocate;
-  freeRTOS_allocator.zero_allocate = microros_zero_allocate;
-
-  if (!rcutils_set_default_allocator(&freeRTOS_allocator)) {
-    for (;;) { osDelay(1000); }
-  }
-
-  // micro-ROS node
-  rclc_support_t support;
-  rcl_allocator_t allocator;
-  rcl_node_t node;
-
-  allocator = rcl_get_default_allocator();
-  rclc_support_init(&support, 0, NULL, &allocator);
-  rclc_node_init_default(&node, "cubemx_node", "", &support);
-
-  // Time synchronization
-  while (!rmw_uros_epoch_synchronized()) {
-    rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
-    if (!rmw_uros_epoch_synchronized()) {
-      osDelay(100);
-    }
-  }
-  int64_t sync_epoch_ns = rmw_uros_epoch_nanos();
-  uint64_t sync_dwt_us = dwt_micros();
-  int64_t epoch_offset_ns = sync_epoch_ns - (int64_t)sync_dwt_us * 1000LL;
-
-  // --- Publishers ---
-
-  // IMU publisher (best-effort QoS for maximum throughput)
-  rcl_publisher_t imu_pub;
-  rclc_publisher_init_best_effort(
-    &imu_pub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-    "imu/data_raw");
-
-  // IMU debug status publisher
-  rcl_publisher_t imu_debug_pub;
-  std_msgs__msg__Int32 debug_msg;
-  debug_msg.data = 0;
-  rclc_publisher_init_default(
-    &imu_debug_pub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "imu/status");
-
-  // Steering angle publisher (~10 Hz)
-  rcl_publisher_t steering_pub;
-  std_msgs__msg__Float32 steering_msg;
-  steering_msg.data = 0.0f;
-  rclc_publisher_init_best_effort(
-    &steering_pub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-    "steering/data");
-
-  // RES status publisher (~10 Hz)
-  rcl_publisher_t res_pub;
-  std_msgs__msg__Int32 res_msg;
-  res_msg.data = 0;
-  rclc_publisher_init_best_effort(
-    &res_pub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "res/status");
-
-  // AMI mission publisher (~10 Hz)
-  rcl_publisher_t ami_pub;
-  std_msgs__msg__Int32 ami_msg;
-  ami_msg.data = -1;
-  rclc_publisher_init_best_effort(
-    &ami_pub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "ami/mission");
-
-  // --- Subscriber ---
-
-  // /cmd_test subscriber (toggle LED on receive)
-  rcl_subscription_t cmd_test_sub;
-  std_msgs__msg__Int32 cmd_test_msg;
-  rclc_subscription_init_default(
-    &cmd_test_sub, &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "cmd_test");
-
-  // Executor for subscriber callbacks
-  rclc_executor_t executor;
-  rclc_executor_init(&executor, &support.context, 1, &allocator);
-  rclc_executor_add_subscription(
-    &executor, &cmd_test_sub, &cmd_test_msg,
-    &cmd_test_callback, ON_NEW_DATA);
-
-  // Prepare IMU message (set static fields once)
-  sensor_msgs__msg__Imu imu_msg;
-  memset(&imu_msg, 0, sizeof(imu_msg));
-  rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
-
-  // Orientation not available
-  imu_msg.orientation_covariance[0] = -1.0;
-
-  // BMI088 datasheet noise specs (diagonal covariance matrices)
-  imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
-  imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
-  imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
-  imu_msg.angular_velocity_covariance[0] = 1.37e-5;
-  imu_msg.angular_velocity_covariance[4] = 1.37e-5;
-  imu_msg.angular_velocity_covariance[8] = 1.37e-5;
-
-  uint16_t slow_pub_counter = 0;
-
+  // Idle task - let other tasks handle their work
   for (;;)
   {
-    imu_sample_t sample;
-    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
-    {
-      // Timestamp
-      int64_t stamp_ns = epoch_offset_ns + (int64_t)sample.timestamp_us * 1000LL;
-      imu_msg.header.stamp.sec = (int32_t)(stamp_ns / 1000000000LL);
-      imu_msg.header.stamp.nanosec = (uint32_t)(stamp_ns % 1000000000LL);
-
-      // Linear acceleration: g -> m/s^2
-      imu_msg.linear_acceleration.x = sample.imu.ax_g * G_TO_MS2;
-      imu_msg.linear_acceleration.y = sample.imu.ay_g * G_TO_MS2;
-      imu_msg.linear_acceleration.z = sample.imu.az_g * G_TO_MS2;
-
-      // Angular velocity: dps -> rad/s
-      imu_msg.angular_velocity.x = sample.imu.gx_dps * DPS_TO_RAD;
-      imu_msg.angular_velocity.y = sample.imu.gy_dps * DPS_TO_RAD;
-      imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
-
-      (void)rcl_publish(&imu_pub, &imu_msg, NULL);
-
-      // --- Slow publishers (~10 Hz) ---
-      if (++slow_pub_counter >= SLOW_PUB_INTERVAL)
-      {
-        slow_pub_counter = 0;
-
-        // Steering angle in degrees
-        steering_msg.data = g_steering.angle_raw * 0.1f;
-        (void)rcl_publish(&steering_pub, &steering_msg, NULL);
-
-        // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT
-        uint32_t now_tick = osKernelGetTickCount();
-        if (g_res.last_rx_tick == 0)
-          res_msg.data = -1;  /* never received */
-        else if ((now_tick - g_res.last_rx_tick) > RES_TIMEOUT_MS)
-          res_msg.data = -1;  /* timeout */
-        else if (g_res.e_stop)
-          res_msg.data = 1;   /* E-Stop active */
-        else
-          res_msg.data = 0;   /* OK */
-        (void)rcl_publish(&res_pub, &res_msg, NULL);
-
-        // AMI mission index
-        ami_msg.data = (int32_t)g_mission_index;
-        (void)rcl_publish(&ami_pub, &ami_msg, NULL);
-
-        // Spin executor to process /cmd_test subscription
-        rclc_executor_spin_some(&executor, 0);
-      }
-
-      // Periodic time re-sync and debug publish (~every 10s)
-      static uint16_t sync_counter = 0;
-      if (++sync_counter >= TIME_SYNC_INTERVAL)
-      {
-        rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
-        int64_t new_epoch_ns = rmw_uros_epoch_nanos();
-        uint64_t new_dwt_us = dwt_micros();
-        epoch_offset_ns = new_epoch_ns - (int64_t)new_dwt_us * 1000LL;
-
-        extern volatile int32_t imu_debug_status;
-        debug_msg.data = imu_debug_status;
-        (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
-        sync_counter = 0;
-      }
-    }
+    osDelay(1000);
   }
   /* USER CODE END StartDefaultTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-
-// Shared debug status
-volatile int32_t imu_debug_status = -99;
-
-void StartImuTask(void *argument)
-{
-  extern I2C_HandleTypeDef hi2c2;
-  extern CORDIC_HandleTypeDef hcordic;
-
-  imu_service_t imu_svc;
-  imu_service_init(&imu_svc, &hi2c2,
-                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
-                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
-                   &hcordic, 0.98f);
-  bmi088_status_t init_st = imu_service_start(&imu_svc);
-  imu_debug_status = (int32_t)init_st;
-
-  // Gyro bias calibration: collect 300 samples over 6s while stationary
-  if (init_st == BMI088_OK)
-  {
-    const int CAL_SAMPLES = 300;
-    const float GYR_LSB_PER_DPS = 16.4f;
-    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
-
-    for (int i = 0; i < CAL_SAMPLES; i++)
-    {
-      bmi088_raw_t raw;
-      if (bmi088_read_raw(&imu_svc.bmi, &raw) == BMI088_OK)
-      {
-        gx_sum += raw.gx;
-        gy_sum += raw.gy;
-        gz_sum += raw.gz;
-      }
-      osDelay(20);
-    }
-
-    float gx_bias = (float)gx_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    float gy_bias = (float)gy_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    float gz_bias = (float)gz_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    attitude_set_gyro_bias_dps(&imu_svc.att, gx_bias, gy_bias, gz_bias);
-  }
-
-  // Start TIM2 interrupt for deterministic 400Hz sampling
-  HAL_TIM_Base_Start_IT(&htim2);
-
-  for (;;)
-  {
-    osSemaphoreAcquire(imuSemHandle, osWaitForever);
-
-    uint64_t ts_us = dwt_micros();
-
-    imu_sample_t sample;
-    bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
-    imu_debug_status = (int32_t)step_st;
-    if (step_st == BMI088_OK)
-    {
-      sample.timestamp_us = ts_us;
-      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
-    }
-  }
-}
-
-void StartCanTask(void *argument)
-{
-  can_service_init();       /* FDCAN3: AMI + steering */
-  res_service_init();       /* FDCAN1: RES CANopen    */
-  res_nmt_set_operational();
-
-  uint32_t last_dl_tick = osKernelGetTickCount();
-
-  for (;;)
-  {
-    can_msg_t msg;
-
-    /* FDCAN3 messages (non-blocking) */
-    if (osMessageQueueGet(canRxQueueHandle, &msg, NULL, 0) == osOK)
-      can_rx_dispatch(&msg);
-
-    /* FDCAN1 RES messages (non-blocking) */
-    if (osMessageQueueGet(resRxQueueHandle, &msg, NULL, 0) == osOK)
-      res_rx_dispatch(&msg);
-
-    /* Data Logger TX every 100 ms */
-    uint32_t now = osKernelGetTickCount();
-    if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)
-    {
-      datalogger_tx();
-      last_dl_tick = now;
-    }
-
-    osDelay(1);
-  }
-}
-
-void StartAmiTask(void *argument)
-{
-  extern SPI_HandleTypeDef hspi1;
-  ws2812_init(&hspi1);
-
-  /* Idle demo: dim white to show the node is alive */
-  ws2812_set_all(20, 20, 20);
-  ws2812_show();
-
-  uint8_t last_mission = 0xFF;
-
-  for (;;)
-  {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
-
-    uint8_t current = g_mission_index;
-
-    if (current != last_mission)
-    {
-      if (current == 0xFF)
-      {
-        ws2812_set_all(20, 20, 20);
-        ws2812_show();
-      }
-      else
-      {
-        ws2812_set_mission_color(current);
-      }
-      last_mission = current;
-    }
-  }
-}
 
 /* USER CODE END Application */
 

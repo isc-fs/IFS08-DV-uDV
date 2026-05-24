@@ -118,7 +118,7 @@ Currently canTask is receive-only. The `micro` branch also sends:
 - Control commands (accel + steer floats packed into 8 bytes)
 - R2D (ready to drive) signal
 
-Add `can_tx_send(uint32_t id, const uint8_t *data, uint8_t dlc)` to `can_service.c` using `HAL_FDCAN_AddMessageToTxFifoQ()`.
+Add any new CAN transmit helpers to `Core/Src/can_interface.cpp` so the active firmware keeps a single CAN interface layer.
 
 ---
 

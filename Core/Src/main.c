@@ -27,10 +27,16 @@
 #include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
+#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "hardware_io.h"
+#include "dwt_time.h"
 
+/* C wrapper to call into CanInterface from ISR */
+extern void can_interface_send_assi_emergency_from_isr(void);
+extern void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,7 +101,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  /* Enable DWT cycle counter before any task starts so dwt_micros() in
+   * imu_task and ros_interface share a consistent wrap-counter. */
+  dwt_init();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -108,8 +116,10 @@ int main(void)
   MX_CORDIC_Init();
   MX_TIM2_Init();
   MX_SPI1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-
+  // Start watchdog timer interrupt (50ms timeout for app stall detection)
+  HAL_TIM_Base_Start_IT(&htim3);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -221,6 +231,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       osSemaphoreRelease(imuSemHandle);
     }
   }
+  if (htim->Instance == TIM3)
+  {
+    // Watchdog timeout - immediately trigger emergency actions (independent of app_task)
+    hardware_io_set_as_close_sdc(false);        // Open SDC (disconnect power)
+    hardware_io_enable_ebs_actuator_1(false);   // Activate EBS actuator 1
+    hardware_io_enable_ebs_actuator_2(false);   // Activate EBS actuator 2
+
+    // Send ASSI emergency status CAN frame directly from ISR so external
+    // systems are immediately notified even if app_task is stalled.
+    // Use CanInterface helper (C wrapper) to send ASSI emergency compactly
+    can_interface_send_assi_emergency_from_isr();
+  }
   /* USER CODE END Callback 1 */
 }
 
@@ -254,3 +276,11 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+
+void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+  if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
+  {
+    can_interface_rx_isr_callback(hfdcan);
+  }
+}
