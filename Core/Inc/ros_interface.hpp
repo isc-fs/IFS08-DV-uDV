@@ -51,15 +51,10 @@ private:
     sensor_msgs__msg__Imu imu_msg;
     std_msgs__msg__Int32 debug_msg;
     
-    // Time synchronization
+    // Time synchronization (DWT cycle counter lives in dwt_time.c as a
+    // single source of truth shared with the IMU task)
     int64_t epoch_offset_ns;
     uint16_t sync_counter;
-    
-    // DWT timestamp overflow tracking
-    uint32_t dwt_last;
-    uint64_t dwt_overflow_count;
-    
-    uint64_t dwt_micros_internal(void);
 
     static void start_mission_goal_callback(rclc_action_goal_handle_t * goal_handle, bool accepted, void * context);
     static void start_mission_feedback_callback(rclc_action_goal_handle_t * goal_handle, void * ros_feedback, void * context);

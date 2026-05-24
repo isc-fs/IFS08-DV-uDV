@@ -32,6 +32,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hardware_io.h"
+#include "dwt_time.h"
 
 /* C wrapper to call into CanInterface from ISR */
 extern void can_interface_send_assi_emergency_from_isr(void);
@@ -100,7 +101,9 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  /* Enable DWT cycle counter before any task starts so dwt_micros() in
+   * imu_task and ros_interface share a consistent wrap-counter. */
+  dwt_init();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */

@@ -14,6 +14,7 @@ extern "C" {
     #include "cmsis_os.h"
     #include "imu_service.h"
     #include "tim.h"
+    #include "dwt_time.h"
 }
 
 #include "can_interface.hpp"
@@ -29,22 +30,6 @@ extern osSemaphoreId_t imuSemHandle;
 
 /* Shared IMU debug status visible to ROS diagnostics. */
 volatile int32_t imu_debug_status = -99;
-
-/* High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
- * DWT->CYCCNT is 32-bit at 528MHz, wraps every ~8.13s.
- * Must be called at least once per wrap period (400Hz imuTask guarantees this).
- */
-static uint32_t dwt_last = 0;
-static uint64_t dwt_overflow_count = 0;
-
-static inline uint64_t dwt_micros(void)
-{
-  uint32_t now = DWT->CYCCNT;
-  if (now < dwt_last) dwt_overflow_count++;
-  dwt_last = now;
-  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
-  return total_cycles / (SystemCoreClock / 1000000U);
-}
 
 void StartImuTask(void *argument)
 {

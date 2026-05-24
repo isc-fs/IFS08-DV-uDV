@@ -57,6 +57,7 @@ Core/Src/sysmem.c \
 Core/Src/syscalls.c \
 Core/Src/tim.c \
 Core/Src/spi.c \
+Core/Src/dwt_time.c \
 Middlewares/Third_Party/FreeRTOS/Source/list.c \
 Middlewares/Third_Party/FreeRTOS/Source/queue.c \
 Middlewares/Third_Party/FreeRTOS/Source/tasks.c \

@@ -7,6 +7,7 @@
 extern "C" {
     #include "cmsis_os.h"
     #include "main.h"
+    #include "dwt_time.h"
     #include <rcl/rcl.h>
     #include <rcl/error_handling.h>
     #include <rclc/rclc.h>
@@ -47,11 +48,9 @@ RosInterface::RosInterface() {
     memset(&debug_msg, 0, sizeof(debug_msg));
     debug_msg.data = 0;
     
-    // Time sync and DWT initialization
+    // Time sync initialization (DWT is initialized once in main.c via dwt_init())
     epoch_offset_ns = 0;
     sync_counter = 0;
-    dwt_last = 0;
-    dwt_overflow_count = 0;
 }
 
 RosInterface::~RosInterface() {
@@ -65,21 +64,9 @@ RosInterface::~RosInterface() {
     (void)rclc_support_fini(&support);
 }
 
-uint64_t RosInterface::dwt_micros_internal(void)
-{
-  uint32_t now = DWT->CYCCNT;
-  if (now < dwt_last) dwt_overflow_count++;
-  dwt_last = now;
-  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
-  return total_cycles / (SystemCoreClock / 1000000U);
-}
-
 void RosInterface::init() {
-    // Enable DWT cycle counter for high-res timestamps (if not already enabled)
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CYCCNT = 0;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    
+    // DWT cycle counter is initialized once in main() via dwt_init().
+
     // Initialize micro-ROS support
     rclc_support_init(&support, 0, NULL, &allocator);
 
@@ -150,9 +137,11 @@ void RosInterface::init() {
         }
     }
     
-    // Capture offset: agent_epoch - local_dwt at the sync moment
+    // Capture offset: agent_epoch - local_dwt at the sync moment.  Uses the
+    // shared dwt_micros() that the IMU task also drives, so all timestamps
+    // resolve against the same wrap-tracking state.
     int64_t sync_epoch_ns = rmw_uros_epoch_nanos();
-    uint64_t sync_dwt_us = dwt_micros_internal();
+    uint64_t sync_dwt_us = dwt_micros();
     epoch_offset_ns = sync_epoch_ns - (int64_t)sync_dwt_us * 1000LL;
     sync_counter = 0;
 }
@@ -178,14 +167,15 @@ void RosInterface::publishImuSample(const imu_sample_t *sample)
 
     (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-    // Periodic time re-sync and debug publish (~every 10s)
+    // Periodic time re-sync and debug publish (~every 10s).  Re-use the
+    // current sample's timestamp_us as the local-clock reference instead
+    // of calling dwt_micros() a second time — it was already captured at
+    // the exact sampling instant, so the offset is more tightly aligned.
     if (++sync_counter >= TIME_SYNC_INTERVAL)
     {
         rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
-        // Refresh epoch offset
         int64_t new_epoch_ns = rmw_uros_epoch_nanos();
-        uint64_t new_dwt_us = dwt_micros_internal();
-        epoch_offset_ns = new_epoch_ns - (int64_t)new_dwt_us * 1000LL;
+        epoch_offset_ns = new_epoch_ns - (int64_t)sample->timestamp_us * 1000LL;
 
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
