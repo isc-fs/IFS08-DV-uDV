@@ -281,8 +281,13 @@ $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf | $(BUILD_DIR)
 	$(BIN) $< $@	
 	
+ifeq ($(OS),Windows_NT)
 $(BUILD_DIR):
-	@if not exist "$@" mkdir "$@"		
+	@if not exist "$@" mkdir "$@"
+else
+$(BUILD_DIR):
+	@mkdir -p $@
+endif
 
 #######################################
 # clean up

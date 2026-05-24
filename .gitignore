@@ -5,3 +5,4 @@ mx.scratch
 .vscode/c_cpp_properties.json
 microros_agent_ws/*
 .claude/
+stm32_micro_ros_setup/
