@@ -19,6 +19,7 @@ extern "C" {
 
 #include "can_interface.hpp"
 #include "can_globals.h"
+#include "ros_globals.h"
 
 /* Defines */
 #define G_TO_MS2   9.80665f
@@ -103,9 +104,14 @@ void StartImuTask(void *argument)
 
       bool imu_standstill = (fabsf(acc_g - 1.0f) <= ACC_TOL_G) && (gyro_max <= GYRO_TOL_DPS);
       g_imu_vehicle_standstill.store(imu_standstill);
-      // Publish to ROS via imuQueueHandle (consumed by defaultTask)
-      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
-      
+      // Publish to ROS via imuQueueHandle (consumed by ros_task).  Non-blocking:
+      // if ros_task is back-pressured by USB CDC, the queue fills and samples
+      // get dropped silently — count them so the drop rate is observable.
+      if (osMessageQueuePut(imuQueueHandle, &sample, 0, 0) != osOK)
+      {
+        g_imu_drop_count.fetch_add(1, std::memory_order_relaxed);
+      }
+
       // Send IMU data to CAN via the dedicated interface
       Can::sendIMU(sample.imu);
     }

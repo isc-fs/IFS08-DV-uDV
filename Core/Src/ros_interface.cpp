@@ -44,9 +44,12 @@ RosInterface::RosInterface() {
     // IMU publisher initialization
     memset(&imu_pub, 0, sizeof(imu_pub));
     memset(&imu_debug_pub, 0, sizeof(imu_debug_pub));
+    memset(&imu_drop_count_pub, 0, sizeof(imu_drop_count_pub));
     memset(&imu_msg, 0, sizeof(imu_msg));
     memset(&debug_msg, 0, sizeof(debug_msg));
+    memset(&drop_count_msg, 0, sizeof(drop_count_msg));
     debug_msg.data = 0;
+    drop_count_msg.data = 0;
     
     // Time sync initialization (DWT is initialized once in main.c via dwt_init())
     epoch_offset_ns = 0;
@@ -57,6 +60,7 @@ RosInterface::~RosInterface() {
     // Clean up all allocated resources
     (void)rcl_publisher_fini(&imu_pub, &node);
     (void)rcl_publisher_fini(&imu_debug_pub, &node);
+    (void)rcl_publisher_fini(&imu_drop_count_pub, &node);
     (void)rcl_client_fini(&set_mission_client, &node);
     (void)rclc_action_client_fini(&start_mission_client, &node);
     (void)rclc_executor_fini(&executor);
@@ -115,6 +119,14 @@ void RosInterface::init() {
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
         "imu/status");
+
+    // IMU sample-drop counter — increments whenever imu_task can't enqueue
+    // a sample because the ros queue is full (USB CDC back-pressure).
+    rclc_publisher_init_default(
+        &imu_drop_count_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
+        "imu/drop_count");
 
     // Prepare IMU message (set static fields once)
     rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
@@ -179,6 +191,13 @@ void RosInterface::publishImuSample(const imu_sample_t *sample)
 
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
+
+        // Cumulative count of IMU samples that imu_task couldn't enqueue
+        // (queue full).  Monotonic; rate of change = drop rate.  Relaxed
+        // memory order is fine — we only need observability, not ordering.
+        drop_count_msg.data = g_imu_drop_count.load(std::memory_order_relaxed);
+        (void)rcl_publish(&imu_drop_count_pub, &drop_count_msg, NULL);
+
         sync_counter = 0;
     }
 }

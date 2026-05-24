@@ -8,6 +8,7 @@
 #include "ros2_interface/srv/set_mission.h"
 #include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/int32.h>
+#include <std_msgs/msg/u_int32.h>
 
 #include "ros_globals.h"
 #include "imu_service.h"
@@ -48,8 +49,10 @@ private:
     // IMU Publisher
     rcl_publisher_t imu_pub;
     rcl_publisher_t imu_debug_pub;
+    rcl_publisher_t imu_drop_count_pub;
     sensor_msgs__msg__Imu imu_msg;
     std_msgs__msg__Int32 debug_msg;
+    std_msgs__msg__UInt32 drop_count_msg;
     
     // Time synchronization (DWT cycle counter lives in dwt_time.c as a
     // single source of truth shared with the IMU task)
