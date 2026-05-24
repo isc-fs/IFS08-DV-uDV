@@ -95,7 +95,8 @@ const osThreadAttr_t rosTask_attributes = {
 };
 
 osMessageQueueId_t imuQueueHandle;
-osMessageQueueId_t canRxQueueHandle;
+osMessageQueueId_t canRxQueueHandle;  /* FDCAN3 (AMI + steering bus) */
+osMessageQueueId_t resRxQueueHandle;  /* FDCAN1 (RES CANopen bus)    */
 osSemaphoreId_t imuSemHandle;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -154,8 +155,11 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  imuQueueHandle = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
+  imuQueueHandle   = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
   canRxQueueHandle = osMessageQueueNew(32, sizeof(can_msg_t), NULL);
+  /* RES CANopen PDOs arrive every ~30 ms — 8 slots is enough headroom
+   * for canTask to keep up at its 5 ms poll cadence. */
+  resRxQueueHandle = osMessageQueueNew(8, sizeof(can_msg_t), NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */

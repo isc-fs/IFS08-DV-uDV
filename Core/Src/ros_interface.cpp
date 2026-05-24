@@ -1,5 +1,6 @@
 #include "ros_interface.hpp"
 #include "imu_task.h"
+#include "can_globals.h"  // g_steering_*, g_res_*, g_can_mission_id atomics
 #include <string.h>
 #include <stdlib.h>
 #include <cmath>
@@ -26,6 +27,8 @@ extern "C" {
 #define DPS_TO_RAD (float)(M_PI / 180.0)
 #define TIME_SYNC_TIMEOUT_MS  1000
 #define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
+#define SLOW_PUB_INTERVAL       40  // steering/RES/AMI publish cadence (~10 Hz at 400 Hz IMU)
+#define RES_TIMEOUT_MS         150  // RES PDO timeout: expect every ~30 ms; allow 5x slack
 
 RosInterface::RosInterface() {
     // Zero-initialize all members
@@ -50,7 +53,23 @@ RosInterface::RosInterface() {
     memset(&drop_count_msg, 0, sizeof(drop_count_msg));
     debug_msg.data = 0;
     drop_count_msg.data = 0;
-    
+
+    // Slow (~10 Hz) publishers re-ported from v0.1
+    memset(&steering_pub, 0, sizeof(steering_pub));
+    memset(&res_pub, 0, sizeof(res_pub));
+    memset(&ami_pub, 0, sizeof(ami_pub));
+    memset(&steering_msg, 0, sizeof(steering_msg));
+    memset(&res_msg, 0, sizeof(res_msg));
+    memset(&ami_msg, 0, sizeof(ami_msg));
+    steering_msg.data = 0.0f;
+    res_msg.data      = -1;    // -1 until first PDO arrives
+    ami_msg.data      = -1;    // -1 until first AMI mission frame
+    slow_pub_counter  = 0;
+
+    // /cmd_test subscriber state
+    memset(&cmd_test_sub, 0, sizeof(cmd_test_sub));
+    memset(&cmd_test_msg, 0, sizeof(cmd_test_msg));
+
     // Time sync initialization (DWT is initialized once in main.c via dwt_init())
     epoch_offset_ns = 0;
     sync_counter = 0;
@@ -61,6 +80,10 @@ RosInterface::~RosInterface() {
     (void)rcl_publisher_fini(&imu_pub, &node);
     (void)rcl_publisher_fini(&imu_debug_pub, &node);
     (void)rcl_publisher_fini(&imu_drop_count_pub, &node);
+    (void)rcl_publisher_fini(&steering_pub, &node);
+    (void)rcl_publisher_fini(&res_pub, &node);
+    (void)rcl_publisher_fini(&ami_pub, &node);
+    (void)rcl_subscription_fini(&cmd_test_sub, &node);
     (void)rcl_client_fini(&set_mission_client, &node);
     (void)rclc_action_client_fini(&start_mission_client, &node);
     (void)rclc_executor_fini(&executor);
@@ -89,8 +112,12 @@ void RosInterface::init() {
                                     ROSIDL_GET_ACTION_TYPE_SUPPORT(ros2_interface, StartMission),
                                     "start_mission");
 
-    // Initialize executor
-    rclc_executor_init(&executor, &support.context, 3, &allocator);
+    // Initialize executor — handle slots:
+    //   1 service client  (set_mission)
+    //   1 action client   (start_mission, internally uses up to 5 slots)
+    //   1 subscription    (cmd_test)
+    // Bump to 4 to leave slack for any future addition without re-sizing.
+    rclc_executor_init(&executor, &support.context, 4, &allocator);
 
     // Add service to executor
     rclc_executor_add_client(&executor, &set_mission_client, &res_set_mission, &RosInterface::set_mission_callback);
@@ -127,6 +154,43 @@ void RosInterface::init() {
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
         "imu/drop_count");
+
+    // Slow telemetry publishers (~10 Hz; cadence is driven by
+    // SLOW_PUB_INTERVAL in publishImuSample).  Best-effort QoS because
+    // missing one sample is harmless and we don't want USB CDC stalls
+    // to back-pressure the IMU pipeline.
+    rclc_publisher_init_best_effort(
+        &steering_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "steering/data");
+
+    rclc_publisher_init_best_effort(
+        &res_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+        "res/status");
+
+    rclc_publisher_init_best_effort(
+        &ami_pub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+        "ami/mission");
+
+    // /cmd_test diagnostic subscriber — see callback below.  Uses the
+    // context-less rclc API since the callback is stateless (toggles a
+    // GPIO via HAL).
+    rclc_subscription_init_default(
+        &cmd_test_sub,
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+        "cmd_test");
+    rclc_executor_add_subscription(
+        &executor,
+        &cmd_test_sub,
+        &cmd_test_msg,
+        &RosInterface::cmd_test_callback,
+        ON_NEW_DATA);
 
     // Prepare IMU message (set static fields once)
     rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
@@ -179,6 +243,36 @@ void RosInterface::publishImuSample(const imu_sample_t *sample)
 
     (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
+    // Slow telemetry publishers (~10 Hz) — steering / RES / AMI mission
+    // re-ported from the v0.1 release.  Reads thread-safe atomics that
+    // the CAN dispatchers populate; no locks needed here.
+    if (++slow_pub_counter >= SLOW_PUB_INTERVAL)
+    {
+        slow_pub_counter = 0;
+
+        // Steering angle: raw is 0.1 deg/bit → publish in degrees.
+        steering_msg.data = g_steering_angle_raw.load() * 0.1f;
+        (void)rcl_publish(&steering_pub, &steering_msg, NULL);
+
+        // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT/unknown
+        uint32_t last_tick = g_res_last_rx_tick.load();
+        uint32_t now_tick  = osKernelGetTickCount();
+        if (last_tick == 0U) {
+            res_msg.data = -1;                 // never received
+        } else if ((now_tick - last_tick) > RES_TIMEOUT_MS) {
+            res_msg.data = -1;                 // timed out
+        } else if (g_res_estop.load()) {
+            res_msg.data = 1;                  // E-Stop active
+        } else {
+            res_msg.data = 0;                  // OK
+        }
+        (void)rcl_publish(&res_pub, &res_msg, NULL);
+
+        // AMI mission index (matches g_can_mission_id semantics).
+        ami_msg.data = g_can_mission_id.load();
+        (void)rcl_publish(&ami_pub, &ami_msg, NULL);
+    }
+
     // Periodic time re-sync and debug publish (~every 10s).  Re-use the
     // current sample's timestamp_us as the local-clock reference instead
     // of calling dwt_micros() a second time — it was already captured at
@@ -209,6 +303,16 @@ void RosInterface::spin_some() {
 // ------------------------
 // Callbacks
 // ------------------------
+void RosInterface::cmd_test_callback(const void * msgin)
+{
+    /* Diagnostic / smoke-test callback re-ported from v0.1.  Toggles the
+     * OK_STATUS LED (PD14) on every received std_msgs/Int32 so we can
+     * verify the micro-ROS subscription path end-to-end from the host
+     * with one `ros2 topic pub /cmd_test std_msgs/msg/Int32 "{data: 1}"`. */
+    (void)msgin;
+    HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
+}
+
 void RosInterface::set_mission_callback(const void * ros_service_response) {
     // IDEA: ignore this for the moment and hope everything goes right as it will be sent again when the mission starts
     // or try to resend the mission (keep in mind the recursive aspect of it)

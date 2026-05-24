@@ -22,8 +22,11 @@ typedef struct {
 	uint8_t  _pad[2];
 } can_msg_t;
 
-/* Queue handle — created in freertos.c, used by ISR and canTask */
+/* Queue handles — created in freertos.c, used by ISR and canTask.
+ * canRxQueueHandle  : FDCAN3 (AMI + Steering bus)
+ * resRxQueueHandle  : FDCAN1 (RES CANopen bus + DataLogger TX bus) */
 extern osMessageQueueId_t canRxQueueHandle;
+extern osMessageQueueId_t resRxQueueHandle;
 /* CAN command queue removed — callers should call `CanInterface` directly. */
 
 /* For C++ builds expose std::atomic variables; for C builds provide
@@ -40,6 +43,29 @@ extern std::atomic<bool> g_can_ts_active;
 extern std::atomic<float> g_can_brake_pressure;
 extern std::atomic<bool> g_can_sdc_res_open;
 extern std::atomic<bool> g_reset_cmd;
+
+/* --- Re-ported from v0.1 (dev's can_service.c, deleted in feat/5) --- */
+
+/* Steering sensor (FDCAN3 ID 0x2B0).  Raw representation matches the LWS
+ * sensor wire format so the CAN layer doesn't allocate floats in ISR.
+ *   angle_raw  : 0.1 deg/bit, signed
+ *   speed_raw  : 4 deg/s per bit, unsigned
+ *   status     : bit0=OK, bit1=CAL, bit2=TRIM
+ *   last_rx_tick : osKernelGetTickCount() at the last received frame
+ */
+extern std::atomic<int16_t>  g_steering_angle_raw;
+extern std::atomic<uint8_t>  g_steering_speed_raw;
+extern std::atomic<uint8_t>  g_steering_status;
+extern std::atomic<uint32_t> g_steering_last_rx_tick;
+
+/* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
+ * can_interface.cpp for the bit layout — same as dev's res_service.
+ */
+extern std::atomic<bool>     g_res_estop;
+extern std::atomic<uint8_t>  g_res_go_signal;
+extern std::atomic<uint8_t>  g_res_radio_quality;
+extern std::atomic<bool>     g_res_pre_alarm;
+extern std::atomic<uint32_t> g_res_last_rx_tick;
 
 #endif /* __cplusplus */
 
