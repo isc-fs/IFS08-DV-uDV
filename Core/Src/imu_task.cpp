@@ -25,6 +25,17 @@ extern "C" {
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
 
+/* CAN IMU broadcast downsample.  The IMU sampler runs at 400 Hz because
+ * the autonomy stack consumes it over micro-ROS at full rate, but
+ * blasting all 400 Hz onto the CAN bus would be ~11 % bus utilisation
+ * at 500 kbit/s — wasteful when the only CAN consumer (the DataLogger)
+ * only needs telemetry-rate samples.  50 Hz is the FS-DV convention
+ * for logged IMU.  Adjust IMU_CAN_RATE_HZ if other CAN consumers need
+ * higher (or lower) bandwidth. */
+#define IMU_SAMPLE_RATE_HZ    400
+#define IMU_CAN_RATE_HZ        50
+#define IMU_CAN_DOWNSAMPLE     (IMU_SAMPLE_RATE_HZ / IMU_CAN_RATE_HZ)
+
 /* External declarations (defined in freertos.c) */
 extern osMessageQueueId_t imuQueueHandle;
 extern osSemaphoreId_t imuSemHandle;
@@ -73,6 +84,10 @@ void StartImuTask(void *argument)
   // Start TIM2 interrupt for deterministic 400Hz sampling
   HAL_TIM_Base_Start_IT(&htim2);
 
+  // Counter used to downsample the CAN IMU broadcast from 400 Hz to
+  // IMU_CAN_RATE_HZ (see top of file).
+  uint16_t can_imu_counter = 0;
+
   for (;;)
   {
     // Wait for TIM2 ISR to release the semaphore (400Hz, zero jitter)
@@ -112,8 +127,12 @@ void StartImuTask(void *argument)
         g_imu_drop_count.fetch_add(1, std::memory_order_relaxed);
       }
 
-      // Send IMU data to CAN via the dedicated interface
-      Can::sendIMU(sample.imu);
+      // Send IMU data to CAN at IMU_CAN_RATE_HZ (downsampled from sample rate).
+      if (++can_imu_counter >= IMU_CAN_DOWNSAMPLE)
+      {
+        Can::sendIMU(sample.imu);
+        can_imu_counter = 0;
+      }
     }
   }
 }
