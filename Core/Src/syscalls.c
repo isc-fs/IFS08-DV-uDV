@@ -175,6 +175,11 @@ int _execve(char *name, char **argv, char **env)
   return -1;
 }
 
+/* NOTE: micro-ROS rclc executor needs usleep() and _gettimeofday(). Those
+   stubs used to live here; they now live in the micro-ROS submodule's
+   extra_sources/microros_time.c (alongside the existing clock_gettime),
+   so the firmware doesn't double-define them at link time. */
+
 // --- Picolibc Specific Section ---
 #if defined(__PICOLIBC__)
 
