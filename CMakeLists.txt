@@ -39,6 +39,8 @@ set(C_SOURCES
     Core/Src/system_stm32h7xx.c
     Core/Src/sysmem.c
     Core/Src/syscalls.c
+    Core/Src/hardware_io.c
+    Core/Src/dwt_time.c
     USB_DEVICE/App/usb_device.c
     USB_DEVICE/App/usbd_desc.c
     USB_DEVICE/App/usbd_cdc_if.c
@@ -93,6 +95,9 @@ set(C_SOURCES
 
 # C++ sources
 set(CXX_SOURCES
+    Core/Src/imu_task.cpp
+    Core/Src/ami_task.cpp
+    Core/Src/app_task.cpp
     Core/Src/can_task.cpp
     Core/Src/can_globals.cpp
     Core/Src/can_interface.cpp
@@ -101,7 +106,6 @@ set(CXX_SOURCES
     Core/Src/ros_interface.cpp
     Core/Src/state_manager.cpp
     Core/Src/ebs_manager.cpp
-    Core/Src/hardware_io.cpp
 )
 
 # ASM sources
