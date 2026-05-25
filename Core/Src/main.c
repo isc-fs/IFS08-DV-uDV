@@ -118,8 +118,13 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  // Start watchdog timer interrupt (50ms timeout for app stall detection)
-  HAL_TIM_Base_Start_IT(&htim3);
+  /* NOTE: TIM3 is the app-stall watchdog with a ~50 ms period.  Its ISR
+   * fires hardware_io_set_as_close_sdc(false) + EBS actuator triggers
+   * + an ASSI emergency CAN frame.  It must NOT start running until the
+   * task that pets it (app_task) is up — otherwise it fires during
+   * boot, before Can::init() has started FDCAN3, the CAN TX call
+   * returns HAL_ERROR, and (historically) Error_Handler hung the MCU.
+   * Watchdog start moved into StartAppTask, just before its main loop. */
   /* USER CODE END 2 */
 
   /* Init scheduler */

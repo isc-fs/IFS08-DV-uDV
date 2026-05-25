@@ -128,9 +128,11 @@ void sendAccel(float accel)
 
     memcpy(&TxData[0], &accel, sizeof(float));
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        Error_Handler();
-    }
+    /* TX failure (queue full / bus passive / peripheral not started) is
+     * recoverable — never call Error_Handler from here.  It used to hang
+     * the MCU when this function ran from an ISR before FDCAN3 was
+     * started; see the watchdog boot-hang fix. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
 
 void sendSteer(float steer)
@@ -150,9 +152,8 @@ void sendSteer(float steer)
 
     memcpy(&TxData[0], &steer, sizeof(float));
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        Error_Handler();
-    }
+    /* TX failure is recoverable — see sendAccel comment. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
 void sendIMU(const bmi088_scaled_t &imu)
 {
@@ -179,9 +180,8 @@ void sendIMU(const bmi088_scaled_t &imu)
     TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     TxHeader.MessageMarker = 0;
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        Error_Handler();
-    }
+    /* TX failure is recoverable — see sendAccel comment. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
 
 void sendAssiStatus(uint8_t status)
@@ -201,9 +201,10 @@ void sendAssiStatus(uint8_t status)
 
     TxData[0] = status;
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData) != HAL_OK) {
-        Error_Handler();
-    }
+    /* TX failure is recoverable, AND this is called from the TIM3
+     * watchdog ISR — hanging here would brick the MCU.  See the
+     * watchdog boot-hang fix. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)

@@ -14,6 +14,7 @@ extern "C" {
     #include "queue.h"
     #include "cmsis_os.h"
     #include "hardware_io.h"
+    #include "tim.h"  /* for htim3 + HAL_TIM_Base_Start_IT */
 }
 
 #include "state_manager.hpp"
@@ -98,6 +99,17 @@ extern "C" void StartAppTask(void *argument)
     {
         osDelay(10);
     }
+
+    /* Arm the app-stall watchdog (TIM3, ~50 ms period).  Started here —
+     * not in main() — so that:
+     *   1) the petter (this task) is already running;
+     *   2) Can::init() has already started FDCAN3 in StartCanTask,
+     *      so the ISR's Can::sendAssiStatus on timeout can actually
+     *      enqueue a frame without failing.
+     * Reset the counter explicitly so the first ~50 ms after starting
+     * is a fresh window. */
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    HAL_TIM_Base_Start_IT(&htim3);
 
     // Main control loop
     while (1)
