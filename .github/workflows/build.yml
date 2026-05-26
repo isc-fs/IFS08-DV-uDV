@@ -59,3 +59,50 @@ jobs:
             build/binaries/uDV.bin
             build/binaries/uDV.hex
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Parallel CMake build — catches CMakeLists.txt vs Makefile drift.
+  # Same toolchain + matrix as the Makefile job, but invoked via the
+  # 'Configure preset using toolchain file' preset in CMakePresets.json.
+  # Job names are kept distinct from the Makefile job so the existing
+  # required-status-check rule on dev (which references the Makefile-job
+  # names verbatim) keeps working without a branch-protection update.
+  # Promote these to required checks later by editing dev's protection.
+  # ---------------------------------------------------------------------------
+  build-cmake:
+    name: arm-none-eabi-gcc 14.3 / STM32H733XG / CMake (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install arm-none-eabi-gcc 14.3
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '14.3.Rel1'
+
+      - name: Show toolchain version
+        run: arm-none-eabi-gcc --version
+
+      - name: Configure (CMake preset)
+        run: cmake --preset 'Configure preset using toolchain file'
+
+      - name: Build (cmake --build -j)
+        run: cmake --build build/binaries -j $(getconf _NPROCESSORS_ONLN)
+
+      - name: Verify firmware artifacts exist
+        run: |
+          test -f build/binaries/uDV.elf
+          test -f build/binaries/uDV.bin
+          test -f build/binaries/uDV.hex
+
+      - name: Print firmware size
+        run: arm-none-eabi-size build/binaries/uDV.elf
