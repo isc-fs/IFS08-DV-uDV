@@ -1,3 +1,4 @@
+#include "can_interface.hpp"
 #include "state_manager.hpp"
 #include <cstring>
 #include "main.h"
