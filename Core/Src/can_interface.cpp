@@ -88,7 +88,7 @@ void initRes()
     }
 
     if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan1,
-            FDCAN_REJECT,
+            FDCAN_REJECT,           /* reject non-matching std */
             FDCAN_REJECT,
             FDCAN_REJECT_REMOTE,
             FDCAN_REJECT_REMOTE) != HAL_OK) {
@@ -102,8 +102,6 @@ void initRes()
     if (HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
         Error_Handler();
     }
-
-    sendNmtSetOperational();
 }
 
 void sendControl(float accel, float steer)
@@ -312,20 +310,21 @@ void resRxDispatch(const can_msg_t *msg)
     switch (msg->id)
     {
     case CAN_ID_RES_PDO_TX: {
-        g_res_estop.store((msg->data[0] & 0x01U) == 0U);
-        g_res_go_signal.store((msg->data[0] & 0x04U) != 0U ? 1U : 0U);
-        if (msg->dlc >= 7U) g_res_radio_quality.store(msg->data[6]);
-        if (msg->dlc >= 8U) g_res_pre_alarm.store(((msg->data[7] >> 6) & 0x01U) != 0U);
-        g_res_last_rx_tick.store(osKernelGetTickCount());
+        /* RES cyclic PDO at 30 ms — 8-byte frame.  Layout matches
+         * dev's v0.1 res_rx_dispatch (PDO indices 2000/2006/2007). */
+        if (msg->dlc >= 8U) {
+            g_res_estop.store((msg->data[0] & 0x01U) != 0U);
+            g_res_go_signal.store((uint8_t)((msg->data[0] >> 1) & 0x03U));
+            g_res_radio_quality.store(msg->data[6]);
+            g_res_pre_alarm.store(((msg->data[7] >> 6) & 0x01U) != 0U);
+            g_res_last_rx_tick.store(osKernelGetTickCount());
+        }
         break;
     }
 
     case CAN_ID_RES_BOOTUP:
-        /* data[0]==0x00 → boot-up real, mandamos NMT Start.
-         * data[0]!=0x00 → heartbeat, no repetimos NMT. */
-        if (msg->dlc >= 1U && msg->data[0] == 0x00U) {
-            sendNmtSetOperational();
-        }
+        /* RES sent its boot-up frame — push it to operational. */
+        sendNmtSetOperational();
         break;
 
     default:
@@ -461,3 +460,4 @@ extern "C" void can_interface_send_assi_emergency_from_isr(void)
 {
     Can::sendAssiStatus(StateManager::getAssiStatusCode(ASState::EMERGENCY));
 }
+
