@@ -1,9 +1,0 @@
-# Service: ros2_interface/SetMission
-# Sent from the autonomy stack to the uDV to pre-load the mission ID
-# before the StartMission action is invoked.
-#
-# Schema reconstructed from firmware usage in Core/Src/ros_interface.cpp.
-
-int32 mission_id
----
-bool accepted
