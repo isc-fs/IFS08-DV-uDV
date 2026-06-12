@@ -30,20 +30,40 @@ extern "C" {
 #define SLOW_PUB_INTERVAL       40  // steering/RES/AMI publish cadence (~10 Hz at 400 Hz IMU)
 #define RES_TIMEOUT_MS         150  // RES PDO timeout: expect every ~30 ms; allow 5x slack
 
+// --- Helpers --------------------------------------------------------------
+
+namespace {
+    // Strict-equality check between an rclc string and a C literal.
+    static bool ros_str_equals(const rosidl_runtime_c__String &s, const char *literal)
+    {
+        if (s.data == NULL || literal == NULL) return false;
+        const size_t lit_len = strlen(literal);
+        if (s.size != lit_len) return false;
+        return strncmp(s.data, literal, lit_len) == 0;
+    }
+}
+
+// --- Construction / destruction ------------------------------------------
+
 RosInterface::RosInterface() {
     // Zero-initialize all members
     memset(&support, 0, sizeof(support));
     allocator = rcl_get_default_allocator();
     memset(&node, 0, sizeof(node));
     memset(&executor, 0, sizeof(executor));
+
     memset(&set_mission_client, 0, sizeof(set_mission_client));
-    memset(&req_set_mission, 0, sizeof(req_set_mission));
+    memset(&goal_set_mission, 0, sizeof(goal_set_mission));
     memset(&res_set_mission, 0, sizeof(res_set_mission));
-    memset(&start_mission_client, 0, sizeof(start_mission_client));
-    memset(&goal_start_mission, 0, sizeof(goal_start_mission));
-    memset(&msg_feedback, 0, sizeof(msg_feedback));
-    current_goal_handle = NULL;
-    
+    memset(&fb_set_mission, 0, sizeof(fb_set_mission));
+    current_set_mission_handle = NULL;
+
+    memset(&runtime_control_client, 0, sizeof(runtime_control_client));
+    memset(&goal_runtime_control, 0, sizeof(goal_runtime_control));
+    memset(&res_runtime_control, 0, sizeof(res_runtime_control));
+    memset(&fb_runtime_control, 0, sizeof(fb_runtime_control));
+    current_runtime_control_handle = NULL;
+
     // IMU publisher initialization
     memset(&imu_pub, 0, sizeof(imu_pub));
     memset(&imu_debug_pub, 0, sizeof(imu_debug_pub));
@@ -84,12 +104,14 @@ RosInterface::~RosInterface() {
     (void)rcl_publisher_fini(&res_pub, &node);
     (void)rcl_publisher_fini(&ami_pub, &node);
     (void)rcl_subscription_fini(&cmd_test_sub, &node);
-    (void)rcl_client_fini(&set_mission_client, &node);
-    (void)rclc_action_client_fini(&start_mission_client, &node);
+    (void)rclc_action_client_fini(&set_mission_client, &node);
+    (void)rclc_action_client_fini(&runtime_control_client, &node);
     (void)rclc_executor_fini(&executor);
     (void)rcl_node_fini(&node);
     (void)rclc_support_fini(&support);
 }
+
+// --- Initialization ------------------------------------------------------
 
 void RosInterface::init() {
     // DWT cycle counter is initialized once in main() via dwt_init().
@@ -100,40 +122,49 @@ void RosInterface::init() {
     // Initialize node
     rclc_node_init_default(&node, "supervisor_node", "", &support);
 
-    // Initialize service client
-    rclc_client_init_default(&set_mission_client,
-                             &node,
-                             ROSIDL_GET_SRV_TYPE_SUPPORT(ros2_interface, srv, SetMission),
-                             "set_mission");
+    // SetMission action client — mission lifecycle (configure/activate)
+    rclc_action_client_init_default(
+        &set_mission_client,
+        &node,
+        ROSIDL_GET_ACTION_TYPE_SUPPORT(dv_msgs, SetMission),
+        "set_mission");
 
-    // Initialize action client
-    rclc_action_client_init_default(&start_mission_client,
-                                    &node,
-                                    ROSIDL_GET_ACTION_TYPE_SUPPORT(ros2_interface, StartMission),
-                                    "start_mission");
+    // RuntimeControl action client — runtime control loop (throttle/steering)
+    rclc_action_client_init_default(
+        &runtime_control_client,
+        &node,
+        ROSIDL_GET_ACTION_TYPE_SUPPORT(dv_msgs, RuntimeControl),
+        "runtime_control");
 
-    // Initialize executor — handle slots:
-    //   1 service client  (set_mission)
-    //   1 action client   (start_mission, internally uses up to 5 slots)
-    //   1 subscription    (cmd_test)
-    // Bump to 4 to leave slack for any future addition without re-sizing.
-    rclc_executor_init(&executor, &support.context, 4, &allocator);
+    // Executor: 2 action clients (each internally uses several slots) +
+    // 1 subscription.  Keep slot count generous.
+    rclc_executor_init(&executor, &support.context, 6, &allocator);
 
-    // Add service to executor
-    rclc_executor_add_client(&executor, &set_mission_client, &res_set_mission, &RosInterface::set_mission_callback);
+    // Wire both action clients into the executor
+    rclc_executor_add_action_client(
+        &executor,
+        &set_mission_client,
+        1,
+        &res_set_mission,
+        &fb_set_mission,
+        &RosInterface::set_mission_goal_callback,
+        &RosInterface::set_mission_feedback_callback,
+        &RosInterface::set_mission_result_callback,
+        &RosInterface::set_mission_cancel_callback,
+        this);
 
-    // Add feedback and result callbacks to executor
-    rclc_executor_add_action_client(&executor,
-                                    &start_mission_client,
-                                    1,
-                                    &res_start_mission,
-                                    &msg_feedback,
-                                    &RosInterface::start_mission_goal_callback,
-                                    &RosInterface::start_mission_feedback_callback,
-                                    &RosInterface::start_mission_result_callback,
-                                    &RosInterface::start_mission_cancel_callback,
-                                    this);
-    
+    rclc_executor_add_action_client(
+        &executor,
+        &runtime_control_client,
+        1,
+        &res_runtime_control,
+        &fb_runtime_control,
+        &RosInterface::runtime_control_goal_callback,
+        &RosInterface::runtime_control_feedback_callback,
+        &RosInterface::runtime_control_result_callback,
+        &RosInterface::runtime_control_cancel_callback,
+        this);
+
     // Initialize IMU publishers (best-effort QoS for maximum throughput)
     rclc_publisher_init_best_effort(
         &imu_pub,
@@ -147,18 +178,13 @@ void RosInterface::init() {
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
         "imu/status");
 
-    // IMU sample-drop counter — increments whenever imu_task can't enqueue
-    // a sample because the ros queue is full (USB CDC back-pressure).
     rclc_publisher_init_default(
         &imu_drop_count_pub,
         &node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt32),
         "imu/drop_count");
 
-    // Slow telemetry publishers (~10 Hz; cadence is driven by
-    // SLOW_PUB_INTERVAL in publishImuSample).  Best-effort QoS because
-    // missing one sample is harmless and we don't want USB CDC stalls
-    // to back-pressure the IMU pipeline.
+    // Slow telemetry publishers (~10 Hz)
     rclc_publisher_init_best_effort(
         &steering_pub,
         &node,
@@ -177,9 +203,7 @@ void RosInterface::init() {
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
         "ami/mission");
 
-    // /cmd_test diagnostic subscriber — see callback below.  Uses the
-    // context-less rclc API since the callback is stateless (toggles a
-    // GPIO via HAL).
+    // /cmd_test diagnostic subscriber — toggle OK_STATUS LED
     rclc_subscription_init_default(
         &cmd_test_sub,
         &node,
@@ -195,16 +219,15 @@ void RosInterface::init() {
     // Prepare IMU message (set static fields once)
     rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
     imu_msg.orientation_covariance[0] = -1.0;  // Orientation not available
-    
+
     // BMI088 datasheet noise specs (diagonal covariance matrices)
     imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
     imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
     imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
-    
     imu_msg.angular_velocity_covariance[0] = 1.37e-5;
     imu_msg.angular_velocity_covariance[4] = 1.37e-5;
     imu_msg.angular_velocity_covariance[8] = 1.37e-5;
-    
+
     // Time synchronization: compute offset between local clock and agent epoch
     while (!rmw_uros_epoch_synchronized()) {
         rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
@@ -212,71 +235,59 @@ void RosInterface::init() {
             osDelay(100);
         }
     }
-    
-    // Capture offset: agent_epoch - local_dwt at the sync moment.  Uses the
-    // shared dwt_micros() that the IMU task also drives, so all timestamps
-    // resolve against the same wrap-tracking state.
+
     int64_t sync_epoch_ns = rmw_uros_epoch_nanos();
     uint64_t sync_dwt_us = dwt_micros();
     epoch_offset_ns = sync_epoch_ns - (int64_t)sync_dwt_us * 1000LL;
     sync_counter = 0;
 }
 
+// --- IMU pipeline (unchanged from pre-migration) --------------------------
+
 void RosInterface::publishImuSample(const imu_sample_t *sample)
 {
     if (!sample) return;
-    
-    // Timestamp: DWT capture moment + epoch offset from sync
+
     int64_t stamp_ns = epoch_offset_ns + (int64_t)sample->timestamp_us * 1000LL;
     imu_msg.header.stamp.sec = (int32_t)(stamp_ns / 1000000000LL);
     imu_msg.header.stamp.nanosec = (uint32_t)(stamp_ns % 1000000000LL);
 
-    // Linear acceleration: g -> m/s^2
     imu_msg.linear_acceleration.x = sample->imu.ax_g * G_TO_MS2;
     imu_msg.linear_acceleration.y = sample->imu.ay_g * G_TO_MS2;
     imu_msg.linear_acceleration.z = sample->imu.az_g * G_TO_MS2;
 
-    // Angular velocity: dps -> rad/s
     imu_msg.angular_velocity.x = sample->imu.gx_dps * DPS_TO_RAD;
     imu_msg.angular_velocity.y = sample->imu.gy_dps * DPS_TO_RAD;
     imu_msg.angular_velocity.z = sample->imu.gz_dps * DPS_TO_RAD;
 
     (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-    // Slow telemetry publishers (~10 Hz) — steering / RES / AMI mission
-    // re-ported from the v0.1 release.  Reads thread-safe atomics that
-    // the CAN dispatchers populate; no locks needed here.
+    // Slow telemetry publishers (~10 Hz)
     if (++slow_pub_counter >= SLOW_PUB_INTERVAL)
     {
         slow_pub_counter = 0;
 
-        // Steering angle: raw is 0.1 deg/bit → publish in degrees.
         steering_msg.data = g_steering_angle_raw.load() * 0.1f;
         (void)rcl_publish(&steering_pub, &steering_msg, NULL);
 
-        // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT/unknown
         uint32_t last_tick = g_res_last_rx_tick.load();
         uint32_t now_tick  = osKernelGetTickCount();
         if (last_tick == 0U) {
-            res_msg.data = -1;                 // never received
+            res_msg.data = -1;
         } else if ((now_tick - last_tick) > RES_TIMEOUT_MS) {
-            res_msg.data = -1;                 // timed out
+            res_msg.data = -1;
         } else if (g_res_estop.load()) {
-            res_msg.data = 1;                  // E-Stop active
+            res_msg.data = 1;
         } else {
-            res_msg.data = 0;                  // OK
+            res_msg.data = 0;
         }
         (void)rcl_publish(&res_pub, &res_msg, NULL);
 
-        // AMI mission index (matches g_can_mission_id semantics).
         ami_msg.data = g_can_mission_id.load();
         (void)rcl_publish(&ami_pub, &ami_msg, NULL);
     }
 
-    // Periodic time re-sync and debug publish (~every 10s).  Re-use the
-    // current sample's timestamp_us as the local-clock reference instead
-    // of calling dwt_micros() a second time — it was already captured at
-    // the exact sampling instant, so the offset is more tightly aligned.
+    // Periodic time re-sync and debug publish (~every 10s)
     if (++sync_counter >= TIME_SYNC_INTERVAL)
     {
         rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
@@ -286,9 +297,6 @@ void RosInterface::publishImuSample(const imu_sample_t *sample)
         debug_msg.data = imu_debug_status;
         (void)rcl_publish(&imu_debug_pub, &debug_msg, NULL);
 
-        // Cumulative count of IMU samples that imu_task couldn't enqueue
-        // (queue full).  Monotonic; rate of change = drop rate.  Relaxed
-        // memory order is fine — we only need observability, not ordering.
         drop_count_msg.data = g_imu_drop_count.load(std::memory_order_relaxed);
         (void)rcl_publish(&imu_drop_count_pub, &drop_count_msg, NULL);
 
@@ -300,116 +308,154 @@ void RosInterface::spin_some() {
     rclc_executor_spin_some(&executor, 5);
 }
 
-// ------------------------
-// Callbacks
-// ------------------------
-void RosInterface::cmd_test_callback(const void * msgin)
+// --- /cmd_test diagnostic subscriber --------------------------------------
+
+void RosInterface::cmd_test_callback(const void *msgin)
 {
-    /* Diagnostic / smoke-test callback re-ported from v0.1.  Toggles the
-     * OK_STATUS LED (PD14) on every received std_msgs/Int32 so we can
-     * verify the micro-ROS subscription path end-to-end from the host
-     * with one `ros2 topic pub /cmd_test std_msgs/msg/Int32 "{data: 1}"`. */
     (void)msgin;
     HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
 }
 
-void RosInterface::set_mission_callback(const void * ros_service_response) {
-    // IDEA: ignore this for the moment and hope everything goes right as it will be sent again when the mission starts
-    // or try to resend the mission (keep in mind the recursive aspect of it)
-    const ros2_interface__srv__SetMission_Response * res = 
-        (const ros2_interface__srv__SetMission_Response *)ros_service_response;
-    if (res && res->accepted) {
-        // Mission accepted - perhaps set a flag or log
-    } else {
-        // Mission rejected - handle error
-    }
+// --- SetMission action callbacks ------------------------------------------
+
+void RosInterface::set_mission_goal_callback(rclc_action_goal_handle_t *goal_handle, bool accepted, void *context)
+{
+    RosInterface *self = static_cast<RosInterface*>(context);
+    self->current_set_mission_handle = accepted ? goal_handle : NULL;
 }
 
-void RosInterface::start_mission_goal_callback(rclc_action_goal_handle_t * goal_handle, bool accepted, void * context) {
-    RosInterface * self = static_cast<RosInterface*>(context);
-    if (accepted) {
-        // Goal was accepted
-        self->current_goal_handle = goal_handle;
-        g_mission_going_cmd.store(true);
-    } else {
-        // Goal was rejected
-        // IDEA: set emergency to true (as given the ready signal the car would already be in driving state, 
-        // or we could change how the flowchart is processed to dont even get to driving until the mission is accepted, so we would remain in ready, 
-        // but this last option could not be under regulation)
-        self->current_goal_handle = NULL;
-        g_mission_going_cmd.store(false);
-    }
-}
-
-void RosInterface::start_mission_feedback_callback(rclc_action_goal_handle_t * goal_handle, void * ros_feedback, void * context) {
+void RosInterface::set_mission_feedback_callback(rclc_action_goal_handle_t *goal_handle, void *ros_feedback, void *context)
+{
     (void)goal_handle;
     (void)context;
-    ros2_interface__action__StartMission_Feedback * fb =
-        (ros2_interface__action__StartMission_Feedback *)ros_feedback;
+    (void)ros_feedback;
+    // SetMission feedback carries lifecycle stage strings; informational only.
+    // The autonomy stack may stream "configuring", "activating", etc.
+    // Nothing to wire to the firmware control loop here.
+}
+
+void RosInterface::set_mission_result_callback(rclc_action_goal_handle_t *goal_handle, void *ros_result, void *context)
+{
+    (void)goal_handle;
+    RosInterface *self = static_cast<RosInterface*>(context);
+    auto *res = (dv_msgs__action__SetMission_GetResult_Response *)ros_result;
+
+    if (res && !res->result.success) {
+        // SetMission rejected by the autonomy stack — surface as emergency
+        // so the safety machine treats it as a fault.
+        g_emergency_cmd.store(true);
+    }
+    self->current_set_mission_handle = NULL;
+}
+
+void RosInterface::set_mission_cancel_callback(rclc_action_goal_handle_t *goal_handle, bool cancelled, void *context)
+{
+    (void)goal_handle;
+    (void)cancelled;
+    RosInterface *self = static_cast<RosInterface*>(context);
+    self->current_set_mission_handle = NULL;
+}
+
+// --- RuntimeControl action callbacks --------------------------------------
+
+void RosInterface::runtime_control_goal_callback(rclc_action_goal_handle_t *goal_handle, bool accepted, void *context)
+{
+    RosInterface *self = static_cast<RosInterface*>(context);
+    if (accepted) {
+        self->current_runtime_control_handle = goal_handle;
+        g_mission_going_cmd.store(true);
+    } else {
+        self->current_runtime_control_handle = NULL;
+        g_mission_going_cmd.store(false);
+    }
+}
+
+void RosInterface::runtime_control_feedback_callback(rclc_action_goal_handle_t *goal_handle, void *ros_feedback, void *context)
+{
+    (void)goal_handle;
+    (void)context;
+    auto *fb = (dv_msgs__action__RuntimeControl_Feedback *)ros_feedback;
 
     if (fb) {
-        g_accel_cmd.store(fb->acceleration);
+        // throttle: [-1, 1] in autonomy stack; firmware reads g_accel_cmd as a
+        // signed normalized command (negative = regen).
+        g_accel_cmd.store(fb->throttle);
         g_steer_cmd.store(fb->steering);
-        g_finished_cmd.store(fb->finished);
         g_emergency_cmd.store(fb->emergency);
+        g_finished_cmd.store(fb->finished);
     }
 }
 
-void RosInterface::start_mission_result_callback(rclc_action_goal_handle_t * goal_handle, void * ros_result, void * context) {
+void RosInterface::runtime_control_result_callback(rclc_action_goal_handle_t *goal_handle, void *ros_result, void *context)
+{
     (void)goal_handle;
-    RosInterface * self = static_cast<RosInterface*>(context);
-    ros2_interface__action__StartMission_GetResult_Response * res =
-        (ros2_interface__action__StartMission_GetResult_Response *)ros_result;
+    RosInterface *self = static_cast<RosInterface*>(context);
+    auto *res = (dv_msgs__action__RuntimeControl_GetResult_Response *)ros_result;
 
     if (res) {
-        g_finished_cmd.store(res->result.finished);
-        g_emergency_cmd.store(res->result.emergency);
+        // Outcome string from the autonomy stack.  Treat anything other than
+        // "success"/"finished" as a fault and raise emergency.  Empty string =
+        // success per the dv_msgs comment.
+        const auto &outcome = res->result.outcome;
+        const bool ok =
+            outcome.data == NULL ||
+            outcome.size == 0 ||
+            ros_str_equals(outcome, "success") ||
+            ros_str_equals(outcome, "finished");
+        if (!ok) {
+            g_emergency_cmd.store(true);
+        }
+        g_finished_cmd.store(true);
     }
     g_mission_going_cmd.store(false);
-    self->current_goal_handle = NULL; // Reset handle on completion
+    self->current_runtime_control_handle = NULL;
 }
 
-void RosInterface::start_mission_cancel_callback(rclc_action_goal_handle_t * goal_handle, bool cancelled, void * context) {
-    RosInterface * self = static_cast<RosInterface*>(context);
+void RosInterface::runtime_control_cancel_callback(rclc_action_goal_handle_t *goal_handle, bool cancelled, void *context)
+{
+    (void)goal_handle;
+    RosInterface *self = static_cast<RosInterface*>(context);
     if (cancelled) {
-        // Handle cancellation, e.g., stop motors, log, etc.
-        // IDEA: set emergency to true
         g_emergency_cmd.store(true);
         g_mission_going_cmd.store(false);
-        self->current_goal_handle = NULL; // Reset handle on cancel
-    } else {
-        // Handle non-cancellation case if needed
     }
+    self->current_runtime_control_handle = NULL;
 }
 
-// ------------------------
-// Access to interface
-// ------------------------
-void RosInterface::call_set_mission_service(int mission_id) {
-    ros2_interface__srv__SetMission_Request__init(&req_set_mission);
-    req_set_mission.mission_id = mission_id;
+// --- Outgoing requests ----------------------------------------------------
 
-    int64_t sequence_number;
-    (void)rcl_send_request(&set_mission_client, &req_set_mission, &sequence_number);
-}
-
-void RosInterface::send_start_mission_action_goal(int mission_id) {
-    ros2_interface__action__StartMission_SendGoal_Request__init(&goal_start_mission);
-    goal_start_mission.goal.mission_id = mission_id;
-    // Generate a simple UUID (not cryptographically secure, but sufficient for embedded)
+void RosInterface::send_set_mission_action_goal(int mission_id)
+{
+    dv_msgs__action__SetMission_SendGoal_Request__init(&goal_set_mission);
+    goal_set_mission.goal.mission_id = mission_id;
     for (int i = 0; i < 16; ++i) {
-        goal_start_mission.goal_id.uuid[i] = (uint8_t)rand();
+        goal_set_mission.goal_id.uuid[i] = (uint8_t)rand();
     }
-
-    rclc_action_send_goal_request(&start_mission_client,
-                                  &goal_start_mission,
-                                  NULL);
+    (void)rclc_action_send_goal_request(&set_mission_client, &goal_set_mission, NULL);
 }
 
-void RosInterface::cancel_mission_action() {
-    if (current_goal_handle != NULL) {
-        rclc_action_send_cancel_request(current_goal_handle);
-        g_mission_going_cmd.store(false);
-        current_goal_handle = NULL; // Reset after cancel
+void RosInterface::send_runtime_control_action_goal()
+{
+    dv_msgs__action__RuntimeControl_SendGoal_Request__init(&goal_runtime_control);
+    // RuntimeControl goal payload is empty by design.
+    for (int i = 0; i < 16; ++i) {
+        goal_runtime_control.goal_id.uuid[i] = (uint8_t)rand();
     }
+    (void)rclc_action_send_goal_request(&runtime_control_client, &goal_runtime_control, NULL);
+}
+
+void RosInterface::cancel_mission_action()
+{
+    // Cancel whichever action is currently in flight.  RuntimeControl is the
+    // hot path (it streams feedback); SetMission may also be open if the
+    // autonomy stack is mid-configure.
+    if (current_runtime_control_handle != NULL) {
+        rclc_action_send_cancel_request(current_runtime_control_handle);
+        current_runtime_control_handle = NULL;
+    }
+    if (current_set_mission_handle != NULL) {
+        rclc_action_send_cancel_request(current_set_mission_handle);
+        current_set_mission_handle = NULL;
+    }
+    g_mission_going_cmd.store(false);
 }

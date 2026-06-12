@@ -69,11 +69,17 @@ extern "C" void StartRosTask(void *argument)
             switch (cmd_msg.cmd)
             {
                 case ROS_CMD_SET_MISSION:
-                    ros_if.call_set_mission_service(cmd_msg.mission_id);
+                    // dv_msgs::SetMission action — mission lifecycle (was a
+                    // service in the old ros2_interface schema).
+                    ros_if.send_set_mission_action_goal(cmd_msg.mission_id);
                     break;
 
                 case ROS_CMD_START_MISSION:
-                    ros_if.send_start_mission_action_goal(cmd_msg.mission_id);
+                    // dv_msgs::RuntimeControl action — starts the control
+                    // feedback stream.  Goal payload is empty (mission_id was
+                    // already configured via the SetMission action above).
+                    (void)cmd_msg.mission_id;
+                    ros_if.send_runtime_control_action_goal();
                     break;
 
                 case ROS_CMD_CANCEL_MISSION:
