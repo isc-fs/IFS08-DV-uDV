@@ -38,6 +38,9 @@ typedef struct {
 
 extern volatile res_status_t g_res;
 
+/* Shared mission index indicator */
+extern volatile uint8_t g_mission_index;
+
 /* Queue handles — created in freertos.c, used by ISR and canTask */
 extern osMessageQueueId_t canRxQueueHandle;
 extern osMessageQueueId_t resRxQueueHandle;
@@ -56,8 +59,9 @@ void res_nmt_set_operational(void);
 void res_rx_dispatch(const can_msg_t *msg);
 
 /* Generic CAN TX: queue a frame on any FDCAN peripheral */
-void can_tx_send(FDCAN_HandleTypeDef *hfdcan, uint32_t id,
-                 const uint8_t *data, uint8_t dlc);
+/* Cambia el 'void' original por 'HAL_StatusTypeDef' en la línea 62 */
+HAL_StatusTypeDef can_tx_send(FDCAN_HandleTypeDef *hfdcan, uint32_t id,
+                             const uint8_t *data, uint8_t dlc);
 
 /* Steering motor start/stop (0x10): 0=stop, 1=start — FDCAN3 */
 void steering_motor_cmd(uint8_t start);

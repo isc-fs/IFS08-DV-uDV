@@ -116,7 +116,7 @@ osMessageQueueId_t debugQueueHandle;
 osSemaphoreId_t imuSemHandle;
 
 /* Mission index shared between canTask (writer) and amiTask (reader) */
-volatile uint8_t g_mission_index = 0xFF;  /* 0xFF = no mission received */
+//volatile uint8_t g_mission_index = 0xFF;  /* 0xFF = no mission received */
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
