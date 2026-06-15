@@ -521,7 +521,7 @@ void StartCanTask(void *argument)
     if (osMessageQueueGet(resRxQueueHandle, &msg, NULL, 0) == osOK)
       res_rx_dispatch(&msg);
 
-    /* Data Logger TX every 100 ms */
+    /* FDCAN1 Data Logger TX every 100 ms */
     uint32_t now = osKernelGetTickCount();
     if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)
     {
