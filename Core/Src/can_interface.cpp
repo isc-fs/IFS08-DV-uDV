@@ -316,17 +316,13 @@ void resRxDispatch(const can_msg_t *msg)
         if (msg->dlc >= 7U) g_res_radio_quality.store(msg->data[6]);
         if (msg->dlc >= 8U) g_res_pre_alarm.store(((msg->data[7] >> 6) & 0x01U) != 0U);
         g_res_last_rx_tick.store(osKernelGetTickCount());
-        HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin,
-            g_res_go_signal.load() ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        //Para hacer testing si no fucniona ros
+        //HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin,g_res_go_signal.load() ? GPIO_PIN_SET : GPIO_PIN_RESET);
         break;
     }
 
     case CAN_ID_RES_BOOTUP:
-        /* data[0]==0x00 → boot-up real, mandamos NMT Start.
-         * data[0]!=0x00 → heartbeat, no repetimos NMT. */
-        if (msg->dlc >= 1U && msg->data[0] == 0x00U) {
-            sendNmtSetOperational();
-        }
+        sendNmtSetOperational();
         break;
 
     default:
@@ -480,9 +476,10 @@ extern "C" float can_c_get_steering_angle_deg(void)
 extern "C" int32_t can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms)
 {
     uint32_t last = g_res_last_rx_tick.load();
-    if (last == 0U)                              return -1; /* nunca recibido */
+    if (last == 0U)                              return -2; /* nunca recibido */
     if ((now_tick - last) > timeout_ms)          return -1; /* timeout */
     if (g_res_estop.load())                      return  1; /* E-Stop activo */
+    if (g_res_go_signal.load())                      return  2; /* Go signal activo */
     return 0;
 }
 
