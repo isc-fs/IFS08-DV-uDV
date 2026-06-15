@@ -14,6 +14,7 @@ typedef struct {
     uint32_t id;
     uint8_t  data[8];
     uint8_t  dlc;
+    uint8_t  bus;     /* 1,2,3 = FDCAN instance number */
     uint8_t  _pad[3];
 } can_msg_t;
 
@@ -40,6 +41,7 @@ extern volatile res_status_t g_res;
 /* Queue handles — created in freertos.c, used by ISR and canTask */
 extern osMessageQueueId_t canRxQueueHandle;
 extern osMessageQueueId_t resRxQueueHandle;
+extern osMessageQueueId_t debugQueueHandle;
 
 /* Initialize FDCAN3 runtime: filter, start, enable RX notification */
 void can_service_init(void);

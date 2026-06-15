@@ -40,6 +40,8 @@
 #include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/string.h>
+#include <stdio.h>
 
 #include "imu_service.h"
 #include "can_service.h"
@@ -110,6 +112,7 @@ const osThreadAttr_t amiTask_attributes = {
 osMessageQueueId_t imuQueueHandle;
 osMessageQueueId_t canRxQueueHandle;
 osMessageQueueId_t resRxQueueHandle;
+osMessageQueueId_t debugQueueHandle;
 osSemaphoreId_t imuSemHandle;
 
 /* Mission index shared between canTask (writer) and amiTask (reader) */
@@ -171,6 +174,7 @@ void MX_FREERTOS_Init(void) {
   imuQueueHandle   = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
   canRxQueueHandle = osMessageQueueNew(32, sizeof(can_msg_t), NULL);
   resRxQueueHandle = osMessageQueueNew(8, sizeof(can_msg_t), NULL);
+  debugQueueHandle = osMessageQueueNew(8, 128, NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -305,6 +309,15 @@ void StartDefaultTask(void *argument)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "ami/mission");
 
+  // Debug string publisher
+  rcl_publisher_t debug_pub;
+  std_msgs__msg__String debug_str_msg;
+  memset(&debug_str_msg, 0, sizeof(debug_str_msg));
+  rclc_publisher_init_default(
+    &debug_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
+    "debug");
+
   // --- Subscriber ---
 
   // /cmd_test subscriber (toggle LED on receive)
@@ -388,6 +401,20 @@ void StartDefaultTask(void *argument)
         (void)rcl_publish(&ami_pub, &ami_msg, NULL);
 
         // Spin executor to process /cmd_test subscription
+        // Publish any queued debug messages from CAN service
+        char dbgbuf[128];
+        while (osMessageQueueGet(debugQueueHandle, &dbgbuf, NULL, 0) == osOK) {
+          rosidl_runtime_c__String__assign(&debug_str_msg.data, dbgbuf);
+          (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
+        }
+
+        // Heartbeat / periodic debug message
+        static uint32_t debug_beat = 0;
+        char beatbuf[64];
+        snprintf(beatbuf, sizeof(beatbuf), "debug: heartbeat %u", debug_beat++);
+        rosidl_runtime_c__String__assign(&debug_str_msg.data, beatbuf);
+        (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
+
         rclc_executor_spin_some(&executor, 0);
       }
 
@@ -498,7 +525,7 @@ void StartCanTask(void *argument)
     uint32_t now = osKernelGetTickCount();
     if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)
     {
-      datalogger_tx();
+      //datalogger_tx();
       last_dl_tick = now;
     }
 

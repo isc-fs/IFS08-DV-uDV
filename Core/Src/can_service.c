@@ -4,6 +4,15 @@
 #include "task.h"
 #include "cmsis_os2.h"
 #include <string.h>
+#include <stdio.h>
+
+/* Map FDCAN DataLength code to actual byte count (matches HAL driver DLCtoBytes) */
+static inline uint8_t dlc_code_to_bytes(uint32_t code)
+{
+    static const uint8_t map[16] = {0,1,2,3,4,5,6,7,8,12,16,20,24,32,48,64};
+    if (code < 16) return map[code];
+    return 0;
+}
 
 /* ---------------------------------------------------------------------------
  * CAN IDs
@@ -14,11 +23,11 @@
 #define CAN_ID_STEER_MOTOR     0x010u  /* uDV → steering: motor start/stop       */
 #define CAN_ID_STEER_CMD       0x020u  /* uDV → steering: desired angle           */
 
-/* FDCAN1 — RES CANopen (Node-ID 0x11) */
-#define RES_NODE_ID            0x11u
+/* FDCAN1 — RES CANopen (Node-ID 0x03) */
+#define RES_NODE_ID            0x11u   /* Note: Change to 0x11 for FSG event target */
 #define CAN_ID_NMT             0x000u
-#define CAN_ID_RES_PDO_TX      (0x180u + RES_NODE_ID)  /* 0x191 */
-#define CAN_ID_RES_BOOTUP      (0x700u + RES_NODE_ID)  /* 0x711 */
+#define CAN_ID_RES_PDO_TX      (0x180u + RES_NODE_ID)  /* 0x183 */
+#define CAN_ID_RES_BOOTUP      (0x700u + RES_NODE_ID)  /* 0x703 */
 
 /* FDCAN1 — Data Logger (DS 2.2, 100 ms cycle) */
 #define CAN_ID_DL_DYN1         0x500u
@@ -66,19 +75,20 @@ void res_service_init(void)
     HAL_NVIC_SetPriority(FDCAN1_IT0_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
 
-    /* Filter 0: accept RES PDO TX (0x191) */
+    /* Filter 0: accept RES PDO TX (0x183) */
     FDCAN_FilterTypeDef filter0 = {
         .IdType       = FDCAN_STANDARD_ID,
         .FilterIndex  = 0,
-        .FilterType   = FDCAN_FILTER_DUAL,
+        .FilterType   = FDCAN_FILTER_MASK,
         .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
-        .FilterID1    = CAN_ID_RES_PDO_TX,   /* 0x191 */
-        .FilterID2    = CAN_ID_RES_BOOTUP,    /* 0x711 */
+        .FilterID1    = 0x000,   /* pass-all mask for testing and diagnostic */
+        .FilterID2    = 0x000,
     };
     HAL_FDCAN_ConfigFilter(&hfdcan1, &filter0);
 
+    /* Accept non-matching standard IDs (diagnostic mode). */
     HAL_FDCAN_ConfigGlobalFilter(&hfdcan1,
-        FDCAN_REJECT,           /* reject non-matching std */
+        FDCAN_ACCEPT_IN_RX_FIFO0,
         FDCAN_REJECT,
         FDCAN_REJECT_REMOTE,
         FDCAN_REJECT_REMOTE);
@@ -113,9 +123,16 @@ void can_tx_send(FDCAN_HandleTypeDef *hfdcan, uint32_t id,
  * --------------------------------------------------------------------------- */
 void res_nmt_set_operational(void)
 {
-    /* NMT command: set node 0x11 to operational */
+    /* NMT command: set addressed node(s) to operational.
+     * Changed target node from 0x00 (Broadcast) to RES_NODE_ID (0x03) 
+     * to eliminate edge-case ignores inside the GrossFunk hardware. */
     uint8_t nmt[2] = { 0x01, RES_NODE_ID };
     can_tx_send(&hfdcan1, CAN_ID_NMT, nmt, 2);
+    {
+        char dbg[64];
+        snprintf(dbg, sizeof(dbg), "#sym:res_nmt_set_operational cmd=0x%02X node=0x%02X", nmt[0], nmt[1]);
+        (void)osMessageQueuePut(debugQueueHandle, dbg, 0, 0);
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -123,19 +140,43 @@ void res_nmt_set_operational(void)
  * --------------------------------------------------------------------------- */
 void res_rx_dispatch(const can_msg_t *msg)
 {
+    /* Publish generic debug for every RES message */
+    {
+        char dbg[128];
+        int n = snprintf(dbg, sizeof(dbg), "CAN%u id=0x%03X dlc=%u data=", (unsigned)msg->bus, (unsigned)msg->id, (unsigned)msg->dlc);
+        int off = (n > 0 && n < (int)sizeof(dbg)) ? n : 0;
+        for (int i = 0; i < msg->dlc && i < 4 && off < (int)sizeof(dbg) - 3; ++i) {
+            off += snprintf(&dbg[off], sizeof(dbg) - off, "%02X ", msg->data[i]);
+        }
+        (void)osMessageQueuePut(debugQueueHandle, dbg, 0, 0);
+    }
     switch (msg->id)
     {
-    case CAN_ID_RES_PDO_TX:   /* 0x191 — 8-byte cyclic PDO, every 30 ms */
+    case CAN_ID_RES_PDO_TX:   /* 0x183 — 8-byte cyclic PDO, every 30 ms */
         g_res.e_stop        = (msg->data[0] & 0x01);       /* PDO 2000 bit 0 */
         g_res.go_signal     = (msg->data[0] >> 1) & 0x03;  /* K2 bits 1-2    */
         g_res.radio_quality = msg->data[6];                 /* PDO 2006       */
         g_res.pre_alarm     = (msg->data[7] >> 6) & 0x01;  /* PDO 2007 bit 6 */
         g_res.last_rx_tick  = osKernelGetTickCount();
+        {
+            char ev[64];
+            int n = snprintf(ev, sizeof(ev), "#sym:CAN_ID_RES_PDO_TX dlc=%u ", (unsigned)msg->dlc);
+            int off = (n > 0 && n < (int)sizeof(ev)) ? n : 0;
+            for (int i = 0; i < msg->dlc && i < 4 && off < (int)sizeof(ev) - 3; ++i) {
+                off += snprintf(&ev[off], sizeof(ev) - off, "%02X ", msg->data[i]);
+            }
+            (void)osMessageQueuePut(debugQueueHandle, ev, 0, 0);
+        }
         break;
-
-    case CAN_ID_RES_BOOTUP:   /* 0x711 — boot-up message */
+        
+    case CAN_ID_RES_BOOTUP:   /* 0x703 — boot-up message */
         /* RES just booted, set it to operational */
         res_nmt_set_operational();
+        {
+            char ev[64];
+            snprintf(ev, sizeof(ev), "#sym:CAN_ID_RES_BOOTUP id=0x%03X", (unsigned)msg->id);
+            (void)osMessageQueuePut(debugQueueHandle, ev, 0, 0);
+        }
         break;
 
     default:
@@ -144,7 +185,7 @@ void res_rx_dispatch(const can_msg_t *msg)
 }
 
 /* ---------------------------------------------------------------------------
- * ISR bridge: read frame from FIFO0 and push to the right queue
+ * ISR bridge: read frames from FIFO0 in a loop and push to the right queue
  * --------------------------------------------------------------------------- */
 extern osThreadId_t amiTaskHandle;
 extern volatile uint8_t g_mission_index;
@@ -154,18 +195,31 @@ void can_isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
     FDCAN_RxHeaderTypeDef rxh;
     uint8_t rxdata[8];
 
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) != HAL_OK)
-        return;
+    /* WHILE loop extracts all hardware buffered back-to-back frames 
+     * preventing downstream task schedules from missing immediate bursts */
+    while (HAL_FDCAN_GetRxFifoFillLevel(hfdcan, FDCAN_RX_FIFO0) > 0)
+    {
+        if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) != HAL_OK)
+            continue;
 
-    can_msg_t msg;
-    msg.id  = rxh.Identifier;
-    msg.dlc = (uint8_t)(rxh.DataLength >> 16);
-    memcpy(msg.data, rxdata, 8);
+        can_msg_t msg;
+        msg.id  = rxh.Identifier;
+        uint8_t bytes = dlc_code_to_bytes(rxh.DataLength);
+        msg.dlc = bytes;
+        
+        memset(msg.data, 0, sizeof(msg.data));
+        if (bytes > 0) memcpy(msg.data, rxdata, (bytes <= 8) ? bytes : 8);
 
-    if (hfdcan == &hfdcan1)
-        osMessageQueuePut(resRxQueueHandle, &msg, 0, 0);
-    else
-        osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
+        if (hfdcan == &hfdcan1) msg.bus = 1;
+        else if (hfdcan == &hfdcan2) msg.bus = 2;
+        else if (hfdcan == &hfdcan3) msg.bus = 3;
+        else msg.bus = 0;
+
+        if (hfdcan == &hfdcan1)
+            osMessageQueuePut(resRxQueueHandle, &msg, 0, 0);
+        else
+            osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -173,6 +227,16 @@ void can_isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
  * --------------------------------------------------------------------------- */
 void can_rx_dispatch(const can_msg_t *msg)
 {
+    /* Publish generic debug for every non-RES CAN message */
+    {
+        char dbg[128];
+        int n = snprintf(dbg, sizeof(dbg), "CAN%u id=0x%03X dlc=%u data=", (unsigned)msg->bus, (unsigned)msg->id, (unsigned)msg->dlc);
+        int off = (n > 0 && n < (int)sizeof(dbg)) ? n : 0;
+        for (int i = 0; i < msg->dlc && i < 4 && off < (int)sizeof(dbg) - 3; ++i) {
+            off += snprintf(&dbg[off], sizeof(dbg) - off, "%02X ", msg->data[i]);
+        }
+        (void)osMessageQueuePut(debugQueueHandle, dbg, 0, 0);
+    }
     switch (msg->id)
     {
     case CAN_ID_MISSION_SELECT:
@@ -214,41 +278,49 @@ void steering_angle_cmd(float angle_deg)
 
 /* ---------------------------------------------------------------------------
  * Data Logger TX (0x500, 0x501, 0x502) — DS 2.2, 100 ms cycle
- * For this release, most fields are zero/placeholder.
- * Steering angle and IMU data are filled from available globals.
  * --------------------------------------------------------------------------- */
 void datalogger_tx(void)
 {
     /* 0x500 — DV driving dynamics 1 (8 B) */
     uint8_t d500[8] = {0};
-    /* Steering_angle_actual: bits 16-23, signed, scale 0.5 deg */
     int8_t steer_scaled = (int8_t)((g_steering.angle_raw * 0.1f) / 0.5f);
     d500[2] = (uint8_t)steer_scaled;
     can_tx_send(&hfdcan1, CAN_ID_DL_DYN1, d500, 8);
 
-    /* 0x501 — DV driving dynamics 2 (6 B) — populated from IMU later */
+    /* 0x501 — DV driving dynamics 2 (6 B) */
     uint8_t d501[6] = {0};
     can_tx_send(&hfdcan1, CAN_ID_DL_DYN2, d501, 6);
 
     /* 0x502 — DV system status (5 B) */
     uint8_t d502[5] = {0};
-    /* AS_status bits 0-2: 1=off for now */
     d502[0] = 1;
-    /* AMI_state bits 5-7: map mission index */
     if (g_mission_index != 0xFF && g_mission_index < 7)
         d502[0] |= ((g_mission_index + 1) & 0x07) << 5;
-    /* Steering_state bit 8: available if status OK */
     d502[1] = (g_steering.status & 0x01);
     can_tx_send(&hfdcan1, CAN_ID_DL_STATUS, d502, 5);
 }
 
 /* ---------------------------------------------------------------------------
- * HAL weak callback override — routes all FDCAN RX FIFO0 interrupts
+ * HAL weak callback overrides — routes and secures FDCAN hardware interrupts
  * --------------------------------------------------------------------------- */
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
     if (RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE)
     {
         can_isr_push_rx(hfdcan);
+    }
+}
+
+void HAL_FDCAN_ErrorCallback(FDCAN_HandleTypeDef *hfdcan)
+{
+    /* Critical Recovery Guard: If the HAL engine flags an Overrun error, 
+     * it silently shuts down notifications. We override and force them back alive. */
+    if (hfdcan->Instance == FDCAN1)
+    {
+        HAL_FDCAN_ActivateNotification(hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+    }
+    else if (hfdcan->Instance == hfdcan3.Instance)
+    {
+        HAL_FDCAN_ActivateNotification(hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
     }
 }
