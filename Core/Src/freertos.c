@@ -44,7 +44,7 @@
 #include <stdio.h>
 
 #include "imu_service.h"
-#include "can_service.h"
+#include "can_globals.h"
 #include "ws2812.h"
 #include "i2c.h"
 #include "cordic.h"
@@ -309,6 +309,15 @@ void StartDefaultTask(void *argument)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "ami/mission");
 
+  // GO signal publisher (~10 Hz): 0=no GO, 1=GO active
+  rcl_publisher_t go_pub;
+  std_msgs__msg__Int32 go_msg;
+  go_msg.data = 0;
+  rclc_publisher_init_best_effort(
+    &go_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    "res/go");
+
   // Debug string publisher
   rcl_publisher_t debug_pub;
   std_msgs__msg__String debug_str_msg;
@@ -381,24 +390,21 @@ void StartDefaultTask(void *argument)
         slow_pub_counter = 0;
 
         // Steering angle in degrees
-        steering_msg.data = g_steering.angle_raw * 0.1f;
+        steering_msg.data = can_c_get_steering_angle_deg();
         (void)rcl_publish(&steering_pub, &steering_msg, NULL);
 
         // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT
         uint32_t now_tick = osKernelGetTickCount();
-        if (g_res.last_rx_tick == 0)
-          res_msg.data = -1;  /* never received */
-        else if ((now_tick - g_res.last_rx_tick) > RES_TIMEOUT_MS)
-          res_msg.data = -1;  /* timeout */
-        else if (g_res.e_stop)
-          res_msg.data = 1;   /* E-Stop active */
-        else
-          res_msg.data = 0;   /* OK */
+        res_msg.data = can_c_get_res_status(now_tick, RES_TIMEOUT_MS);
         (void)rcl_publish(&res_pub, &res_msg, NULL);
 
         // AMI mission index
-        ami_msg.data = (int32_t)g_mission_index;
+        ami_msg.data = can_c_get_mission_index();
         (void)rcl_publish(&ami_pub, &ami_msg, NULL);
+
+        // GO signal from RES
+        go_msg.data = (int32_t)can_c_get_go_signal();
+        (void)rcl_publish(&go_pub, &go_msg, NULL);
 
         // Spin executor to process /cmd_test subscription
         // Publish any queued debug messages from CAN service
@@ -501,37 +507,7 @@ void StartImuTask(void *argument)
   }
 }
 
-void StartCanTask(void *argument)
-{
-  can_service_init();       /* FDCAN3: AMI + steering */
-  res_service_init();       /* FDCAN1: RES CANopen    */
-  res_nmt_set_operational();
-
-  uint32_t last_dl_tick = osKernelGetTickCount();
-
-  for (;;)
-  {
-    can_msg_t msg;
-
-    /* FDCAN3 messages (non-blocking) */
-    if (osMessageQueueGet(canRxQueueHandle, &msg, NULL, 0) == osOK)
-      can_rx_dispatch(&msg);
-
-    /* FDCAN1 RES messages (non-blocking) */
-    if (osMessageQueueGet(resRxQueueHandle, &msg, NULL, 0) == osOK)
-      res_rx_dispatch(&msg);
-
-    /* FDCAN1 Data Logger TX every 100 ms */
-    uint32_t now = osKernelGetTickCount();
-    if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)
-    {
-      //datalogger_tx();
-      last_dl_tick = now;
-    }
-
-    osDelay(1);
-  }
-}
+/* StartCanTask is defined in can_task.cpp (extern "C") */
 
 void StartAmiTask(void *argument)
 {
@@ -548,7 +524,7 @@ void StartAmiTask(void *argument)
   {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
 
-    uint8_t current = g_mission_index;
+    uint8_t current = (uint8_t)can_c_get_mission_index();
 
     if (current != last_mission)
     {

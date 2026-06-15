@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 # Project
-project(uDV C ASM)
+project(uDV C CXX ASM)
 
 # MCU flags
 set(MCU_FLAGS "-mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard")
@@ -25,7 +25,6 @@ set(C_SOURCES
     Core/Src/adc.c
     Core/Src/cordic.c
     Core/Src/fdcan.c
-    Core/Src/can_service.c
     Core/Src/ws2812.c
     Core/Src/i2c.c
     Core/Src/bmi088.c
@@ -91,6 +90,13 @@ set(C_SOURCES
     micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c
 )
 
+# C++ sources
+set(CPP_SOURCES
+    Core/Src/can_interface.cpp
+    Core/Src/can_globals.cpp
+    Core/Src/can_task.cpp
+)
+
 # ASM sources
 set(ASM_SOURCES
     startup_stm32h733xx.s
@@ -115,15 +121,17 @@ set(INCLUDE_DIRS
 )
 
 # Executable
-add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${ASM_SOURCES})
+add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${CPP_SOURCES} ${ASM_SOURCES})
 target_include_directories(${PROJECT_NAME}.elf PRIVATE ${INCLUDE_DIRS})
 
 # Compiler flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MCU_FLAGS} -Og -Wall -fdata-sections -ffunction-sections")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MCU_FLAGS} -Og -std=c++11 -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${MCU_FLAGS} -Wall -fdata-sections -ffunction-sections")
 
 # Debug flags
 set(CMAKE_C_FLAGS_DEBUG "-g -gdwarf-2")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -gdwarf-2")
 
 # Linker flags
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.specs -T${LINKER_SCRIPT} -lc -lm -Wl,-Map=\"${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map\",--cref -Wl,--gc-sections")
