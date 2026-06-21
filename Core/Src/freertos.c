@@ -225,11 +225,13 @@ void activate_steering_callback(const void * req, void * res)
   // Evaluamos el bool que nos llega en request->data
   if (request->data) {
     snprintf(srv_msg, sizeof(srv_msg), "debug: Servicio llamado con TRUE. Activando modo especial.");
-    // Ejemplo: Encender un LED o activar una bandera interna
     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+
+    // Ejemplo: Encender un LED o activar una bandera interna
+    //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
   } else {
     snprintf(srv_msg, sizeof(srv_msg), "debug: Servicio llamado con FALSE. Desactivando modo especial.");
-    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_RESET);
+    //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_RESET);
   }
   
   // Enviamos el mensaje al queue de debug

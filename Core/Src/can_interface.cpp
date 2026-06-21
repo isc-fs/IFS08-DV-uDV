@@ -195,16 +195,19 @@ void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 
 void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 {
+    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
     case CAN_ID_MISSION_SELECT:
         g_can_mission_id.store((int)msg->data[0]);
-        HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+        //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
         if (amiTaskHandle != NULL) {
             xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
         }
         break;
     case CAN_ID_STEERING:
+        //snprintf(srv_msg, sizeof(srv_msg), "id direcion detectado");
+        HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
         /* LWS sensor packet on FDCAN3.  Byte layout (re-ported from v0.1):
          *   [0..1] angle_raw, int16 little-endian, 0.1 deg/bit
          *   [2]    speed_raw, uint8, 4 deg/s per bit
