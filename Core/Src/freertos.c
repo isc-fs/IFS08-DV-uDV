@@ -36,6 +36,8 @@
 #include <rmw_microros/rmw_microros.h>
 #include <rmw_microros/time_sync.h>
 #include <rosidl_runtime_c/string_functions.h>
+#include <std_srvs/srv/empty.h>
+#include <std_srvs/srv/set_bool.h>
 
 #include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/int32.h>
@@ -210,6 +212,63 @@ static void cmd_test_callback(const void *msgin)
   HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
 }
 
+// --- Service callback for /activate_steering ---
+
+void activate_steering_callback(const void * req, void * res)
+{
+  // Casteamos los punteros a los tipos correctos de SetBool
+  const std_srvs__srv__SetBool_Request * request = (const std_srvs__srv__SetBool_Request *)req;
+  std_srvs__srv__SetBool_Response * response = (std_srvs__srv__SetBool_Response *)res;
+
+  char srv_msg[128];
+  
+  // Evaluamos el bool que nos llega en request->data
+  if (request->data) {
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Servicio llamado con TRUE. Activando modo especial.");
+    // Ejemplo: Encender un LED o activar una bandera interna
+    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+  } else {
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Servicio llamado con FALSE. Desactivando modo especial.");
+    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_RESET);
+  }
+  
+  // Enviamos el mensaje al queue de debug
+  osMessageQueuePut(debugQueueHandle, &srv_msg, 0, 0);
+  
+  // Respondemos al cliente de ROS 2 que todo ha salido bien
+  response->success = true;
+  // Opcional: rellenar el mensaje de retorno (requiere inicializar el string de la respuesta si se usa)
+  // rosidl_runtime_c__String__assign(&response->message, "OK");
+}
+
+// --- Service callback for /force_ebs ---
+
+void force_ebs_callback(const void * req, void * res)
+{
+  // Casteamos los punteros a los tipos correctos de SetBool
+  const std_srvs__srv__SetBool_Request * request = (const std_srvs__srv__SetBool_Request *)req;
+  std_srvs__srv__SetBool_Response * response = (std_srvs__srv__SetBool_Response *)res;
+
+  char srv_msg[128];
+  
+  // Evaluamos el bool que nos llega en request->data
+  if (request->data) {
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando apertura de EBS");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET); // Forzar EBS abierto
+    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_SET); // Forzar EBS abierto
+  } else {
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Vuelta a estado normal");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+  }
+  
+  // Enviamos el mensaje al queue de debug
+  osMessageQueuePut(debugQueueHandle, &srv_msg, 0, 0);
+  
+  // Respondemos al cliente de ROS 2 que todo ha salido bien
+  response->success = true;
+}
+
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
@@ -289,7 +348,7 @@ void StartDefaultTask(void *argument)
   rclc_publisher_init_best_effort(
     &steering_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-    "steering/data");
+    "steering/angle_sensor");
 
   // RES status publisher (~10 Hz)
   rcl_publisher_t res_pub;
@@ -337,12 +396,43 @@ void StartDefaultTask(void *argument)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cmd_test");
 
+  // --- SERVICIOS ---
+  rcl_service_t Activate_stearing;
+  std_srvs__srv__SetBool_Request act_steer_srv_req = {0};
+  std_srvs__srv__SetBool_Response act_steer_srv_res = {0};
+  
+  rclc_service_init_default(
+    &Activate_stearing, &node,
+    ROSIDL_GET_SRV_TYPE_SUPPORT(std_srvs, srv, SetBool),
+    "activate_steering"
+  );
+
+  rcl_service_t Force_EBS;
+  std_srvs__srv__SetBool_Request force_ebs_srv_req = {0};
+  std_srvs__srv__SetBool_Response force_ebs_srv_res = {0};
+  
+  rclc_service_init_default(
+    &Force_EBS, &node,
+    ROSIDL_GET_SRV_TYPE_SUPPORT(std_srvs, srv, SetBool),
+    "force_ebs"
+  );
+
+  // --- Executor ---
   // Executor for subscriber callbacks
   rclc_executor_t executor;
-  rclc_executor_init(&executor, &support.context, 1, &allocator);
+  rclc_executor_init(&executor, &support.context, 3, &allocator);
+
   rclc_executor_add_subscription(
     &executor, &cmd_test_sub, &cmd_test_msg,
     &cmd_test_callback, ON_NEW_DATA);
+
+  rclc_executor_add_service(
+    &executor, &Activate_stearing, &act_steer_srv_req, &act_steer_srv_res, 
+    &activate_steering_callback);
+
+  rclc_executor_add_service(
+    &executor, &Force_EBS, &force_ebs_srv_req, &force_ebs_srv_res, 
+    &force_ebs_callback);
 
   // Prepare IMU message (set static fields once)
   sensor_msgs__msg__Imu imu_msg;
@@ -416,10 +506,12 @@ void StartDefaultTask(void *argument)
 
         // Heartbeat / periodic debug message
         static uint32_t debug_beat = 0;
-        char beatbuf[64];
-        snprintf(beatbuf, sizeof(beatbuf), "debug: heartbeat %u", debug_beat++);
-        rosidl_runtime_c__String__assign(&debug_str_msg.data, beatbuf);
-        (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
+        if (debug_beat % 10 == 0) {  // Publish every 10 iterations
+          char beatbuf[64];
+          snprintf(beatbuf, sizeof(beatbuf), "debug: heartbeat %u", debug_beat++);
+          rosidl_runtime_c__String__assign(&debug_str_msg.data, beatbuf);
+          (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
+        }
 
         rclc_executor_spin_some(&executor, 0);
       }

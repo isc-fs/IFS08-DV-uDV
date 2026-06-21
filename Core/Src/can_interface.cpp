@@ -156,57 +156,6 @@ void sendSteer(float steer)
     /* TX failure is recoverable — see sendAccel comment. */
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
-void sendIMU(const bmi088_scaled_t &imu)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[8];
-
-    const int16_t ax_scaled = (int16_t)(imu.ax_g * 1000.0f);
-    const int16_t ay_scaled = (int16_t)(imu.ay_g * 1000.0f);
-    const int16_t az_scaled = (int16_t)(imu.az_g * 1000.0f);
-    const int16_t gx_scaled = (int16_t)(imu.gx_dps * 10.0f);
-
-    memcpy(&TxData[0], &ax_scaled, sizeof(int16_t));
-    memcpy(&TxData[2], &ay_scaled, sizeof(int16_t));
-    memcpy(&TxData[4], &az_scaled, sizeof(int16_t));
-    memcpy(&TxData[6], &gx_scaled, sizeof(int16_t));
-
-    TxHeader.Identifier = CAN_ID_IMU;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_8;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    /* TX failure is recoverable — see sendAccel comment. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
-}
-
-void sendAssiStatus(uint8_t status)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[1];
-
-    TxHeader.Identifier = CAN_ID_ASSI;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_1;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    TxData[0] = status;
-
-    /* TX failure is recoverable, AND this is called from the TIM3
-     * watchdog ISR — hanging here would brick the MCU.  See the
-     * watchdog boot-hang fix. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
-}
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 {
@@ -244,7 +193,7 @@ void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
     }
 }
 
-void rx_dispatch(const can_msg_t *msg)
+void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 {
     switch (msg->id)
     {
@@ -255,50 +204,37 @@ void rx_dispatch(const can_msg_t *msg)
             xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
         }
         break;
-
-    case CAN_ID_TS_ACTIVE:
-        g_can_ts_active.store(msg->data[0] != 0U);
-        break;
-
-    case CAN_ID_BRAKE_PRESSURE:
-        if (msg->dlc >= 4U) {
-            float brake_pressure = 0.0f;
-            memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
-            g_can_brake_pressure.store(brake_pressure);
-        }
-        break;
-
-    case CAN_ID_SDC_RES_OPEN:
-        if (msg->dlc >= 1U) {
-            bool sdc_open = (msg->data[0] != 0U);
-            // Update CAN global so StateManager reads it
-            g_can_sdc_res_open.store(sdc_open);
-        }
-        break;
-
-    case CAN_ID_R2D:
-        if (msg->dlc >= 1U) {
-            bool r2d_received = (msg->data[0] != 0U);
-            // Only accept external R2D when app_task has enabled listening
-            if (r2d_received && g_can_listen_go.load()) {
-                g_can_r2d.store(true);
-            }
-        }
-        break;
-
     case CAN_ID_STEERING:
         /* LWS sensor packet on FDCAN3.  Byte layout (re-ported from v0.1):
          *   [0..1] angle_raw, int16 little-endian, 0.1 deg/bit
          *   [2]    speed_raw, uint8, 4 deg/s per bit
          *   [3]    status, bit0=OK / bit1=CAL / bit2=TRIM            */
         if (msg->dlc >= 4U) {
-            int16_t angle = (int16_t)((uint16_t)msg->data[0] |
-                                      ((uint16_t)msg->data[1] << 8));
-            g_steering_angle_raw.store(angle);
-            g_steering_speed_raw.store(msg->data[2]);
+            // 1. Parseo y validación del Ángulo (Little Endian)
+            uint16_t raw_u = ((uint16_t)msg->data[1] << 8) | (uint16_t)msg->data[0];
+            int16_t raw_angle = (int16_t)raw_u;
+            
+            if (raw_u != 0x7FFF) {
+                g_steering_angle_raw.store(raw_angle * 0.1f); // Requiere que g_steering_angle_raw sea float
+            } else {
+                g_steering_angle_raw.store(0.0f); 
+            }
+
+            // 2. Parseo y validación de la Velocidad (con signo int8_t)
+            if (msg->data[2] != 0xFF) {
+                int8_t raw_speed = (int8_t)msg->data[2];
+                g_steering_speed_raw.store(raw_speed * 4.0f); // Requiere que g_steering_speed_raw sea float
+            } else {
+                g_steering_speed_raw.store(0.0f);
+            }
+
+            // 3. Estado (Si quieres seguir guardando el byte crudo)
             g_steering_status.store(msg->data[3]);
+            
+            // 4. Timestamp
             g_steering_last_rx_tick.store(osKernelGetTickCount());
         }
+        
         break;
 
     default:
@@ -306,7 +242,7 @@ void rx_dispatch(const can_msg_t *msg)
     }
 }
 
-void resRxDispatch(const can_msg_t *msg)
+void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
 {
     switch (msg->id)
     {
@@ -391,10 +327,6 @@ void sendSteeringAngle(float angle_deg)
 
 void sendDataLogger()
 {
-    /* DS 2.2 cyclic CAN frames.  Most fields are still zero/placeholder
-     * pending the brakes-service work; what we know lands in here, the
-     * rest stays at 0 so the DL pipeline sees a heartbeat regardless. */
-
     /* 0x500 — DV driving dynamics 1 (8 bytes) */
     uint8_t d500[8] = {0};
     /* Steering_angle_actual: byte 2, signed 0.5 deg/bit.
