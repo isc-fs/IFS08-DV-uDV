@@ -198,6 +198,11 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
+    case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
+        g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
+        g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
+        break;
+
     case CAN_ID_MISSION_SELECT:
         g_can_mission_id.store((int)msg->data[0]);
         //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);

@@ -58,6 +58,13 @@ extern std::atomic<uint8_t>  g_steering_speed_raw;
 extern std::atomic<uint8_t>  g_steering_status;
 extern std::atomic<uint32_t> g_steering_last_rx_tick;
 
+/* Steering controller feedback (FDCAN1 ID 0x500, 20 Hz).
+ *   angle_actual : int8 × 0.5 °/bit → actual LWS angle in degrees
+ *   angle_target : int8 × 0.5 °/bit → last angle commanded by uDV
+ */
+extern std::atomic<float>    g_steer_angle_actual;
+extern std::atomic<float>    g_steer_angle_target;
+
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
  */
