@@ -201,6 +201,7 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
         g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
         g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
+        g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
         break;
 
     case CAN_ID_MISSION_SELECT:
@@ -408,6 +409,21 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 }
 
 /* C-callable accessors so freertos.c (C file) can read atomic CAN state */
+extern "C" float can_c_get_steer_angle_actual(void)
+{
+    return g_steer_angle_actual.load();
+}
+
+extern "C" float can_c_get_steer_angle_target(void)
+{
+    return g_steer_angle_target.load();
+}
+
+extern "C" float can_c_get_steer_angle_motor(void)
+{
+    return g_steer_angle_motor.load();
+}
+
 extern "C" float can_c_get_steering_angle_deg(void)
 {
     return (float)g_steering_angle_raw.load() * 0.1f;

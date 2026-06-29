@@ -10,9 +10,10 @@ std::atomic<float> g_can_brake_pressure{0.0f};
 std::atomic<bool> g_can_sdc_res_open{false};
 std::atomic<bool> g_reset_cmd{false};
 
-// Steering controller feedback (FDCAN1 0x500)
+// Steering controller feedback (FDCAN3 0x500)
 std::atomic<float> g_steer_angle_actual{0.0f};
 std::atomic<float> g_steer_angle_target{0.0f};
+std::atomic<float> g_steer_angle_motor{0.0f};
 
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};

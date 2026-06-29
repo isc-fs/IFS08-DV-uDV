@@ -42,6 +42,7 @@
 #include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/int32.h>
 #include <std_msgs/msg/float32.h>
+#include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/string.h>
 #include <stdio.h>
 
@@ -124,7 +125,7 @@ osSemaphoreId_t imuSemHandle;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 3000 * 4,
+  .stack_size = 4096 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -314,8 +315,8 @@ void StartDefaultTask(void *argument)
   rclc_support_init(&support, 0, NULL, &allocator);
   rclc_node_init_default(&node, "cubemx_node", "", &support);
 
-  // Time synchronization
-  while (!rmw_uros_epoch_synchronized()) {
+  // Time synchronization — up to 5 attempts, continue regardless.
+  for (int ts_try = 0; ts_try < 5 && !rmw_uros_epoch_synchronized(); ts_try++) {
     rmw_uros_sync_session(TIME_SYNC_TIMEOUT_MS);
     if (!rmw_uros_epoch_synchronized()) {
       osDelay(100);
@@ -351,6 +352,22 @@ void StartDefaultTask(void *argument)
     &steering_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "steering/angle_sensor");
+
+  // Steering feedback publisher (20 Hz)
+  // data[0] = angle_actual (deg) — LWS physical angle
+  // data[1] = angle_target (deg) — last commanded angle echoed by controller
+  // data[2] = angle_motor  (deg) — stepper position calculated by steps
+  rcl_publisher_t steering_fb_pub;
+  std_msgs__msg__Float32MultiArray steering_fb_msg;
+  static float steering_fb_data[3] = {0.0f, 0.0f, 0.0f};
+  memset(&steering_fb_msg, 0, sizeof(steering_fb_msg));
+  steering_fb_msg.data.data     = steering_fb_data;
+  steering_fb_msg.data.size     = 3;
+  steering_fb_msg.data.capacity = 3;
+  rclc_publisher_init_best_effort(
+    &steering_fb_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
+    "steering/feedback");
 
   // RES status publisher (~10 Hz)
   rcl_publisher_t res_pub;
@@ -452,7 +469,8 @@ void StartDefaultTask(void *argument)
   imu_msg.angular_velocity_covariance[4] = 1.37e-5;
   imu_msg.angular_velocity_covariance[8] = 1.37e-5;
 
-  uint16_t slow_pub_counter = 0;
+  uint16_t slow_pub_counter    = 0;
+  uint16_t steering_fb_counter = 0;
 
   for (;;)
   {
@@ -476,6 +494,16 @@ void StartDefaultTask(void *argument)
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
+      // --- Steering feedback at 20 Hz (every 20 IMU samples) ---
+      if (++steering_fb_counter >= 20)
+      {
+        steering_fb_counter = 0;
+        steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
+        steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
+        steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
+        (void)rcl_publish(&steering_fb_pub, &steering_fb_msg, NULL);
+      }
+
       // --- Slow publishers (~10 Hz) ---
       if (++slow_pub_counter >= SLOW_PUB_INTERVAL)
       {
@@ -484,6 +512,7 @@ void StartDefaultTask(void *argument)
         // Steering angle in degrees
         steering_msg.data = can_c_get_steering_angle_deg();
         (void)rcl_publish(&steering_pub, &steering_msg, NULL);
+
 
         // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT
         uint32_t now_tick = osKernelGetTickCount();
@@ -518,7 +547,7 @@ void StartDefaultTask(void *argument)
         rclc_executor_spin_some(&executor, 0);
       }
 
-      // Periodic time re-sync and debug publish (~every 10s)
+      // Periodic time re-sync and IMU status publish (~every 10s)
       static uint16_t sync_counter = 0;
       if (++sync_counter >= TIME_SYNC_INTERVAL)
       {
@@ -539,6 +568,15 @@ void StartDefaultTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+  (void)xTask; (void)pcTaskName;
+  // Both LEDs on = stack overflow detected
+  HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+  for (;;) {}
+}
 
 // Shared debug status
 volatile int32_t imu_debug_status = -99;
