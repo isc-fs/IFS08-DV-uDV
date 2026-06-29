@@ -333,7 +333,7 @@ void StartDefaultTask(void *argument)
   rclc_publisher_init_best_effort(
     &imu_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-    "imu/data_raw");
+    "imu");
 
   // IMU debug status publisher
   rcl_publisher_t imu_debug_pub;
@@ -344,14 +344,23 @@ void StartDefaultTask(void *argument)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "imu/status");
 
-  // Steering angle publisher (~10 Hz)
+  // Steering angle publisher (~10 Hz) — radians, as expected by pipeline
   rcl_publisher_t steering_pub;
   std_msgs__msg__Float32 steering_msg;
   steering_msg.data = 0.0f;
   rclc_publisher_init_best_effort(
     &steering_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-    "steering/angle_sensor");
+    "steering_angle");
+
+  // Motor RPM publisher (~10 Hz) — placeholder: no RPM sensor on uDV
+  rcl_publisher_t motor_rpm_pub;
+  std_msgs__msg__Float32 motor_rpm_msg;
+  motor_rpm_msg.data = 0.0f;
+  rclc_publisher_init_best_effort(
+    &motor_rpm_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+    "motor_rpm");
 
   // Steering feedback publisher (20 Hz)
   // data[0] = angle_actual (deg) — LWS physical angle
@@ -509,9 +518,17 @@ void StartDefaultTask(void *argument)
       {
         slow_pub_counter = 0;
 
-        // Steering angle in degrees
-        steering_msg.data = can_c_get_steering_angle_deg();
+        // TODO: STEERING_RATIO must be measured on the physical car
+        // (steering wheel degrees / front wheel degrees). Using 1.0 as
+        // placeholder — EKF will overestimate yaw rate until corrected.
+        #define STEERING_RATIO 1.0f
+        steering_msg.data = can_c_get_steering_angle_deg()
+                            * (float)(M_PI / 180.0)
+                            / STEERING_RATIO;
         (void)rcl_publish(&steering_pub, &steering_msg, NULL);
+
+        // Motor RPM — placeholder, no RPM sensor on uDV
+        (void)rcl_publish(&motor_rpm_pub, &motor_rpm_msg, NULL);
 
 
         // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT
