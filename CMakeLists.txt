@@ -43,6 +43,7 @@ set(C_SOURCES
     Core/Src/safety_monitor.c
     Core/Src/hardware_io.c
     Core/Src/ros_task_commands.c
+    Core/Src/ros_task.c
     Core/Src/stm32h7xx_it.c
     Core/Src/stm32h7xx_hal_msp.c
     Core/Src/stm32h7xx_hal_timebase_tim.c

@@ -113,7 +113,8 @@ Core/Src/iwdg.c \
 Core/Src/safety_eval.c \
 Core/Src/safety_monitor.c \
 Core/Src/hardware_io.c \
-Core/Src/ros_task_commands.c
+Core/Src/ros_task_commands.c \
+Core/Src/ros_task.c
 
 # C++ sources
 CPP_SOURCES = \
