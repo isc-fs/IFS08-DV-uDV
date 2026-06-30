@@ -32,6 +32,13 @@ set(C_SOURCES
     Core/Src/imu_service.c
     Core/Src/attitude.c
     Core/Src/tim.c
+    Core/Src/comunicacion_direccion.c
+    # Safety / watchdog + AS state-machine support (keep in sync with Makefile)
+    Core/Src/iwdg.c
+    Core/Src/safety_eval.c
+    Core/Src/safety_monitor.c
+    Core/Src/hardware_io.c
+    Core/Src/ros_task_commands.c
     Core/Src/stm32h7xx_it.c
     Core/Src/stm32h7xx_hal_msp.c
     Core/Src/stm32h7xx_hal_timebase_tim.c
@@ -95,6 +102,11 @@ set(CPP_SOURCES
     Core/Src/can_interface.cpp
     Core/Src/can_globals.cpp
     Core/Src/can_task.cpp
+    # AS state machine (keep in sync with Makefile)
+    Core/Src/app_task.cpp
+    Core/Src/state_manager.cpp
+    Core/Src/ebs_manager.cpp
+    Core/Src/ros_globals.cpp
 )
 
 # ASM sources
