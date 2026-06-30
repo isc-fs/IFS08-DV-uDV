@@ -1,4 +1,5 @@
 #include "can_interface.hpp"
+#include "as_state.h"
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -35,6 +36,13 @@ extern FDCAN_HandleTypeDef hfdcan3;
 
 /* amiTask handle — defined in freertos.c */
 extern osThreadId_t amiTaskHandle;
+
+/* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
+ * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
+ * Cached on every sendAssiStatus() so the micro-ROS layer can mirror it
+ * on /assi/state — the ROS topic then carries the identical byte as the
+ * CAN frame, by construction (no second mapping to drift). */
+static std::atomic<uint8_t> g_assi_status_code{0x00u};
 
 namespace Can {
 
@@ -399,8 +407,13 @@ void sendDataLogger()
 
     /* 0x502 — DV system status (5 bytes) */
     uint8_t d502[5] = {0};
-    /* AS_status low nibble: 1 = OFF (placeholder until state_manager wires) */
-    d502[0] = 1u;
+    /* AS_status low nibble (FS DV-logger encoding): 1=OFF 2=READY
+     * 3=DRIVING 4=EMERGENCY 5=FINISHED. Mapped from the live AS state
+     * machine (ros_get_as_state(): ASState OFF=0 READY=1 DRIVING=2
+     * EMERGENCY=3 FINISHED=4). CONFIRM against the team CAN DBC. */
+    static const uint8_t k_as_to_dl_nibble[5] = {1u, 2u, 3u, 4u, 5u};
+    uint8_t as = ros_get_as_state();
+    d502[0] = (as < 5u) ? k_as_to_dl_nibble[as] : 1u;
     /* AMI_state bits 5-7: derived from mission id (1..7 maps to slots 1..7) */
     int mid = g_can_mission_id.load();
     if (mid >= 0 && mid < 7) {
@@ -421,6 +434,8 @@ void sendAssiStatus(uint8_t status)
      * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
      * The ASSI peripheral does the flashing/buzzer; the uDV only emits
      * the state code. Non-blocking enqueue, safe from any context. */
+    /* Mirror the same byte to the micro-ROS /assi/state publisher. */
+    g_assi_status_code.store(status);
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_ASSI,
         .IdType              = FDCAN_STANDARD_ID,
@@ -508,5 +523,13 @@ extern "C" int32_t can_c_get_mission_index(void)
 extern "C" uint8_t can_c_get_go_signal(void)
 {
     return g_res_go_signal.load();
+}
+
+extern "C" uint8_t can_c_get_assi_status_code(void)
+{
+    /* Last AS state byte emitted on CAN 0x100 (FS-Rules T14.9). The
+     * micro-ROS /assi/state publisher mirrors this so the DV pipeline
+     * reads the identical code the ASSI peripheral does. */
+    return g_assi_status_code.load();
 }
 

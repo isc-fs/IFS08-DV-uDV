@@ -47,6 +47,9 @@ Core/Src/spi.c \
 Core/Src/bmi088.c \
 Core/Src/i2c_utils.c \
 Core/Src/imu_service.c \
+Core/Src/imu_task.c \
+Core/Src/ami_task.c \
+Core/Src/dwt_time.c \
 Core/Src/comunicacion_direccion.c \
 Core/Src/attitude.c \
 Core/Src/ws2812.c \
@@ -110,7 +113,8 @@ Core/Src/iwdg.c \
 Core/Src/safety_eval.c \
 Core/Src/safety_monitor.c \
 Core/Src/hardware_io.c \
-Core/Src/ros_task_commands.c
+Core/Src/ros_task_commands.c \
+Core/Src/ros_task.c
 
 # C++ sources
 CPP_SOURCES = \

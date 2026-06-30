@@ -48,14 +48,18 @@ See [firststeps.md](firststeps.md) for full host setup.
 
 ### FreeRTOS Task Structure
 
-All tasks and queues are created in [Core/Src/freertos.c](Core/Src/freertos.c):
+All tasks and queues are **created** in [Core/Src/freertos.c](Core/Src/freertos.c) (`MX_FREERTOS_Init`), but each task **body** lives in its own file so the CubeMX-regenerated `freertos.c` stays thin. `StartDefaultTask` keeps only the CubeMX-managed `MX_USB_DEVICE_Init()` then calls `ros_task_run()`.
 
-| Task | Priority | Stack | Role |
-|---|---|---|---|
-| `defaultTask` | Normal | 12 KB | micro-ROS node: all publishers, subscriber executor, time sync |
-| `imuTask` | AboveNormal | 8 KB | BMI088 read → attitude update → push to `imuQueueHandle` |
-| `canTask` | AboveNormal | 4 KB | Drain `canRxQueueHandle` + `resRxQueueHandle`, data logger TX |
-| `amiTask` | BelowNormal | 2 KB | WS2812 LED color based on mission index |
+| Task | Priority | Stack | Role | Body |
+|---|---|---|---|---|
+| `defaultTask` | Normal | 12 KB | micro-ROS node: all publishers, subscriber executor, time sync | [ros_task.c](Core/Src/ros_task.c) (`ros_task_run`) |
+| `imuTask` | AboveNormal | 8 KB | BMI088 read → attitude update → push to `imuQueueHandle` | [imu_task.c](Core/Src/imu_task.c) |
+| `canTask` | AboveNormal | 4 KB | Drain `canRxQueueHandle` + `resRxQueueHandle`, data logger TX | [can_task.cpp](Core/Src/can_task.cpp) |
+| `amiTask` | BelowNormal | 2 KB | WS2812 LED color based on mission index | [ami_task.c](Core/Src/ami_task.c) |
+| `safetyTask` | High | 2 KB | Two-tier watchdog / IWDG refresh | [safety_monitor.c](Core/Src/safety_monitor.c) |
+| `appTask` | Normal | 4 KB | AS state machine + EBS init sequence | [app_task.cpp](Core/Src/app_task.cpp) |
+
+The shared microsecond timestamp `dwt_micros()` (used by both the IMU and ROS tasks) lives in [dwt_time.c](Core/Src/dwt_time.c).
 
 Inter-task communication uses FreeRTOS message queues:
 - **`imuQueueHandle`** (depth 16): `imu_sample_t` structs from `imuTask` → `defaultTask`
