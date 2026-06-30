@@ -18,6 +18,29 @@ extern "C" {
  */
 uint8_t ros_get_as_state(void);
 
+/* Bit positions in the word returned by ros_get_state_signals(), one per
+ * StateManagerSignals field (see state_manager.hpp). Shared here so the C++
+ * packer (ros_globals.cpp) and the C unpacker (ros_task.c) cannot drift. */
+enum {
+    AS_SIG_ASMS_ON        = 1u << 0,
+    AS_SIG_TS_ACTIVE      = 1u << 1,
+    AS_SIG_SDC_RES_OPEN   = 1u << 2,
+    AS_SIG_EBS_ACTIVATED  = 1u << 3,
+    AS_SIG_ABS_CHECKS_OK  = 1u << 4,
+    AS_SIG_BRAKES_ENGAGED = 1u << 5,
+    AS_SIG_MISSION_SEL    = 1u << 6,
+    AS_SIG_R2D            = 1u << 7,
+    AS_SIG_STANDSTILL     = 1u << 8,
+    AS_SIG_MISSION_DONE   = 1u << 9,
+};
+
+/* Snapshot of the 10 StateManagerSignals booleans packed into one word using
+ * the AS_SIG_* bits above. Same AppTask telemetry source as ros_get_as_state. */
+uint16_t ros_get_state_signals(void);
+
+/* Raw EBSInitState (see ebs_manager.hpp): Start=0 .. Failed=7, Done=8. */
+uint8_t ros_get_ebs_init_state(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
@@ -50,6 +51,7 @@
 #define SLOW_PUB_INTERVAL     40    // publish steering/RES/AMI every 40 IMU samples (~10 Hz)
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
+#define STATE_DUMP_INTERVAL   200   // /debug state heartbeat: every 200 IMU samples (~2 Hz at 400 Hz)
 
 /* RTOS queues created in freertos.c (MX_FREERTOS_Init). */
 extern osMessageQueueId_t imuQueueHandle;
@@ -132,6 +134,69 @@ void force_ebs_callback(const void * req, void * res)
 
   // Respondemos al cliente de ROS 2 que todo ha salido bien
   response->success = true;
+}
+
+/* Map raw ASState (see as_state.h: OFF=0 READY=1 DRIVING=2 EMERGENCY=3
+   FINISHED=4) to a human-readable name for the /debug state line. */
+static const char *as_state_name(uint8_t s)
+{
+  switch (s)
+  {
+    case 0:  return "OFF";
+    case 1:  return "READY";
+    case 2:  return "DRIVING";
+    case 3:  return "EMERGENCY";
+    case 4:  return "FINISHED";
+    default: return "UNKNOWN";
+  }
+}
+
+/* Map raw EBSInitState (see ebs_manager.hpp) to a human-readable name. */
+static const char *ebs_init_name(uint8_t s)
+{
+  switch (s)
+  {
+    case 0:  return "Start";
+    case 1:  return "WaitLow";
+    case 2:  return "CheckPressure";
+    case 3:  return "WaitTS";
+    case 4:  return "CheckActuator1";
+    case 5:  return "WaitInterActuatorCheck";
+    case 6:  return "CheckActuator2";
+    case 7:  return "Failed";
+    case 8:  return "Done";
+    default: return "Unknown";
+  }
+}
+
+/* Build the verbose human-readable state-machine line for /debug. When the AS
+   state changed since the last publish (prev != cur) it is shown as an arrow
+   "AS PREV->CUR"; otherwise just "AS CUR". sig is packed with the AS_SIG_*
+   bits from as_state.h. */
+static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
+                               uint8_t as, uint16_t sig, uint8_t ebs)
+{
+  char as_tok[48];
+  if (prev_as != as)
+    snprintf(as_tok, sizeof(as_tok), "AS %s->%s", as_state_name(prev_as), as_state_name(as));
+  else
+    snprintf(as_tok, sizeof(as_tok), "AS %s", as_state_name(as));
+
+  snprintf(buf, n,
+    "%s | ASMS %s | TS %s | SDC %s | EBS %s | ABS %s | brakes %s | "
+    "mission %s | R2D %s | %s | %s | EBS init: %s",
+    as_tok,
+    (sig & AS_SIG_ASMS_ON)        ? "on"         : "off",
+    (sig & AS_SIG_TS_ACTIVE)      ? "on"         : "off",
+    (sig & AS_SIG_SDC_RES_OPEN)   ? "open"       : "closed",
+    (sig & AS_SIG_EBS_ACTIVATED)  ? "on"         : "off",
+    (sig & AS_SIG_ABS_CHECKS_OK)  ? "ok"         : "not ok",
+    (sig & AS_SIG_BRAKES_ENGAGED) ? "on"         : "off",
+    (sig & AS_SIG_MISSION_SEL)    ? "set"        : "unset",
+    (sig & AS_SIG_R2D)            ? "on"         : "off",
+    (sig & AS_SIG_STANDSTILL)     ? "standstill" : "moving",
+    (sig & AS_SIG_MISSION_DONE)   ? "finished"   : "running",
+    ebs_init_name(ebs));
 }
 
 void ros_task_run(void)
@@ -365,6 +430,14 @@ void ros_task_run(void)
   uint16_t slow_pub_counter    = 0;
   uint16_t steering_fb_counter = 0;
 
+  /* State-machine snapshot tracking for the /debug dump. Seed with the current
+     values so we don't emit a spurious "change" on the first sample; the first
+     heartbeat publishes the initial snapshot. */
+  uint8_t  last_as_state = ros_get_as_state();
+  uint16_t last_signals  = ros_get_state_signals();
+  uint8_t  last_ebs      = ros_get_ebs_init_state();
+  uint16_t state_dump_counter = STATE_DUMP_INTERVAL;  /* emit on the first sample */
+
   for (;;)
   {
     imu_sample_t sample;
@@ -386,6 +459,27 @@ void ros_task_run(void)
       imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+
+      // --- Full state-machine snapshot -> /debug (verbose; on change + ~2 Hz) ---
+      uint8_t  as_now  = ros_get_as_state();
+      uint16_t sig_now = ros_get_state_signals();
+      uint8_t  ebs_now = ros_get_ebs_init_state();
+      bool changed  = (as_now != last_as_state) ||
+                      (sig_now != last_signals) ||
+                      (ebs_now != last_ebs);
+      bool periodic = (++state_dump_counter >= STATE_DUMP_INTERVAL);
+      if (changed || periodic)
+      {
+        char state_buf[224];
+        format_state_debug(state_buf, sizeof(state_buf),
+                           last_as_state, as_now, sig_now, ebs_now);
+        rosidl_runtime_c__String__assign(&debug_str_msg.data, state_buf);
+        (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
+        last_as_state = as_now;
+        last_signals  = sig_now;
+        last_ebs      = ebs_now;
+        state_dump_counter = 0;
+      }
 
       // --- Steering feedback at 20 Hz (every 20 IMU samples) ---
       if (++steering_fb_counter >= 20)
