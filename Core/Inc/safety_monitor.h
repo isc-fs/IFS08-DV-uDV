@@ -24,6 +24,25 @@
 #ifndef SAFETY_MONITOR_H
 #define SAFETY_MONITOR_H
 
+/* ---- Timing budget (single source of truth; HAL-free so it can be
+ *      asserted against the FS-Rules limits in the host test suite). ----
+ *
+ *  - SAFETY_PERIOD_MS:   monitor cadence + IWDG refresh interval. Must be
+ *    well under IWDG_TIMEOUT_MS_NOMINAL so a healthy monitor never lets
+ *    the IWDG expire.
+ *  - SAFETY_DEADLINE_*_MS: max time a monitored task may go without a
+ *    heartbeat before the safe state is triggered. FS-Rules T11.9.4 caps
+ *    the message-loss detection delay at 500 ms — these must stay under it.
+ */
+#define SAFETY_PERIOD_MS         10u
+#define SAFETY_DEADLINE_IMU_MS   100u
+#define SAFETY_DEADLINE_CAN_MS   100u
+#define SAFETY_DEADLINE_APP_MS   100u
+
+/* FS-Rules T11.9.4: detection of a lost/delayed SCS message must trigger
+ * the safe state within this bound. */
+#define FS_RULES_T11_9_4_MAX_DETECT_MS  500u
+
 #ifdef __cplusplus
 extern "C" {
 #endif

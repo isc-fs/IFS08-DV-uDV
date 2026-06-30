@@ -22,6 +22,22 @@
 #ifndef IWDG_H
 #define IWDG_H
 
+/* ---- Timing budget (single source of truth; HAL-free so it can be
+ *      asserted against the FS-Rules limits in the host test suite). ----
+ *
+ *   timeout_ms = (RLR + 1) * prescaler_div * 1000 / f_LSI
+ *
+ * PR register encoding: 0=/4 1=/8 2=/16 3=/32 4=/64 5=/128 6=/256.
+ * LSI is nominal here; its real tolerance is wide, which is why the
+ * timeout is many times the monitor refresh period.
+ */
+#define IWDG_LSI_HZ              32000u
+#define IWDG_PRESCALER_PR       2u      /* register value → /16            */
+#define IWDG_PRESCALER_DIV      16u     /* must match IWDG_PRESCALER_PR    */
+#define IWDG_RELOAD_VALUE       200u    /* RLR                             */
+#define IWDG_TIMEOUT_MS_NOMINAL \
+    (((IWDG_RELOAD_VALUE + 1u) * IWDG_PRESCALER_DIV * 1000u) / IWDG_LSI_HZ)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

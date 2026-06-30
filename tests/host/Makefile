@@ -32,7 +32,7 @@ SM_SRCS     := test_state_machine.cpp \
                $(CORE_SRC)/can_globals.cpp \
                $(CORE_SRC)/ros_globals.cpp
 
-BINS := test_safety_eval test_state_machine
+BINS := test_safety_eval test_state_machine test_rules_compliance
 
 .PHONY: all test clean
 all: test
@@ -48,9 +48,14 @@ safety_eval.o: $(CORE_SRC)/safety_eval.c $(CORE_INC)/safety_eval.h
 test_state_machine: $(SM_SRCS)
 	$(CXX) $(SM_CXXFLAGS) -o $@ $(SM_SRCS)
 
+# ---- suite 3: rules-compliance timing budget (mostly static_assert) -----
+test_rules_compliance: test_rules_compliance.cpp safety_eval.o
+	$(CXX) $(CXXFLAGS) -o $@ test_rules_compliance.cpp safety_eval.o
+
 test: $(BINS)
-	@echo "=== test_safety_eval ===";  ./test_safety_eval
-	@echo "=== test_state_machine ==="; ./test_state_machine
+	@echo "=== test_safety_eval ===";      ./test_safety_eval
+	@echo "=== test_state_machine ===";    ./test_state_machine
+	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
 
 clean:
 	rm -rf $(BINS) *.o *.dSYM

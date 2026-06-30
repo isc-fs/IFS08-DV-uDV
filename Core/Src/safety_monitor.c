@@ -23,17 +23,12 @@ extern void can_interface_send_assi_emergency_from_isr(void);
 
 /* --- tuning ---------------------------------------------------------- */
 
-/* Monitor cadence. Must stay well under the IWDG timeout (~100 ms) so a
- * healthy monitor always refreshes in time. */
-#define SAFETY_PERIOD_MS         10u
-
-/* Per-task stall deadlines. imuTask ticks every ~2.5 ms (400 Hz);
- * canTask every ~5 ms; app_task (state machine) every ~1-2 ms. 100 ms is
- * many missed iterations — long enough to never false-trip on jitter,
- * short enough to fail safe quickly. */
-#define SAFETY_DEADLINE_IMU_MS   100u
-#define SAFETY_DEADLINE_CAN_MS   100u
-#define SAFETY_DEADLINE_APP_MS   100u
+/* Monitor cadence (SAFETY_PERIOD_MS) and per-task stall deadlines
+ * (SAFETY_DEADLINE_*_MS) live in safety_monitor.h as the single source of
+ * truth, so the host test suite can assert them against the FS-Rules
+ * limits (T11.9.4 ≤ 500 ms). imuTask ticks ~2.5 ms (400 Hz), canTask
+ * ~5 ms, app_task ~1-2 ms — 100 ms is many missed iterations: never
+ * false-trips on jitter, still fails safe quickly. */
 
 /* Re-emit the ASSI EMERGENCY frame this often while latched, so external
  * systems keep seeing it even if the first frame was lost. */

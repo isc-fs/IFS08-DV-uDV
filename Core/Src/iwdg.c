@@ -10,20 +10,12 @@
 #define IWDG_KEY_RELOAD   0x0000AAAAu  /* refresh the counter (kick)       */
 #define IWDG_KEY_START    0x0000CCCCu  /* start the watchdog               */
 
-/* Timeout budget.
- *
- *   LSI ≈ 32 kHz.  Prescaler /16 → 2 kHz counter (0.5 ms / tick).
- *   Reload 200 → ≈ 100 ms timeout.
- *
- * 100 ms is ~10× the safety-monitor refresh period (~10 ms), generous
- * margin against FreeRTOS scheduling jitter and the LSI's wide
- * tolerance, while still resetting a totally-wedged CPU quickly enough
- * that the car cannot travel far before the EBS fires on reset.
- *
- * PR field encoding: 0=/4 1=/8 2=/16 3=/32 4=/64 5=/128 6=/256.
- */
-#define IWDG_PRESCALER_PR   2u    /* /16  */
-#define IWDG_RELOAD_VALUE   200u  /* ≈100 ms @ 32 kHz / 16 */
+/* Timeout budget: IWDG_PRESCALER_PR / IWDG_RELOAD_VALUE /
+ * IWDG_TIMEOUT_MS_NOMINAL (~100 ms) live in iwdg.h as the single source
+ * of truth, so the host test suite can assert them against the FS-Rules
+ * limits. ~100 ms is ~10× the safety-monitor refresh period — generous
+ * margin against scheduling jitter and the LSI's wide tolerance, while
+ * still resetting a wedged CPU before the car travels far. */
 
 void iwdg_init(void)
 {
