@@ -53,6 +53,9 @@
 #include "cordic.h"
 #include "tim.h"
 #include "safety_monitor.h"
+#include "dwt_time.h"
+#include "imu_task.h"
+#include "ami_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -71,18 +74,7 @@
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
 
-// High-resolution microsecond timestamp using DWT cycle counter (wrap-safe)
-static uint32_t dwt_last = 0;
-static uint64_t dwt_overflow_count = 0;
-
-static inline uint64_t dwt_micros(void)
-{
-  uint32_t now = DWT->CYCCNT;
-  if (now < dwt_last) dwt_overflow_count++;
-  dwt_last = now;
-  uint64_t total_cycles = (dwt_overflow_count << 32) | (uint64_t)now;
-  return total_cycles / (SystemCoreClock / 1000000U);
-}
+/* dwt_micros() moved to dwt_time.c (shared by the IMU and ROS tasks). */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -617,109 +609,9 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
   for (;;) {}
 }
 
-// Shared debug status
-volatile int32_t imu_debug_status = -99;
-
-void StartImuTask(void *argument)
-{
-  extern I2C_HandleTypeDef hi2c2;
-  extern CORDIC_HandleTypeDef hcordic;
-
-  imu_service_t imu_svc;
-  imu_service_init(&imu_svc, &hi2c2,
-                   IMU_SCL_GPIO_Port, IMU_SCL_Pin,
-                   IMU_SDA_GPIO_Port, IMU_SDA_Pin,
-                   &hcordic, 0.98f);
-  bmi088_status_t init_st = imu_service_start(&imu_svc);
-  imu_debug_status = (int32_t)init_st;
-
-  // Gyro bias calibration: collect 300 samples over 6s while stationary
-  if (init_st == BMI088_OK)
-  {
-    const int CAL_SAMPLES = 300;
-    const float GYR_LSB_PER_DPS = 16.4f;
-    int32_t gx_sum = 0, gy_sum = 0, gz_sum = 0;
-
-    for (int i = 0; i < CAL_SAMPLES; i++)
-    {
-      bmi088_raw_t raw;
-      if (bmi088_read_raw(&imu_svc.bmi, &raw) == BMI088_OK)
-      {
-        gx_sum += raw.gx;
-        gy_sum += raw.gy;
-        gz_sum += raw.gz;
-      }
-      osDelay(20);
-    }
-
-    float gx_bias = (float)gx_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    float gy_bias = (float)gy_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    float gz_bias = (float)gz_sum / (float)CAL_SAMPLES / GYR_LSB_PER_DPS;
-    attitude_set_gyro_bias_dps(&imu_svc.att, gx_bias, gy_bias, gz_bias);
-  }
-
-  // Start TIM2 interrupt for deterministic 400Hz sampling
-  HAL_TIM_Base_Start_IT(&htim2);
-
-  /* Calibration done and 400 Hz sampling armed: from here the safety
-   * monitor watches this loop. A stall (e.g. TIM2 stops, I2C wedges)
-   * now trips the watchdog emergency. */
-  safety_arm(SAFETY_TASK_IMU);
-
-  for (;;)
-  {
-    osSemaphoreAcquire(imuSemHandle, osWaitForever);
-
-    uint64_t ts_us = dwt_micros();
-
-    imu_sample_t sample;
-    bmi088_status_t step_st = imu_service_step(&imu_svc, &sample);
-    imu_debug_status = (int32_t)step_st;
-    if (step_st == BMI088_OK)
-    {
-      sample.timestamp_us = ts_us;
-      osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
-    }
-
-    /* Liveness beat: one per 400 Hz wake, whether or not the sample
-     * read succeeded — proves the loop is still being serviced. */
-    safety_heartbeat(SAFETY_TASK_IMU);
-  }
-}
-
+/* StartImuTask is defined in imu_task.c */
 /* StartCanTask is defined in can_task.cpp (extern "C") */
 
-void StartAmiTask(void *argument)
-{
-  extern SPI_HandleTypeDef hspi1;
-  ws2812_init(&hspi1);
-
-  /* Idle demo: dim white to show the node is alive */
-  ws2812_set_all(20, 20, 20);
-  ws2812_show();
-
-  uint8_t last_mission = 0xFF;
-
-  for (;;)
-  {
-    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
-
-    uint8_t current = (uint8_t)can_c_get_mission_index();
-
-    if (current != last_mission)
-    {
-      if (current == 0xFF)
-      {
-        ws2812_set_all(20, 20, 20);
-        ws2812_show();
-      }
-      else
-      {
-        ws2812_set_mission_color(current);
-      }
-      last_mission = current;
-    }
-  }
-}
+/* StartAmiTask is defined in ami_task.c */
 
 /* USER CODE END Application */
