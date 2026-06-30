@@ -36,6 +36,13 @@ extern FDCAN_HandleTypeDef hfdcan3;
 /* amiTask handle — defined in freertos.c */
 extern osThreadId_t amiTaskHandle;
 
+/* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
+ * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
+ * Cached on every sendAssiStatus() so the micro-ROS layer can mirror it
+ * on /assi/state — the ROS topic then carries the identical byte as the
+ * CAN frame, by construction (no second mapping to drift). */
+static std::atomic<uint8_t> g_assi_status_code{0x00u};
+
 namespace Can {
 
 void init()
@@ -421,6 +428,8 @@ void sendAssiStatus(uint8_t status)
      * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
      * The ASSI peripheral does the flashing/buzzer; the uDV only emits
      * the state code. Non-blocking enqueue, safe from any context. */
+    /* Mirror the same byte to the micro-ROS /assi/state publisher. */
+    g_assi_status_code.store(status);
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_ASSI,
         .IdType              = FDCAN_STANDARD_ID,
@@ -508,5 +517,13 @@ extern "C" int32_t can_c_get_mission_index(void)
 extern "C" uint8_t can_c_get_go_signal(void)
 {
     return g_res_go_signal.load();
+}
+
+extern "C" uint8_t can_c_get_assi_status_code(void)
+{
+    /* Last AS state byte emitted on CAN 0x100 (FS-Rules T14.9). The
+     * micro-ROS /assi/state publisher mirrors this so the DV pipeline
+     * reads the identical code the ASSI peripheral does. */
+    return g_assi_status_code.load();
 }
 

@@ -90,6 +90,7 @@ uint8_t  can_c_get_go_signal(void);
 float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);
 float    can_c_get_steer_angle_motor(void);
+uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
 
 #ifdef __cplusplus
 }

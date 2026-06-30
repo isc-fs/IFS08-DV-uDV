@@ -28,6 +28,7 @@
 
 #include <sensor_msgs/msg/imu.h>
 #include <std_msgs/msg/int32.h>
+#include <std_msgs/msg/u_int8.h>
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/string.h>
@@ -270,6 +271,20 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
     "debug");
 
+  // AS state publisher (~10 Hz) — FS-Rules T14.9 byte, mirrors CAN 0x100.
+  // The DV pipeline (mission_control) reconciles its lifecycle off this
+  // topic and also treats it as the uDV liveness heartbeat, so it must be
+  // published at a steady cadence (not edge-only). Best-effort/volatile
+  // like the other state heartbeats — the pipeline-side subscription must
+  // match this QoS (best-effort), NOT reliable+transient-local.
+  rcl_publisher_t assi_pub;
+  std_msgs__msg__UInt8 assi_msg;
+  assi_msg.data = 0;
+  rclc_publisher_init_best_effort(
+    &assi_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
+    "assi/state");
+
   // --- Subscriber ---
 
   // /cmd_test subscriber (toggle LED on receive)
@@ -399,6 +414,10 @@ void ros_task_run(void)
         // GO signal from RES
         go_msg.data = (int32_t)can_c_get_go_signal();
         (void)rcl_publish(&go_pub, &go_msg, NULL);
+
+        // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
+        assi_msg.data = can_c_get_assi_status_code();
+        (void)rcl_publish(&assi_pub, &assi_msg, NULL);
 
         // Spin executor to process /cmd_test subscription
         // Publish any queued debug messages from CAN service
