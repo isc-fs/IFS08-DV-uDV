@@ -1,4 +1,5 @@
 #include "ros_globals.h"
+#include "as_state.h"
 
 // Definitions of atomic feedback from PC, owned by RosTask
 std::atomic<float> g_accel_cmd{0.0f};
@@ -30,3 +31,11 @@ std::atomic<uint32_t> g_imu_drop_count{0};
 
 // ROS command queue
 QueueHandle_t g_ros_cmd_queue = nullptr;
+
+// C-callable raw AS-state accessor (see as_state.h). Single source of
+// truth shared by the ROS /as_state publisher and the CAN DV-logger
+// 0x502 frame, so both read the same AppTask telemetry snapshot.
+extern "C" uint8_t ros_get_as_state(void)
+{
+    return g_telemetry_as_state.load();
+}

@@ -39,6 +39,7 @@
 #include "main.h"
 #include "imu_service.h"      /* imu_sample_t */
 #include "can_globals.h"      /* can_c_get_* accessors */
+#include "as_state.h"         /* ros_get_as_state (raw ASState) */
 #include "dwt_time.h"         /* dwt_micros */
 #include "imu_task.h"         /* imu_debug_status */
 
@@ -285,6 +286,18 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
     "assi/state");
 
+  // Raw AS-state publisher (~10 Hz) — the AS state machine state itself
+  // (ASState: OFF=0 READY=1 DRIVING=2 EMERGENCY=3 FINISHED=4), distinct
+  // from the ASSI-indicator code on /assi/state. General-purpose AS-state
+  // signal for the pipeline / telemetry / debugging.
+  rcl_publisher_t as_state_pub;
+  std_msgs__msg__UInt8 as_state_msg;
+  as_state_msg.data = 0;
+  rclc_publisher_init_best_effort(
+    &as_state_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
+    "as_state");
+
   // --- Subscriber ---
 
   // /cmd_test subscriber (toggle LED on receive)
@@ -418,6 +431,10 @@ void ros_task_run(void)
         // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
         assi_msg.data = can_c_get_assi_status_code();
         (void)rcl_publish(&assi_pub, &assi_msg, NULL);
+
+        // Raw AS state-machine state (ASState enum, not the ASSI code)
+        as_state_msg.data = ros_get_as_state();
+        (void)rcl_publish(&as_state_pub, &as_state_msg, NULL);
 
         // Spin executor to process /cmd_test subscription
         // Publish any queued debug messages from CAN service
