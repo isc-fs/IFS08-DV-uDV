@@ -169,12 +169,27 @@ static const char *ebs_init_name(uint8_t s)
   }
 }
 
-/* Build the verbose human-readable state-machine line for /debug. When the AS
-   state changed since the last publish (prev != cur) it is shown as an arrow
-   "AS PREV->CUR"; otherwise just "AS CUR". sig is packed with the AS_SIG_*
-   bits from as_state.h. */
+/* Map can_c_get_res_status() codes to a short RES status name. */
+static const char *res_status_name(int32_t s)
+{
+  switch (s)
+  {
+    case  0: return "OK";       /* received, no e-stop / go */
+    case  1: return "ESTOP";    /* emergency stop asserted  */
+    case  2: return "GO";       /* go signal active         */
+    case -1: return "TIMEOUT";  /* RES PDO stale            */
+    case -2: return "NONE";     /* never received           */
+    default: return "?";
+  }
+}
+
+/* Build the compact grouped one-line state-machine snapshot for /debug, with
+   ` || ` group separators and `key:val` fields. When the AS state changed since
+   the last publish (prev != cur) it is shown as "AS PREV->CUR", else "AS CUR".
+   sig is packed with the AS_SIG_* bits from as_state.h; res is the raw
+   can_c_get_res_status() code. */
 static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
-                               uint8_t as, uint16_t sig, uint8_t ebs)
+                               uint8_t as, uint16_t sig, uint8_t ebs, int32_t res)
 {
   char as_tok[48];
   if (prev_as != as)
@@ -183,19 +198,20 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
     snprintf(as_tok, sizeof(as_tok), "AS %s", as_state_name(as));
 
   snprintf(buf, n,
-    "%s | ASMS %s | TS %s | SDC %s | EBS %s | ABS %s | brakes %s | "
-    "mission %s | R2D %s | %s | %s | EBS init: %s",
+    "%s || ASMS:%s TS:%s SDC:%s EBS:%s ABS:%s || "
+    "brakes:%s mission:%s R2D:%s motion:%s finished:%s || RES:%s || EBSinit:%s",
     as_tok,
     (sig & AS_SIG_ASMS_ON)        ? "on"         : "off",
     (sig & AS_SIG_TS_ACTIVE)      ? "on"         : "off",
     (sig & AS_SIG_SDC_RES_OPEN)   ? "open"       : "closed",
     (sig & AS_SIG_EBS_ACTIVATED)  ? "on"         : "off",
-    (sig & AS_SIG_ABS_CHECKS_OK)  ? "ok"         : "not ok",
+    (sig & AS_SIG_ABS_CHECKS_OK)  ? "ok"         : "fail",
     (sig & AS_SIG_BRAKES_ENGAGED) ? "on"         : "off",
     (sig & AS_SIG_MISSION_SEL)    ? "set"        : "unset",
     (sig & AS_SIG_R2D)            ? "on"         : "off",
     (sig & AS_SIG_STANDSTILL)     ? "standstill" : "moving",
-    (sig & AS_SIG_MISSION_DONE)   ? "finished"   : "running",
+    (sig & AS_SIG_MISSION_DONE)   ? "yes"        : "no",
+    res_status_name(res),
     ebs_init_name(ebs));
 }
 
@@ -436,6 +452,7 @@ void ros_task_run(void)
   uint8_t  last_as_state = ros_get_as_state();
   uint16_t last_signals  = ros_get_state_signals();
   uint8_t  last_ebs      = ros_get_ebs_init_state();
+  int32_t  last_res      = can_c_get_res_status(osKernelGetTickCount(), RES_TIMEOUT_MS);
   uint16_t state_dump_counter = STATE_DUMP_INTERVAL;  /* emit on the first sample */
 
   for (;;)
@@ -460,24 +477,27 @@ void ros_task_run(void)
 
       (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
-      // --- Full state-machine snapshot -> /debug (verbose; on change + ~2 Hz) ---
+      // --- Full state-machine snapshot -> /debug (grouped one line; on change + ~2 Hz) ---
       uint8_t  as_now  = ros_get_as_state();
       uint16_t sig_now = ros_get_state_signals();
       uint8_t  ebs_now = ros_get_ebs_init_state();
+      int32_t  res_now = can_c_get_res_status(osKernelGetTickCount(), RES_TIMEOUT_MS);
       bool changed  = (as_now != last_as_state) ||
                       (sig_now != last_signals) ||
-                      (ebs_now != last_ebs);
+                      (ebs_now != last_ebs) ||
+                      (res_now != last_res);
       bool periodic = (++state_dump_counter >= STATE_DUMP_INTERVAL);
       if (changed || periodic)
       {
-        char state_buf[224];
+        char state_buf[256];
         format_state_debug(state_buf, sizeof(state_buf),
-                           last_as_state, as_now, sig_now, ebs_now);
+                           last_as_state, as_now, sig_now, ebs_now, res_now);
         rosidl_runtime_c__String__assign(&debug_str_msg.data, state_buf);
         (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
         last_as_state = as_now;
         last_signals  = sig_now;
         last_ebs      = ebs_now;
+        last_res      = res_now;
         state_dump_counter = 0;
       }
 
