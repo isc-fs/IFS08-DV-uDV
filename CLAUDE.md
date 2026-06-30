@@ -95,7 +95,7 @@ Transport: USB CDC with HDLC framing via `micro_ros_stm32cubemx_utils/extra_sour
 
 ## STM32CubeMX Integration
 
-`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration. The SPI1 init (`MX_SPI1_Init`) lives in `main.c` inside a USER CODE block because CubeMX doesn't manage it.
+`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration. SPI1 (WS2812 driver, PA7 = `SPI1_MOSI`, transmit-only master) is a fully CubeMX-managed peripheral: enabled in `uDV.ioc`, with `MX_SPI1_Init`/`HAL_SPI_MspInit` generated into [Core/Src/spi.c](Core/Src/spi.c). It must stay in the `.ioc` — if SPI1 is removed there, regeneration drops `HAL_SPI_MODULE_ENABLED` from `stm32h7xx_hal_conf.h` and the build breaks with `unknown type name 'SPI_HandleTypeDef'`.
 
 ## Key Constraints
 

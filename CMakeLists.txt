@@ -27,6 +27,7 @@ set(C_SOURCES
     Core/Src/fdcan.c
     Core/Src/ws2812.c
     Core/Src/i2c.c
+    Core/Src/spi.c
     Core/Src/bmi088.c
     Core/Src/i2c_utils.c
     Core/Src/imu_service.c

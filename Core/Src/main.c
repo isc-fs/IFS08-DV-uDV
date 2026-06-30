@@ -23,6 +23,7 @@
 #include "cordic.h"
 #include "fdcan.h"
 #include "i2c.h"
+#include "spi.h"
 #include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -50,14 +51,14 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-SPI_HandleTypeDef hspi1;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-static void MX_SPI1_Init(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -106,8 +107,8 @@ int main(void)
   MX_I2C2_Init();
   MX_CORDIC_Init();
   MX_TIM2_Init();
-  /* USER CODE BEGIN 2 */
   MX_SPI1_Init();
+  /* USER CODE BEGIN 2 */
 
   /* Reboot reset-cause detection (idea from fix/17). A reset caused by
    * the IWDG means a prior fatal hang/lockup. Immediately assert the
@@ -209,35 +210,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-/**
-  * @brief SPI1 Initialization (WS2812 via MOSI on PA7)
-  *        ~3.2 MHz clock → 1 SPI byte ≈ 2 WS2812 bit periods
-  */
-static void MX_SPI1_Init(void)
-{
-  hspi1.Instance               = SPI1;
-  hspi1.Init.Mode              = SPI_MODE_MASTER;
-  hspi1.Init.Direction         = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize          = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity       = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase          = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS               = SPI_NSS_SOFT;
-  /* APB2 = 132 MHz (528 / 2 / 2), prescaler 64 → 132/64 ≈ 2.06 MHz
-     prescaler 32 → 132/32 ≈ 4.125 MHz — too fast
-     Use prescaler 64 for safe WS2812 timing */
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
-  hspi1.Init.FirstBit          = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode            = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.NSSPMode          = SPI_NSS_PULSE_DISABLE;
-  hspi1.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
-  hspi1.Init.IOSwap            = SPI_IO_SWAP_DISABLE;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
 
 /* USER CODE END 4 */
 

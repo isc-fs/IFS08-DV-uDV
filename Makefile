@@ -43,6 +43,7 @@ Core/Src/adc.c \
 Core/Src/cordic.c \
 Core/Src/fdcan.c \
 Core/Src/i2c.c \
+Core/Src/spi.c \
 Core/Src/bmi088.c \
 Core/Src/i2c_utils.c \
 Core/Src/imu_service.c \
