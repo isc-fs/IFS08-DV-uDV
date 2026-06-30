@@ -122,6 +122,15 @@ const osThreadAttr_t safetyTask_attributes = {
   .priority = (osPriority_t) osPriorityHigh,
 };
 
+/* Application state machine (AS state machine + EBS init sequence). Loops
+ * ~1 ms; monitored by the safety supervisor via SAFETY_TASK_APP. */
+osThreadId_t appTaskHandle;
+const osThreadAttr_t appTask_attributes = {
+  .name = "appTask",
+  .stack_size = 1024 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+
 osMessageQueueId_t imuQueueHandle;
 osMessageQueueId_t canRxQueueHandle;
 osMessageQueueId_t resRxQueueHandle;
@@ -154,6 +163,7 @@ void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element,
 void StartImuTask(void *argument);
 void StartCanTask(void *argument);
 void StartAmiTask(void *argument);
+void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -199,6 +209,7 @@ void MX_FREERTOS_Init(void) {
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
   amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
   safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
+  appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

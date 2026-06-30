@@ -107,13 +107,19 @@ micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.
 Core/Src/tim.c \
 Core/Src/iwdg.c \
 Core/Src/safety_eval.c \
-Core/Src/safety_monitor.c
+Core/Src/safety_monitor.c \
+Core/Src/hardware_io.c \
+Core/Src/ros_task_commands.c
 
 # C++ sources
 CPP_SOURCES = \
 Core/Src/can_interface.cpp \
 Core/Src/can_globals.cpp \
-Core/Src/can_task.cpp
+Core/Src/can_task.cpp \
+Core/Src/app_task.cpp \
+Core/Src/state_manager.cpp \
+Core/Src/ebs_manager.cpp \
+Core/Src/ros_globals.cpp
 
 # ASM sources
 ASM_SOURCES =  \

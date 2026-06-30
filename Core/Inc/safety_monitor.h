@@ -30,8 +30,9 @@ extern "C" {
 
 /** Identifiers for the safety-critical tasks the monitor watches. */
 typedef enum {
-    SAFETY_TASK_IMU = 0,  /**< imuTask 400 Hz sample loop  */
+    SAFETY_TASK_IMU = 0,  /**< imuTask 400 Hz sample loop   */
     SAFETY_TASK_CAN = 1,  /**< canTask RX/TX service loop   */
+    SAFETY_TASK_APP = 2,  /**< app_task state-machine loop  */
     SAFETY_NUM_TASKS      /**< count — keep last            */
 } safety_task_id_t;
 

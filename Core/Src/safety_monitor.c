@@ -28,10 +28,12 @@ extern void can_interface_send_assi_emergency_from_isr(void);
 #define SAFETY_PERIOD_MS         10u
 
 /* Per-task stall deadlines. imuTask ticks every ~2.5 ms (400 Hz);
- * canTask every ~5 ms. 100 ms is many missed iterations — long enough to
- * never false-trip on jitter, short enough to fail safe quickly. */
+ * canTask every ~5 ms; app_task (state machine) every ~1-2 ms. 100 ms is
+ * many missed iterations — long enough to never false-trip on jitter,
+ * short enough to fail safe quickly. */
 #define SAFETY_DEADLINE_IMU_MS   100u
 #define SAFETY_DEADLINE_CAN_MS   100u
+#define SAFETY_DEADLINE_APP_MS   100u
 
 /* Re-emit the ASSI EMERGENCY frame this often while latched, so external
  * systems keep seeing it even if the first frame was lost. */
@@ -116,6 +118,7 @@ void StartSafetyTask(void *argument)
     }
     watch[SAFETY_TASK_IMU].deadline_ms = SAFETY_DEADLINE_IMU_MS;
     watch[SAFETY_TASK_CAN].deadline_ms = SAFETY_DEADLINE_CAN_MS;
+    watch[SAFETY_TASK_APP].deadline_ms = SAFETY_DEADLINE_APP_MS;
 
     /* Come up already latched if this boot followed an IWDG reset (a
      * prior fatal hang) — main() flagged it via safety_flag_watchdog_reset.

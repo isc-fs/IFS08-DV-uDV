@@ -211,6 +211,38 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
             xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
         }
         break;
+
+    /* --- Autonomy state-machine inputs (ported from fix/17) ---
+     * These populate the CAN atomics StateManager reads. Without them the
+     * state machine sees TS/brake/SDC/R2D permanently false and stays in
+     * AS Off. */
+    case CAN_ID_TS_ACTIVE:               /* 0x504 */
+        g_can_ts_active.store(msg->data[0] != 0U);
+        break;
+
+    case CAN_ID_BRAKE_PRESSURE:          /* 0x505 — float32 LE, bar */
+        if (msg->dlc >= 4U) {
+            float brake_pressure = 0.0f;
+            memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
+            g_can_brake_pressure.store(brake_pressure);
+        }
+        break;
+
+    case CAN_ID_SDC_RES_OPEN:            /* 0x506 */
+        if (msg->dlc >= 1U) {
+            g_can_sdc_res_open.store(msg->data[0] != 0U);
+        }
+        break;
+
+    case CAN_ID_R2D:                     /* 0x509 — gated by listen_go */
+        if (msg->dlc >= 1U) {
+            bool r2d_received = (msg->data[0] != 0U);
+            if (r2d_received && g_can_listen_go.load()) {
+                g_can_r2d.store(true);
+            }
+        }
+        break;
+
     case CAN_ID_STEERING:
         //snprintf(srv_msg, sizeof(srv_msg), "id direcion detectado");
         HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
