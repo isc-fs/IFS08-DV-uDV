@@ -383,6 +383,27 @@ void sendDataLogger()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &hdr502, d502);
 }
 
+void sendAssiStatus(uint8_t status)
+{
+    /* ASSI state on FDCAN3 ID 0x100, 1-byte payload (FS-Rules T14.9:
+     * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
+     * The ASSI peripheral does the flashing/buzzer; the uDV only emits
+     * the state code. Non-blocking enqueue, safe from any context. */
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_ASSI,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_1,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+    uint8_t payload = status;
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
+}
+
 } // namespace Can
 
 // C-compatible wrapper for ISR — routes both FDCAN1 (RES bus) and
@@ -406,6 +427,14 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
     if (hfdcan->Instance == FDCAN1 || hfdcan->Instance == FDCAN3) {
         Can::isr_push_rx(hfdcan);
     }
+}
+
+/* C-callable ASSI EMERGENCY emitter for the safety monitor (and any ISR
+ * path). Sends the T14.9 EMERGENCY code (0x01) on 0x100 — non-blocking
+ * FIFO enqueue, so it is safe from the supervisor task or an ISR. */
+extern "C" void can_interface_send_assi_emergency_from_isr(void)
+{
+    Can::sendAssiStatus(0x01u);
 }
 
 /* C-callable accessors so freertos.c (C file) can read atomic CAN state */

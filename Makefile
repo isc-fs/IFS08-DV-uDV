@@ -104,7 +104,10 @@ micro_ros_stm32cubemx_utils/extra_sources/custom_memory_manager.c \
 micro_ros_stm32cubemx_utils/extra_sources/microros_allocators.c \
 micro_ros_stm32cubemx_utils/extra_sources/microros_time.c \
 micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c \
-Core/Src/tim.c
+Core/Src/tim.c \
+Core/Src/iwdg.c \
+Core/Src/safety_eval.c \
+Core/Src/safety_monitor.c
 
 # C++ sources
 CPP_SOURCES = \

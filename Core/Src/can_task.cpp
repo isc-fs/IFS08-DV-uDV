@@ -20,6 +20,7 @@ extern "C" {
 
 #include "can_interface.hpp"
 #include "can_task.h"
+#include "safety_monitor.h"   /* heartbeat / arm (extern "C" guarded) */
 
 /**
  * @brief C wrapper function that FreeRTOS calls
@@ -46,6 +47,9 @@ extern "C" void StartCanTask(void *argument)
 
     Can::sendSteeringMotor(1);  // Motor start — sent once before angle loop
 
+    /* Both buses up: the safety monitor now watches this loop. */
+    safety_arm(SAFETY_TASK_CAN);
+
     uint32_t last_dl_tick    = osKernelGetTickCount();
     uint32_t last_ping_tick  = osKernelGetTickCount();
     uint8_t  seq_idx  = 0;
@@ -54,6 +58,9 @@ extern "C" void StartCanTask(void *argument)
     // Task loop - runs indefinitely until the task is deleted
     while (1)
     {
+            /* Liveness beat — one per service loop (~5 ms). */
+            safety_heartbeat(SAFETY_TASK_CAN);
+
             can_msg_t rx_msg;
 
         // FDCAN3 (AMI + steering) — non-blocking

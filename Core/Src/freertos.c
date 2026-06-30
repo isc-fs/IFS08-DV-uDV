@@ -52,6 +52,7 @@
 #include "i2c.h"
 #include "cordic.h"
 #include "tim.h"
+#include "safety_monitor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -110,6 +111,15 @@ const osThreadAttr_t amiTask_attributes = {
   .name = "amiTask",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
+/* Safety supervisor: highest app priority so it still runs (and refreshes
+ * the IWDG / detects stalls) under load. Yields via osDelay each cycle. */
+osThreadId_t safetyTaskHandle;
+const osThreadAttr_t safetyTask_attributes = {
+  .name = "safetyTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 
 osMessageQueueId_t imuQueueHandle;
@@ -188,6 +198,7 @@ void MX_FREERTOS_Init(void) {
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
   amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
+  safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -639,6 +650,11 @@ void StartImuTask(void *argument)
   // Start TIM2 interrupt for deterministic 400Hz sampling
   HAL_TIM_Base_Start_IT(&htim2);
 
+  /* Calibration done and 400 Hz sampling armed: from here the safety
+   * monitor watches this loop. A stall (e.g. TIM2 stops, I2C wedges)
+   * now trips the watchdog emergency. */
+  safety_arm(SAFETY_TASK_IMU);
+
   for (;;)
   {
     osSemaphoreAcquire(imuSemHandle, osWaitForever);
@@ -653,6 +669,10 @@ void StartImuTask(void *argument)
       sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
     }
+
+    /* Liveness beat: one per 400 Hz wake, whether or not the sample
+     * read succeeded — proves the loop is still being serviced. */
+    safety_heartbeat(SAFETY_TASK_IMU);
   }
 }
 
