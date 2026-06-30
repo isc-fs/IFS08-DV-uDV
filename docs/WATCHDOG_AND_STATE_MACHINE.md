@@ -118,14 +118,61 @@ hook; remove if undesired.
 
 ---
 
-## 4. Tests
+## 4. ASSI vs AMI — design boundary (DON'T conflate)
+
+The uDV **does not drive the ASSI lights**, and the `IFS08-DV_AMI` repo does
+**not** contain ASSI light code. These are two different rules devices:
+
+- **ASSI** (Autonomous System *Status* Indicator, T 14.9) — the three
+  yellow/blue status lights + emergency buzzer.
+- **AMI** (Autonomous *Mission* Indicator, T 14.10) — the cockpit mission
+  selector. That is what the `IFS08-DV_AMI` repo is: button/LCD mission
+  pick that broadcasts the choice on CAN `0x503`. No status-light logic.
+
+What uDV actually does for ASSI: the FSM computes the AS status, and uDV
+**only emits a 1-byte status code on CAN**. A separate downstream **ASSI
+peripheral** owns the physical illumination — the yellow/blue mapping, the
+2–5 Hz / 50 % flashing in AS Driving & AS Emergency (T 14.9.1), and the
+emergency buzzer (T 14.9.5). None of that lives in this firmware.
+
+- `getAssiStatusCode()` — `state_manager.cpp:117` (ASState → byte:
+  OFF 0x00 / EMERGENCY 0x01 / READY 0x02 / DRIVING 0x03 / FINISHED 0x04).
+- `Can::sendAssiStatus()` — `can_interface.cpp:418`, FDCAN3 ID `0x100`,
+  1-byte payload, sent on state change from `app_task.cpp:142`/`:177`, and
+  re-emitted as EMERGENCY by the safety monitor (`safety_monitor.c:142`).
+
+The `0x100` codes are a **private bus protocol** with the ASSI node, not a
+rules-mandated encoding — keep them in sync with that node's firmware.
+
+**Implications for upcoming work:**
+- Do **not** add light-flashing / duty-cycle / buzzer logic to uDV, and do
+  **not** try to pull such functions from `IFS08-DV_AMI` — they don't exist
+  there. That logic belongs in the ASSI peripheral firmware.
+- The on-board WS2812 strip (`ws2812_set_mission_color()`, driven by
+  `amiTask`) is the **mission** color, unrelated to the ASSI status lights.
+- Rules compliance for ASSI illumination/flashing/sound is owned by the
+  ASSI node; from uDV's side, only the status-code mapping above is in scope.
+
+---
+
+## 5. Tests
 
 Host suites (no HAL/ROS, run on a laptop):
 
 ```bash
-cd tests/host && make        # builds + runs both
+cd tests/host && make        # builds + runs all suites
 ```
 
+- `build_integrity` (`check_build_integrity.sh`) — **static build-config
+  guard.** The logic suites link a hand-picked source subset, so they are
+  blind to a mis-wired firmware build. This script catches that class:
+  (1) Makefile ⇄ CMakeLists source lists are identical — the drift that
+  silently dropped the whole watchdog/state-machine set from the CMake build
+  and broke the link with `undefined reference to safety_* / Start*Task`;
+  (2) every referenced source exists on disk; (3) no orphan `Core/Src`
+  source left out of the build; (4) no duplicate entries; (5) `Start*Task`
+  entry points defined in C++ are `extern "C"` (else the mangled name
+  fails to link). **Add new sources to BOTH build files** or this fails.
 - `test_safety_eval` — IWDG-monitor stall detection (1130 checks).
 - `test_state_machine` — real `state_manager`/`ebs_manager` linked against
   a controllable `hardware_io` stub: ASSI codes, the full EBS init

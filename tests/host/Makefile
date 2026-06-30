@@ -5,6 +5,10 @@
 #   make clean
 #
 # Suites:
+#   build_integrity      — static build-config checks (Makefile<->CMake source
+#                          parity, orphan/missing sources, extern "C" task
+#                          entry points). Catches link-breaking build drift the
+#                          logic suites are blind to (check_build_integrity.sh).
 #   test_safety_eval     — pure IWDG-monitor stall-detection (safety_eval.c)
 #   test_state_machine    — AS state machine + EBS init sequence
 #                           (state_manager.cpp / ebs_manager.cpp, linked for
@@ -53,6 +57,7 @@ test_rules_compliance: test_rules_compliance.cpp safety_eval.o
 	$(CXX) $(CXXFLAGS) -o $@ test_rules_compliance.cpp safety_eval.o
 
 test: $(BINS)
+	@echo "=== build_integrity ===";       sh ./check_build_integrity.sh
 	@echo "=== test_safety_eval ===";      ./test_safety_eval
 	@echo "=== test_state_machine ===";    ./test_state_machine
 	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
