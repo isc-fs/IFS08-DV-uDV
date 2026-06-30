@@ -1,35 +1,56 @@
-# Host unit tests for the safety-monitor stall-detection logic.
+# Host unit tests — run the firmware's testable logic off-target (no
+# arm-none-eabi, no HAL, no scheduler).
 #
-# Builds the dependency-free Core/Src/safety_eval.c against the host
-# toolchain (no arm-none-eabi, no HAL, no FreeRTOS) and runs the test.
-#
-#   make            # build + run
+#   make            # build + run ALL suites
 #   make clean
 #
-# The point of keeping safety_eval.c HAL-free is exactly this: the
-# safety-critical stall decision is testable on a laptop.
+# Suites:
+#   test_safety_eval     — pure IWDG-monitor stall-detection (safety_eval.c)
+#   test_state_machine    — AS state machine + EBS init sequence
+#                           (state_manager.cpp / ebs_manager.cpp, linked for
+#                           real against a controllable hardware_io stub)
 
 CORE_INC := ../../Core/Inc
 CORE_SRC := ../../Core/Src
+STUBS    := stubs
 
 CXX      ?= c++
 CC       ?= cc
+
+# Strict flags for our own dependency-free unit (safety_eval).
 CFLAGS   := -std=c11   -I$(CORE_INC) -Wall -Wextra -Werror -g -O0
 CXXFLAGS := -std=c++17 -I$(CORE_INC) -Wall -Wextra -Werror -g -O0
 
-BIN := test_safety_eval
+# State-machine suite links real firmware sources (state_manager, ebs_manager,
+# can_globals, ros_globals). Stubs/ shadows the RTOS headers those pull in;
+# -Wall (not -Werror) so pre-existing style warnings in the brought-over
+# sources don't block the behavioural tests.
+SM_CXXFLAGS := -std=c++17 -I$(STUBS) -I$(CORE_INC) -Wall -Wextra -g -O0
+SM_SRCS     := test_state_machine.cpp \
+               $(CORE_SRC)/state_manager.cpp \
+               $(CORE_SRC)/ebs_manager.cpp \
+               $(CORE_SRC)/can_globals.cpp \
+               $(CORE_SRC)/ros_globals.cpp
+
+BINS := test_safety_eval test_state_machine
 
 .PHONY: all test clean
 all: test
 
-$(BIN): test_safety_eval.cpp safety_eval.o
+# ---- suite 1: safety_eval ------------------------------------------------
+test_safety_eval: test_safety_eval.cpp safety_eval.o
 	$(CXX) $(CXXFLAGS) -o $@ test_safety_eval.cpp safety_eval.o
 
 safety_eval.o: $(CORE_SRC)/safety_eval.c $(CORE_INC)/safety_eval.h
 	$(CC) $(CFLAGS) -c -o $@ $(CORE_SRC)/safety_eval.c
 
-test: $(BIN)
-	./$(BIN)
+# ---- suite 2: state machine + EBS ---------------------------------------
+test_state_machine: $(SM_SRCS)
+	$(CXX) $(SM_CXXFLAGS) -o $@ $(SM_SRCS)
+
+test: $(BINS)
+	@echo "=== test_safety_eval ===";  ./test_safety_eval
+	@echo "=== test_state_machine ==="; ./test_state_machine
 
 clean:
-	rm -rf $(BIN) *.o *.dSYM
+	rm -rf $(BINS) *.o *.dSYM

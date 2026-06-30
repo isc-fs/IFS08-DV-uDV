@@ -1,0 +1,333 @@
+/**
+ * @file test_state_machine.cpp
+ * @brief Host unit tests for the autonomy state machine + EBS manager.
+ *
+ * Exercises the REAL state_manager.cpp / ebs_manager.cpp logic (linked,
+ * not re-implemented) against a controllable hardware_io stub + the real
+ * can_globals / ros_globals atomics. Verifies:
+ *   - getAssiStatusCode mapping (FS-Rules T14.9 / T14.8 codes)
+ *   - the EBS init sequence (happy path + failure/timeout branches + checks)
+ *   - every AS state transition (OFF/READY/DRIVING/EMERGENCY/FINISHED)
+ *     incl. the EBS-readback polarity the integration fixed.
+ *
+ * No HAL / FreeRTOS scheduler — hardware_io is stubbed here, and the
+ * stub headers in stubs/ provide the opaque RTOS types can_globals.h
+ * pulls in. Build + run:  make test_state_machine
+ */
+#include <cstdio>
+
+#include "state_manager.hpp"
+#include "ebs_manager.hpp"
+#include "can_globals.h"
+#include "ros_globals.h"
+
+// ---------------------------------------------------------------------
+// Controllable hardware_io stub (replaces the HAL-backed hardware_io.c).
+// Models the EBS actuator pins so is_ebs_active() reflects the HIGH=fire
+// convention the real driver uses (enable(true) -> pin HIGH -> active).
+// ---------------------------------------------------------------------
+namespace {
+bool     s_asms_on        = false;
+bool     s_sdc_ready      = false;
+float    s_pressure1      = 0.0f;
+float    s_pressure2      = 0.0f;
+bool     s_ebs_pin1       = false;   // D1 (HIGH = fire)
+bool     s_ebs_pin2       = false;   // D2 (HIGH = fire)
+bool     s_sdc_closed     = false;   // D4 (HIGH = SDC closed)
+uint32_t s_now_ms         = 0;
+}  // namespace
+
+extern "C" {
+void  hardware_io_set_as_close_sdc(bool on)            { s_sdc_closed = on; }
+void  hardware_io_enable_ebs_actuator_1(bool enable)   { s_ebs_pin1 = enable; }
+void  hardware_io_enable_ebs_actuator_2(bool enable)   { s_ebs_pin2 = enable; }
+bool  hardware_io_is_ebs_active(void)                  { return s_ebs_pin1 || s_ebs_pin2; }
+bool  hardware_io_read_sdc_is_ready(void)              { return s_sdc_ready; }
+bool  hardware_io_read_asms_on(void)                   { return s_asms_on; }
+bool  hardware_io_read_sdc_res_open(void)              { return false; }
+float hardware_io_read_actuator1_storage_pressure(void){ return s_pressure1; }
+float hardware_io_read_actuator2_storage_pressure(void){ return s_pressure2; }
+uint32_t hardware_io_now_ms(void)                      { return s_now_ms; }
+void  hardware_io_watchdog_kick(void)                  { /* no-op */ }
+}
+
+// ---------------------------------------------------------------------
+// Tiny test harness
+// ---------------------------------------------------------------------
+static int g_failures = 0;
+static int g_checks = 0;
+
+#define CHECK(cond)                                                       \
+    do {                                                                  \
+        ++g_checks;                                                       \
+        if (!(cond)) {                                                    \
+            ++g_failures;                                                 \
+            std::printf("  FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); \
+        }                                                                 \
+    } while (0)
+
+/* Reset both singletons, the stub hardware, and all input globals to a
+ * clean OFF/Start baseline before each test. */
+static void reset_world(void)
+{
+    s_asms_on = false; s_sdc_ready = false;
+    s_pressure1 = 0.0f; s_pressure2 = 0.0f;
+    s_ebs_pin1 = false; s_ebs_pin2 = false;
+    s_sdc_closed = false; s_now_ms = 0;
+
+    g_can_ts_active.store(false);
+    g_can_sdc_res_open.store(false);
+    g_can_brake_pressure.store(0.0f);
+    g_can_mission_id.store(0);
+    g_can_r2d.store(false);
+    g_imu_vehicle_standstill.store(true);
+    g_set_mission_ready.store(false);
+    g_finished_cmd.store(false);
+
+    EbsManager::getInstance().reset();
+    StateManager::getInstance().reset();
+}
+
+/* Step the EBS init FSM all the way to Done with nominal hardware. */
+static void drive_ebs_to_done(EbsManager& ebs)
+{
+    s_sdc_ready = true;  ebs.initSequenceStep();   // Start -> WaitLow
+    s_sdc_ready = false; ebs.initSequenceStep();   // WaitLow -> CheckPressure
+    s_pressure1 = 2.0f; s_pressure2 = 2.0f;
+    ebs.initSequenceStep();                        // CheckPressure -> WaitTS (closes SDC)
+    g_can_ts_active.store(true);
+    ebs.initSequenceStep();                        // WaitTS -> CheckActuator1 (A1 on)
+    g_can_brake_pressure.store(2.0f);
+    ebs.initSequenceStep();                        // CheckActuator1 -> WaitInter (A1 off)
+    s_now_ms += 6000;
+    ebs.initSequenceStep();                        // WaitInter -> CheckActuator2 (A2 on)
+    ebs.initSequenceStep();                        // CheckActuator2 -> Done (A2 off)
+}
+
+/* Helper: set the "all preconditions met" inputs for READY/DRIVING. */
+static void set_drive_preconditions(void)
+{
+    s_asms_on = true;
+    g_can_ts_active.store(true);
+    g_can_mission_id.store(5);
+    g_set_mission_ready.store(true);
+}
+
+// ---------------------------------------------------------------------
+// getAssiStatusCode (FS-Rules T14.9 / T14.8 byte codes)
+// ---------------------------------------------------------------------
+static void test_assi_codes(void)
+{
+    CHECK(StateManager::getAssiStatusCode(ASState::OFF)       == 0x00);
+    CHECK(StateManager::getAssiStatusCode(ASState::EMERGENCY) == 0x01);
+    CHECK(StateManager::getAssiStatusCode(ASState::READY)     == 0x02);
+    CHECK(StateManager::getAssiStatusCode(ASState::DRIVING)   == 0x03);
+    CHECK(StateManager::getAssiStatusCode(ASState::FINISHED)  == 0x04);
+}
+
+// ---------------------------------------------------------------------
+// EBS init sequence
+// ---------------------------------------------------------------------
+static void test_ebs_happy_path(void)
+{
+    reset_world();
+    EbsManager& ebs = EbsManager::getInstance();
+    CHECK(ebs.getInitState() == EBSInitState::Start);
+
+    s_sdc_ready = true;  CHECK(ebs.initSequenceStep() == EBSInitState::WaitLow);
+    s_sdc_ready = false; CHECK(ebs.initSequenceStep() == EBSInitState::CheckPressure);
+    s_pressure1 = 2.0f; s_pressure2 = 2.0f;
+    CHECK(ebs.initSequenceStep() == EBSInitState::WaitTS);
+    CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
+    g_can_ts_active.store(true);
+    CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
+    CHECK(s_ebs_pin1 == true);                   // A1 energised
+    g_can_brake_pressure.store(2.0f);
+    CHECK(ebs.initSequenceStep() == EBSInitState::WaitInterActuatorCheck);
+    CHECK(s_ebs_pin1 == false);                  // A1 released
+    s_now_ms += 6000;
+    CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator2);
+    CHECK(s_ebs_pin2 == true);                   // A2 energised
+    CHECK(ebs.initSequenceStep() == EBSInitState::Done);
+    CHECK(s_ebs_pin2 == false);                  // A2 released
+    CHECK(ebs.ASBChecksOK() == true);
+}
+
+static void test_ebs_waitlow_timeout(void)
+{
+    reset_world();
+    EbsManager& ebs = EbsManager::getInstance();
+    s_sdc_ready = true; ebs.initSequenceStep();          // -> WaitLow
+    /* SDC never drops; advance past the 5 s timeout. */
+    s_now_ms += 5001;
+    CHECK(ebs.initSequenceStep() == EBSInitState::Failed);
+    CHECK(ebs.ASBChecksOK() == false);
+}
+
+static void test_ebs_pressure_failure(void)
+{
+    reset_world();
+    EbsManager& ebs = EbsManager::getInstance();
+    s_sdc_ready = true;  ebs.initSequenceStep();          // -> WaitLow
+    s_sdc_ready = false; ebs.initSequenceStep();          // -> CheckPressure
+    s_pressure1 = 0.5f; s_pressure2 = 0.5f;               // below threshold
+    CHECK(ebs.initSequenceStep() == EBSInitState::Failed);
+}
+
+static void test_ebs_checks(void)
+{
+    reset_world();
+    EbsManager& ebs = EbsManager::getInstance();
+    /* checkStoragePressures: strictly > 1.0 on BOTH tanks. */
+    s_pressure1 = 1.0f; s_pressure2 = 2.0f; CHECK(ebs.checkStoragePressures() == false);
+    s_pressure1 = 1.1f; s_pressure2 = 1.1f; CHECK(ebs.checkStoragePressures() == true);
+    s_pressure1 = 2.0f; s_pressure2 = 0.9f; CHECK(ebs.checkStoragePressures() == false);
+    /* checkBrakeLinePressure: > 1.0 bar. */
+    g_can_brake_pressure.store(1.0f); CHECK(ebs.checkBrakeLinePressure() == false);
+    g_can_brake_pressure.store(1.5f); CHECK(ebs.checkBrakeLinePressure() == true);
+    /* SafeManual: both tanks < 0.1 (empty). */
+    s_pressure1 = 0.05f; s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == true);
+    s_pressure1 = 0.2f;  s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == false);
+    /* activateEBS energises both actuators (HIGH = fire). */
+    ebs.deactivateEBS(); CHECK(hardware_io_is_ebs_active() == false);
+    ebs.activateEBS();   CHECK(hardware_io_is_ebs_active() == true);
+}
+
+// ---------------------------------------------------------------------
+// AS state machine transitions
+// ---------------------------------------------------------------------
+static void test_sm_starts_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    sm.update();
+    CHECK(sm.getState() == ASState::OFF);
+}
+
+static void test_sm_preconditions_without_ebs_done_is_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    set_drive_preconditions();
+    g_can_brake_pressure.store(2.0f);
+    /* EBS not driven to Done -> abs_checks_ok false -> still OFF. */
+    sm.update();
+    CHECK(sm.getState() == ASState::OFF);
+}
+
+static void test_sm_ready(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    drive_ebs_to_done(EbsManager::getInstance());
+    set_drive_preconditions();
+    g_can_brake_pressure.store(2.0f);   // brakes engaged
+    g_can_r2d.store(false);             // no R2D yet
+    sm.update();
+    CHECK(sm.getState() == ASState::READY);
+}
+
+static void test_sm_driving(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    drive_ebs_to_done(EbsManager::getInstance());
+    set_drive_preconditions();
+    g_can_brake_pressure.store(2.0f);
+    g_can_r2d.store(true);              // R2D -> DRIVING
+    sm.update();
+    CHECK(sm.getState() == ASState::DRIVING);
+}
+
+static void test_sm_preconditions_but_no_brakes_no_r2d_is_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    drive_ebs_to_done(EbsManager::getInstance());
+    set_drive_preconditions();
+    g_can_brake_pressure.store(0.0f);  // brakes NOT engaged
+    g_can_r2d.store(false);            // and no R2D
+    sm.update();
+    CHECK(sm.getState() == ASState::OFF);
+}
+
+static void test_sm_emergency_on_ebs_active(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    EbsManager& ebs = EbsManager::getInstance();
+    drive_ebs_to_done(ebs);
+    ebs.activateEBS();                 // EBS fired, pins HIGH
+    g_finished_cmd.store(false);       // mission not finished
+    sm.update();
+    CHECK(sm.getState() == ASState::EMERGENCY);
+}
+
+static void test_sm_emergency_when_finished_but_moving(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    EbsManager& ebs = EbsManager::getInstance();
+    drive_ebs_to_done(ebs);
+    ebs.activateEBS();
+    g_finished_cmd.store(true);
+    g_imu_vehicle_standstill.store(false);   // still moving
+    sm.update();
+    CHECK(sm.getState() == ASState::EMERGENCY);
+}
+
+static void test_sm_finished(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    EbsManager& ebs = EbsManager::getInstance();
+    drive_ebs_to_done(ebs);
+    ebs.activateEBS();
+    g_finished_cmd.store(true);
+    g_imu_vehicle_standstill.store(true);
+    g_can_sdc_res_open.store(false);         // SDC not open at RES
+    sm.update();
+    CHECK(sm.getState() == ASState::FINISHED);
+}
+
+static void test_sm_finished_but_sdc_open_is_emergency(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    EbsManager& ebs = EbsManager::getInstance();
+    drive_ebs_to_done(ebs);
+    ebs.activateEBS();
+    g_finished_cmd.store(true);
+    g_imu_vehicle_standstill.store(true);
+    g_can_sdc_res_open.store(true);          // SDC open -> EMERGENCY, not FINISHED
+    sm.update();
+    CHECK(sm.getState() == ASState::EMERGENCY);
+}
+
+int main(void)
+{
+    test_assi_codes();
+
+    test_ebs_happy_path();
+    test_ebs_waitlow_timeout();
+    test_ebs_pressure_failure();
+    test_ebs_checks();
+
+    test_sm_starts_off();
+    test_sm_preconditions_without_ebs_done_is_off();
+    test_sm_ready();
+    test_sm_driving();
+    test_sm_preconditions_but_no_brakes_no_r2d_is_off();
+    test_sm_emergency_on_ebs_active();
+    test_sm_emergency_when_finished_but_moving();
+    test_sm_finished();
+    test_sm_finished_but_sdc_open_is_emergency();
+
+    std::printf("\nstate_machine: %d checks, %d failures\n",
+                g_checks, g_failures);
+    if (g_failures == 0) {
+        std::printf("All tests green.\n");
+        return 0;
+    }
+    return 1;
+}
