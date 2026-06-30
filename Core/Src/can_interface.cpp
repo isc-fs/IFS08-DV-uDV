@@ -1,4 +1,5 @@
 #include "can_interface.hpp"
+#include "as_state.h"
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -406,8 +407,13 @@ void sendDataLogger()
 
     /* 0x502 — DV system status (5 bytes) */
     uint8_t d502[5] = {0};
-    /* AS_status low nibble: 1 = OFF (placeholder until state_manager wires) */
-    d502[0] = 1u;
+    /* AS_status low nibble (FS DV-logger encoding): 1=OFF 2=READY
+     * 3=DRIVING 4=EMERGENCY 5=FINISHED. Mapped from the live AS state
+     * machine (ros_get_as_state(): ASState OFF=0 READY=1 DRIVING=2
+     * EMERGENCY=3 FINISHED=4). CONFIRM against the team CAN DBC. */
+    static const uint8_t k_as_to_dl_nibble[5] = {1u, 2u, 3u, 4u, 5u};
+    uint8_t as = ros_get_as_state();
+    d502[0] = (as < 5u) ? k_as_to_dl_nibble[as] : 1u;
     /* AMI_state bits 5-7: derived from mission id (1..7 maps to slots 1..7) */
     int mid = g_can_mission_id.load();
     if (mid >= 0 && mid < 7) {
