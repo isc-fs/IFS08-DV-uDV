@@ -28,6 +28,7 @@
 // ---------------------------------------------------------------------
 namespace {
 bool     s_asms_on        = false;
+bool     s_tsms_on        = false;
 bool     s_sdc_ready      = false;
 float    s_pressure1      = 0.0f;
 float    s_pressure2      = 0.0f;
@@ -44,6 +45,7 @@ void  hardware_io_enable_ebs_actuator_2(bool enable)   { s_ebs_pin2 = enable; }
 bool  hardware_io_is_ebs_active(void)                  { return s_ebs_pin1 || s_ebs_pin2; }
 bool  hardware_io_read_sdc_is_ready(void)              { return s_sdc_ready; }
 bool  hardware_io_read_asms_on(void)                   { return s_asms_on; }
+bool  hardware_io_read_tsms_on(void)                   { return s_tsms_on; }
 bool  hardware_io_read_sdc_res_open(void)              { return false; }
 float hardware_io_read_actuator1_storage_pressure(void){ return s_pressure1; }
 float hardware_io_read_actuator2_storage_pressure(void){ return s_pressure2; }
@@ -70,7 +72,7 @@ static int g_checks = 0;
  * clean OFF/Start baseline before each test. */
 static void reset_world(void)
 {
-    s_asms_on = false; s_sdc_ready = false;
+    s_asms_on = false; s_tsms_on = false; s_sdc_ready = false;
     s_pressure1 = 0.0f; s_pressure2 = 0.0f;
     s_ebs_pin1 = false; s_ebs_pin2 = false;
     s_sdc_closed = false; s_now_ms = 0;
@@ -95,7 +97,7 @@ static void drive_ebs_to_done(EbsManager& ebs)
     s_sdc_ready = false; ebs.initSequenceStep();   // WaitLow -> CheckPressure
     s_pressure1 = 2.0f; s_pressure2 = 2.0f;
     ebs.initSequenceStep();                        // CheckPressure -> WaitTS (closes SDC)
-    g_can_ts_active.store(true);
+    s_asms_on = true; s_tsms_on = true;            // TS = ASMS(A3) && TSMS(A6)
     ebs.initSequenceStep();                        // WaitTS -> CheckActuator1 (A1 on)
     g_can_brake_pressure.store(2.0f);
     ebs.initSequenceStep();                        // CheckActuator1 -> WaitInter (A1 off)
@@ -108,7 +110,7 @@ static void drive_ebs_to_done(EbsManager& ebs)
 static void set_drive_preconditions(void)
 {
     s_asms_on = true;
-    g_can_ts_active.store(true);
+    s_tsms_on = true;                              // TS = ASMS(A3) && TSMS(A6)
     g_can_mission_id.store(5);
     g_set_mission_ready.store(true);
 }
@@ -139,7 +141,7 @@ static void test_ebs_happy_path(void)
     s_pressure1 = 2.0f; s_pressure2 = 2.0f;
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitTS);
     CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
-    g_can_ts_active.store(true);
+    s_asms_on = true; s_tsms_on = true;          // TS = ASMS(A3) && TSMS(A6)
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
     CHECK(s_ebs_pin1 == true);                   // A1 energised
     g_can_brake_pressure.store(2.0f);

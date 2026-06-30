@@ -6,7 +6,6 @@
 #include "ebs_manager.hpp"
 #include <atomic>
 
-extern std::atomic<bool> g_can_ts_active;
 extern std::atomic<float> g_can_brake_pressure;
 
 EbsManager::EbsManager()
@@ -53,7 +52,8 @@ EBSInitState EbsManager::initSequenceStep()
             break;
 
         case EBSInitState::WaitTS:
-            if (g_can_ts_active.load())
+            // TS is sensed locally: TSMS (A6) AND ASMS (A3) HIGH (was CAN 0x504).
+            if (hardware_io_read_asms_on() && hardware_io_read_tsms_on())
             {
                 init_state_ = EBSInitState::CheckActuator1;
                 hardware_io_enable_ebs_actuator_1(true);

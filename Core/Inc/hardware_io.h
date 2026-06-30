@@ -32,6 +32,7 @@ bool hardware_io_is_ebs_active(void);
  */
 bool hardware_io_read_sdc_is_ready(void);
 bool hardware_io_read_asms_on(void);
+bool hardware_io_read_tsms_on(void);
 bool hardware_io_read_sdc_res_open(void);
 
 /**

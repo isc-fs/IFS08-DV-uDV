@@ -72,7 +72,8 @@ void hardware_io_enable_ebs_actuator_2(bool enable)
 
 bool hardware_io_read_sdc_is_ready(void)
 {
-    // SDC ready is wired to A1 -> ADC3_INP3 -> ADC channel 3
+    // NOTE: A1 -> ADC3_INP3 (ch3) physically carries RES_1_IN on the PCB, not an
+    // "SDC ready" signal. Currently unused. See docs/STATE_MACHINE_INPUTS.md
     return hardware_io_read_adc_level(ADC_CHANNEL_3);
 }
 
@@ -82,9 +83,16 @@ bool hardware_io_read_asms_on(void)
     return hardware_io_read_adc_level(ADC_CHANNEL_2);
 }
 
+bool hardware_io_read_tsms_on(void)
+{
+    // TSMS (Tractive System Master Switch) wired to A6 -> ADC3_INP11 -> ADC channel 11
+    return hardware_io_read_adc_level(ADC_CHANNEL_11);
+}
+
 bool hardware_io_read_sdc_res_open(void)
 {
-    // SDC_RES_OPEN wired to A2 -> ADC3_INP7 -> ADC channel 7
+    // NOTE: A2 -> ADC3_INP7 (ch7) physically carries GO_RES (the RES go signal) on
+    // the PCB, not "SDC_RES_OPEN". Currently unused. See docs/STATE_MACHINE_INPUTS.md
     return hardware_io_read_adc_level(ADC_CHANNEL_7);
 }
 
