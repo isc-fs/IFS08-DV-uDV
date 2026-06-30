@@ -51,6 +51,15 @@ void safety_heartbeat(safety_task_id_t id);
 void safety_arm(safety_task_id_t id);
 
 /**
+ * @brief Record that this boot followed an IWDG watchdog reset.
+ * Called once from main() reset-cause detection (before the scheduler
+ * starts) when RCC_FLAG_IWDG1RST was set. Makes the safety task come up
+ * already LATCHED in emergency — a watchdog reset means a prior fatal
+ * hang, so we must not silently re-arm into normal operation.
+ */
+void safety_flag_watchdog_reset(void);
+
+/**
  * @brief FreeRTOS entry point for the safety supervisor task.
  * Starts the IWDG, then loops: evaluate task health, refresh the IWDG,
  * and latch the graceful emergency on a stall.

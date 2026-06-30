@@ -29,7 +29,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "safety_monitor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -108,6 +108,25 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   MX_SPI1_Init();
+
+  /* Reboot reset-cause detection (idea from fix/17). A reset caused by
+   * the IWDG means a prior fatal hang/lockup. Immediately assert the
+   * safe state — EBS fired + SDC open (fix/15 polarity: HIGH = fire,
+   * D4 LOW = SDC open) — and tell the safety monitor to come up LATCHED
+   * in emergency rather than re-arming into normal operation. GPIO is
+   * already configured as output by MX_GPIO_Init() above. The reset
+   * flags persist across the reset, so this is observed even though the
+   * IWDG itself is started later (in the safety task). */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != RESET)
+  {
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);   /* fire EBS  */
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);   /* fire EBS  */
+    HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET); /* open SDC  */
+    safety_flag_watchdog_reset();
+  }
+  /* Clear all reset-cause flags so the next boot starts clean (otherwise
+   * the IWDG flag stays set and every reboot would look watchdog-caused). */
+  __HAL_RCC_CLEAR_RESET_FLAGS();
   /* USER CODE END 2 */
 
   /* Init scheduler */

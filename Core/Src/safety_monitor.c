@@ -42,6 +42,15 @@ extern void can_interface_send_assi_emergency_from_isr(void);
 static volatile uint32_t s_heartbeat[SAFETY_NUM_TASKS];
 static volatile uint8_t  s_armed[SAFETY_NUM_TASKS];
 
+/* Set from main() when this boot followed an IWDG reset (see
+ * safety_flag_watchdog_reset). Makes the supervisor come up latched. */
+static volatile uint8_t  s_boot_watchdog_reset = 0u;
+
+void safety_flag_watchdog_reset(void)
+{
+    s_boot_watchdog_reset = 1u;
+}
+
 void safety_heartbeat(safety_task_id_t id)
 {
     if ((unsigned)id < (unsigned)SAFETY_NUM_TASKS) {
@@ -108,7 +117,10 @@ void StartSafetyTask(void *argument)
     watch[SAFETY_TASK_IMU].deadline_ms = SAFETY_DEADLINE_IMU_MS;
     watch[SAFETY_TASK_CAN].deadline_ms = SAFETY_DEADLINE_CAN_MS;
 
-    uint8_t  emergency_latched = 0u;
+    /* Come up already latched if this boot followed an IWDG reset (a
+     * prior fatal hang) — main() flagged it via safety_flag_watchdog_reset.
+     * We hold the safe state and report EMERGENCY instead of re-arming. */
+    uint8_t  emergency_latched = s_boot_watchdog_reset;
     uint32_t last_assi_ms = 0u;
 
     for (;;) {
