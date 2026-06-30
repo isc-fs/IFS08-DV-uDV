@@ -39,3 +39,26 @@ extern "C" uint8_t ros_get_as_state(void)
 {
     return g_telemetry_as_state.load();
 }
+
+// C-callable snapshot of the 10 StateManagerSignals booleans, packed with the
+// AS_SIG_* bits from as_state.h so the C ROS task can format them for /debug.
+extern "C" uint16_t ros_get_state_signals(void)
+{
+    uint16_t b = 0;
+    if (g_telemetry_asms_on.load())           b |= AS_SIG_ASMS_ON;
+    if (g_telemetry_ts_active.load())         b |= AS_SIG_TS_ACTIVE;
+    if (g_telemetry_sdc_res_open.load())      b |= AS_SIG_SDC_RES_OPEN;
+    if (g_telemetry_ebs_activated.load())     b |= AS_SIG_EBS_ACTIVATED;
+    if (g_telemetry_abs_checks_ok.load())     b |= AS_SIG_ABS_CHECKS_OK;
+    if (g_telemetry_brakes_engaged.load())    b |= AS_SIG_BRAKES_ENGAGED;
+    if (g_telemetry_mission_selected.load())  b |= AS_SIG_MISSION_SEL;
+    if (g_telemetry_r2d.load())               b |= AS_SIG_R2D;
+    if (g_telemetry_vehicle_standstill.load())b |= AS_SIG_STANDSTILL;
+    if (g_telemetry_mission_finished.load())  b |= AS_SIG_MISSION_DONE;
+    return b;
+}
+
+extern "C" uint8_t ros_get_ebs_init_state(void)
+{
+    return g_telemetry_ebs_init_state.load();
+}
