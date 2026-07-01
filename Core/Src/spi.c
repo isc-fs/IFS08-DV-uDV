@@ -38,8 +38,8 @@ void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 1 */
 
   /* SPI1 drives the WS2812 LED chain (transmit-only) via MOSI on PA7.
-     APB2 = 132 MHz; prescaler 64 -> ~2.06 MHz, so 1 SPI byte ~= 2 WS2812
-     bit periods. Prescaler 32 (~4.1 MHz) is too fast. */
+     Kernel clock = PLL1Q (96 MHz), not APB2. Prescaler 16 -> 6.0 MHz, so
+     1 SPI byte = 1.33 us = one WS2812 bit period (see ws2812.c encoding). */
   /* USER CODE END SPI1_Init 1 */
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
@@ -48,7 +48,7 @@ void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;

@@ -3,18 +3,20 @@
 
 /* ---------------------------------------------------------------------------
  * WS2812 bit encoding via SPI MOSI
- * SPI clock ~3.2 MHz → 1 SPI byte ≈ 2.5 µs ≈ 2 WS2812 bit periods
- * Each color bit is encoded as one SPI byte:
- *   '1' bit → 0xE0 (high ~940 ns, low ~310 ns)
- *   '0' bit → 0x80 (high ~310 ns, low ~940 ns)
- * 8 LEDs × 24 bits = 192 bytes data + 64 bytes reset (low >50 µs)
+ * SPI kernel = PLL1Q 96 MHz, prescaler 16 → SPI = 6.0 MHz.
+ * 1 SPI bit = 167 ns, 1 SPI byte = 1.33 µs = exactly one WS2812 bit period.
+ * Each color bit is encoded as one SPI byte (MSB first):
+ *   '1' bit → 0xF8 (11111000): T1H = 5×167 ≈ 833 ns, T1L = 3×167 ≈ 500 ns
+ *   '0' bit → 0xC0 (11000000): T0H = 2×167 ≈ 333 ns, T0L = 6×167 ≈ 1000 ns
+ * Both high times sit centered in WS2812B spec (T1H 0.8 µs, T0H 0.4 µs, ±150 ns).
+ * 40 LEDs × 24 bits = 960 bytes data + 64 bytes reset (64×1.33 µs ≈ 85 µs > 50 µs latch)
  * --------------------------------------------------------------------------- */
 #define BITS_PER_LED   24
 #define RESET_BYTES    64
 #define BUF_SIZE       (WS2812_NUM_LEDS * BITS_PER_LED + RESET_BYTES)
 
-#define WS_BIT_HIGH    0xE0
-#define WS_BIT_LOW     0x80
+#define WS_BIT_HIGH    0xF8
+#define WS_BIT_LOW     0xC0
 
 static SPI_HandleTypeDef *ws_hspi;
 static uint8_t ws_buf[BUF_SIZE];
