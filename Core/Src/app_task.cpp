@@ -26,6 +26,10 @@ extern "C" {
 #include "ros_globals.h"
 #include "can_globals.h"
 
+extern "C" {
+    #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
+}
+
 /**
  * @brief Reset ROS globals to default state
  */
@@ -38,6 +42,12 @@ static void reset_ros_globals(void)
     g_finished_cmd.store(false);
     g_set_mission_in_progress.store(false);
     g_set_mission_ready.store(false);
+
+    // Pipeline interface: forget the last dv/status + command so a reset
+    // can't leave a stale "READY"/throttle latched across runs.
+    g_dv_status.store(DV_STATUS_IDLE);
+    g_dv_status_stamp_ms.store(0);
+    g_ctrl_cmd_stamp_ms.store(0);
 }
 
 /**
@@ -137,7 +147,6 @@ extern "C" void StartAppTask(void *argument)
     uint32_t ready_start_time = 0;
     int last_mission_id = -1;
     bool set_mission_sent = false;
-    bool start_mission_sent = false;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -179,7 +188,6 @@ extern "C" void StartAppTask(void *argument)
         if (g_reset_cmd.load())
         {
             set_mission_sent = false;
-            start_mission_sent = false;
             last_mission_id = -1;
             reset_all();
         }
@@ -189,10 +197,26 @@ extern "C" void StartAppTask(void *argument)
         ASState previous_as_state = as_state;
         bool asms_on = hardware_io_read_asms_on();
         bool ts_on = state_mgr.getSignals().ts_active;
-        int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
+        uint32_t now_ms = osKernelGetTickCount();
+        int32_t res_status = can_c_get_res_status(now_ms, 150U);
         bool res_ok = (res_status == 0);
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
+
+        // --- Pipeline (DVPC) status, read level-triggered off /dv/status ---
+        // The uDV owns the AS state machine; mission_control only answers
+        // with this byte. It is also the DVPC liveness heartbeat: a stale
+        // /dv/status while driving means the pipeline died -> safe state.
+        uint8_t  dv_status     = g_dv_status.load();
+        bool     dv_seen       = (g_dv_status_stamp_ms.load() != 0u);
+        bool     dv_fresh      = dv_seen &&
+                                 ((now_ms - g_dv_status_stamp_ms.load()) < DV_STATUS_STALE_MS);
+        bool     dv_ready      = dv_fresh && (dv_status == DV_STATUS_READY);
+        bool     dv_finished   = dv_fresh && (dv_status == DV_STATUS_FINISHED);
+        bool     dv_emergency  = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
+                                              dv_status == DV_STATUS_FAILED);
+        // Pipeline heartbeat lost while we were driving (link/DVPC dead).
+        bool     dv_lost_driving = (previous_as_state == ASState::DRIVING) && !dv_fresh;
 
         if (!asms_on)
         {
@@ -202,12 +226,30 @@ extern "C" void StartAppTask(void *argument)
         {
             as_state = ASState::EMERGENCY;
         }
-        else if (res_estop || !ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
+        else if (previous_as_state == ASState::FINISHED)
         {
+            // Mission complete latches until ASMS off (rule #9 analogue).
+            as_state = ASState::FINISHED;
+        }
+        else if (res_estop
+                 || (!ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
+                 || (dv_emergency && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
+                 || dv_lost_driving)
+        {
+            // RES e-stop, TS lost, pipeline-raised emergency, or a lost
+            // pipeline heartbeat mid-run -> AS Emergency.
             as_state = ASState::EMERGENCY;
         }
-        else if (res_go && previous_as_state == ASState::READY)
+        else if (previous_as_state == ASState::DRIVING && dv_finished)
         {
+            // Pipeline reported the mission finished (was RuntimeControl
+            // outcome=finished) -> end the run cleanly.
+            as_state = ASState::FINISHED;
+        }
+        else if (res_go && previous_as_state == ASState::READY && dv_ready)
+        {
+            // RES "go" is honoured ONLY while the pipeline reports READY —
+            // the handshake that replaces waiting on the old SetMission result.
             as_state = ASState::DRIVING;
         }
         else if (res_ok && ts_on)
@@ -263,7 +305,6 @@ extern "C" void StartAppTask(void *argument)
             {
                 ready_start_time = 0;
                 g_can_listen_go.store(false);
-                start_mission_sent = false;
             }
 
             int current_mission_id = g_can_mission_id.load();
@@ -276,7 +317,6 @@ extern "C" void StartAppTask(void *argument)
             {
                 last_mission_id = current_mission_id;
                 set_mission_sent = false;
-                start_mission_sent = false;
                 g_set_mission_in_progress.store(false);
                 g_set_mission_ready.store(false);
             }
@@ -325,37 +365,32 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::DRIVING:
-                    // Start the mission once setup is confirmed.
-                    // g_set_mission_ready.load() should already be true; we check it just in case.
-                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
+                {
+                    // Stream the pipeline's latest normalised /ctrl/cmd to the
+                    // inverter / steering ECU (the ECU expects a constant
+                    // stream, so we send every tick from the latched value).
+                    // Zero it if /ctrl/cmd goes stale, so a dropped link can
+                    // never latch the last throttle/steering. Emergency and
+                    // finished are handled by the transition chain above —
+                    // they move us out of DRIVING before this runs.
+                    // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
+                    // CONTROL_STEER frames, units, sign and full-lock scaling
+                    // against the vehicle CAN DBC. The values here are the
+                    // normalised [-1,1] contract, clamped on receive.
+                    bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
+                                     ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
+                    if (cmd_fresh)
                     {
-                        if (send_start_mission_command(current_mission_id))
-                        {
-                            start_mission_sent = true;
-                        }
+                        Can::sendAccel(g_accel_cmd.load());
+                        Can::sendSteer(g_steer_cmd.load());
                     }
                     else
                     {
-                        // Mission is running - check for emergency/finish conditions
-                        if (g_emergency_cmd.load() || g_finished_cmd.load())
-                        {
-                            // Trigger emergency brake
-                            ebs.activateEBS();
-
-                            // Cancel mission if still active
-                            if (g_mission_going_cmd.load())
-                            {
-                                send_cancel_mission_command();
-                            }
-                        }
-                        else
-                        {
-                            // Send control commands continuously (ECU expects constant stream)
-                            Can::sendAccel(g_accel_cmd.load());
-                            Can::sendSteer(g_steer_cmd.load());
-                        }
+                        Can::sendAccel(0.0f);
+                        Can::sendSteer(0.0f);
                     }
                     break;
+                }
 
                 case ASState::EMERGENCY:
                     // EBS should already be active, but ensure it is

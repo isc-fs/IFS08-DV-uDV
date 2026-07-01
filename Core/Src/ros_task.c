@@ -33,6 +33,7 @@
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/string.h>
+#include <geometry_msgs/msg/twist.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -43,6 +44,7 @@
 #include "as_state.h"         /* ros_get_as_state (raw ASState) */
 #include "dwt_time.h"         /* dwt_micros */
 #include "imu_task.h"         /* imu_debug_status */
+#include "dv_interface.h"     /* stock-typed pipeline interface: dv/status + ctrl/cmd */
 
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
@@ -134,6 +136,31 @@ void force_ebs_callback(const void * req, void * res)
 
   // Respondemos al cliente de ROS 2 que todo ha salido bien
   response->success = true;
+}
+
+/* --------------------------------------------------------------------------
+ * Stock-typed pipeline interface subscribers (see dv_interface.h).
+ * -------------------------------------------------------------------------- */
+
+/* /ctrl/cmd (geometry_msgs/Twist): the DVPC's normalised drive command.
+ * linear.x = throttle [-1,1], angular.z = steering [-1,1]. Stored (clamped)
+ * for AppTask, which actuates it only while AS Driving. The publisher is
+ * BEST_EFFORT, so this subscription MUST be best-effort too or DDS
+ * request-vs-offered matching silently drops every command. */
+static void ctrl_cmd_callback(const void *msgin)
+{
+  const geometry_msgs__msg__Twist *m = (const geometry_msgs__msg__Twist *)msgin;
+  ros_set_ctrl_cmd_norm((float)m->linear.x, (float)m->angular.z,
+                        osKernelGetTickCount());
+}
+
+/* /dv/status (std_msgs/UInt8): the DVPC lifecycle byte — the prepare/run
+ * handshake + the DVPC liveness heartbeat. AppTask gates AS Ready->Driving
+ * on DV_STATUS_READY and reacts to FINISHED / EMERGENCY / FAILED / staleness. */
+static void dv_status_callback(const void *msgin)
+{
+  const std_msgs__msg__UInt8 *m = (const std_msgs__msg__UInt8 *)msgin;
+  ros_set_dv_status(m->data, osKernelGetTickCount());
 }
 
 /* Map raw ASState (see as_state.h: OFF=0 READY=1 DRIVING=2 EMERGENCY=3
@@ -389,6 +416,26 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cmd_test");
 
+  // /dv/status subscriber — pipeline lifecycle byte. RELIABLE (default)
+  // matches the pipeline's latched RELIABLE+TRANSIENT_LOCAL publisher and
+  // guarantees we never miss a status transition.
+  rcl_subscription_t dv_status_sub;
+  std_msgs__msg__UInt8 dv_status_msg;
+  rclc_subscription_init_default(
+    &dv_status_sub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
+    DV_TOPIC_DV_STATUS);
+
+  // /ctrl/cmd subscriber — normalised drive command. MUST be BEST_EFFORT:
+  // the pipeline publishes it best-effort, and a reliable reader would fail
+  // DDS QoS matching and receive nothing (car sits still, no error).
+  rcl_subscription_t ctrl_cmd_sub;
+  geometry_msgs__msg__Twist ctrl_cmd_msg;
+  rclc_subscription_init_best_effort(
+    &ctrl_cmd_sub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+    DV_TOPIC_CTRL_CMD);
+
   // --- SERVICIOS ---
   rcl_service_t Activate_stearing;
   std_srvs__srv__SetBool_Request act_steer_srv_req = {0};
@@ -411,13 +458,22 @@ void ros_task_run(void)
   );
 
   // --- Executor ---
-  // Executor for subscriber callbacks
+  // One handle per subscription + service: cmd_test, dv/status, ctrl/cmd,
+  // activate_steering, force_ebs = 5.
   rclc_executor_t executor;
-  rclc_executor_init(&executor, &support.context, 3, &allocator);
+  rclc_executor_init(&executor, &support.context, 5, &allocator);
 
   rclc_executor_add_subscription(
     &executor, &cmd_test_sub, &cmd_test_msg,
     &cmd_test_callback, ON_NEW_DATA);
+
+  rclc_executor_add_subscription(
+    &executor, &dv_status_sub, &dv_status_msg,
+    &dv_status_callback, ON_NEW_DATA);
+
+  rclc_executor_add_subscription(
+    &executor, &ctrl_cmd_sub, &ctrl_cmd_msg,
+    &ctrl_cmd_callback, ON_NEW_DATA);
 
   rclc_executor_add_service(
     &executor, &Activate_stearing, &act_steer_srv_req, &act_steer_srv_res,

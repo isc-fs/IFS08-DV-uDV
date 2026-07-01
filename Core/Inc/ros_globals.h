@@ -18,6 +18,12 @@ extern std::atomic<bool>  g_mission_going_cmd;
 extern std::atomic<bool>  g_set_mission_in_progress;
 extern std::atomic<bool>  g_set_mission_ready;
 
+// Stock-typed pipeline interface (see dv_interface.h). Written by the
+// ros_task micro-ROS callbacks (via the C bridge), read by AppTask.
+extern std::atomic<uint8_t>  g_dv_status;           // latest dv/status byte
+extern std::atomic<uint32_t> g_dv_status_stamp_ms;  // its arrival tick (0 = never)
+extern std::atomic<uint32_t> g_ctrl_cmd_stamp_ms;   // last ctrl/cmd tick (0 = never)
+
 // State telemetry snapshot, owned by AppTask and published by RosTask
 extern std::atomic<uint8_t> g_telemetry_as_state;
 extern std::atomic<uint8_t> g_telemetry_ebs_init_state;
