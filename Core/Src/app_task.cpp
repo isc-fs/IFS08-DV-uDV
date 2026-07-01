@@ -156,6 +156,18 @@ extern "C" void StartAppTask(void *argument)
     // Main control loop
     while (1)
     {
+        // State machine dispatcher REQUIREMENTS:
+
+        //1. cuando asms esta off siempre retornar a la AS_off
+        //2. Si asms on, ts on y RES ok (es decir res 0 mira la funcion can_c_get_res_status()). transicion a AS_ready
+        //3. Si RES E-stop en cualquier momento transicionar a AS_emergency
+        //4. Los frenos se sueltan cuando estan en HIGH. Es decir que solo se debe de activar los canales de EBS cuando esta en AS_driving. En el resto de estados los canales de EBS deben de estar desactivados. D1 y D2 low
+        //5. transicinar de AS_ready a AS_driving cuando se reciba el comando de start del RES
+        //6. transicionar a emergency si el RES esta bien y el TS pasa a esta off.
+        //7. configura para que la mision por defecto sea INSPECTION
+        //8. Por el momento no hay forma de transicinar a AS_finished.
+        //9. La unica forma de salir de AS_emergency es pasar por asms off.
+
         // Check for reset command (issued by external supervisor)
         if (g_reset_cmd.load())
         {
@@ -167,8 +179,39 @@ extern "C" void StartAppTask(void *argument)
 
         // Update state machine with all current signals
         state_mgr.update();
-        as_state = state_mgr.getState();
+        ASState previous_as_state = as_state;
         bool asms_on = hardware_io_read_asms_on();
+        bool ts_on = state_mgr.getSignals().ts_active;
+        int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
+        bool res_ok = (res_status == 0);
+        bool res_go = (res_status == 2);
+        bool res_estop = (res_status == 1);
+
+        asms_on=true;
+        ts_on=true;
+        res_ok=true;
+
+        if (!asms_on)
+        {
+            as_state = ASState::OFF;
+        }
+        else if (previous_as_state == ASState::EMERGENCY)
+        {
+            as_state = ASState::EMERGENCY;
+        }
+        else if (res_estop || !ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
+        {
+            as_state = ASState::EMERGENCY;
+        }
+        else if (res_go && previous_as_state == ASState::READY)
+        {
+            as_state = ASState::DRIVING;
+        }
+        else if (res_ok && ts_on)
+        {
+            as_state = ASState::READY;
+        }
+
         sync_state_telemetry(state_mgr, ebs, as_state);
 
         // Send ASSI status if state changed
@@ -185,7 +228,6 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
-        // State machine dispatcher
         if (asms_on)
         {
             // Autonomous mode enabled
@@ -199,6 +241,11 @@ extern "C" void StartAppTask(void *argument)
             }
 
             int current_mission_id = g_can_mission_id.load();
+            if (current_mission_id <= 0)
+            {
+                current_mission_id = 6;  // Default mission: Inspection
+            }
+
             if (current_mission_id != last_mission_id)
             {
                 last_mission_id = current_mission_id;
@@ -233,6 +280,10 @@ extern "C" void StartAppTask(void *argument)
                     {
                         ebs_state = ebs.initSequenceStep();
                     }
+                    else
+                    {
+                        ebs.deactivateEBS();
+                    }
                     break;
 
                 case ASState::READY:
@@ -249,8 +300,7 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                     // Start the mission once setup is confirmed.
-                    // g_set_mission_ready.load() shoudl already be true as if not we would not be in driving, b
-                    // but we check it just in case to avoid any unexpected behavior.
+                    // g_set_mission_ready.load() should already be true; we check it just in case.
                     if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
                     {
                         if (send_start_mission_command(current_mission_id))
@@ -315,6 +365,7 @@ extern "C" void StartAppTask(void *argument)
         {
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
+            ebs.deactivateEBS();
         }
 
         // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
