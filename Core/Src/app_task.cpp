@@ -160,6 +160,33 @@ extern "C" void StartAppTask(void *argument)
     assi_init();
     uint8_t assi_last_r = 0xFF, assi_last_g = 0xFF, assi_last_b = 0xFF;
 
+    // ============================ DEBUG: ASSI ISOLATION ============================
+    // TEMPORARY — DELETE THIS WHOLE BLOCK (down to "END DEBUG") TO RESTORE NORMAL OP.
+    // Flashes the ASSI chain yellow at boot, bypassing the state machine entirely,
+    // to test the D5/PB8 -> SN74AHCT125 -> WS2812 path on its own (independent of
+    // CAN inputs and AS state). Interpretation:
+    //   * flashes yellow  -> driver + hardware work; the fault is upstream (state
+    //                        machine / CAN signals keeping it out of a lit state).
+    //   * stays white/off -> the LED path itself (timing / wiring / buffer) is wrong.
+    // The IWDG heartbeat is kept alive below so the watchdog can't reset us mid-test.
+    {
+        bool dbg_on = false;
+        uint32_t dbg_last = hardware_io_now_ms();
+        for (;;)
+        {
+            if (hardware_io_now_ms() - dbg_last >= 250u)   // ~2 Hz flash, 50% duty
+            {
+                dbg_on = !dbg_on;
+                assi_set_all(dbg_on ? 255 : 0, dbg_on ? 255 : 0, 0);  // yellow / off
+                assi_show();
+                dbg_last = hardware_io_now_ms();
+            }
+            safety_heartbeat(SAFETY_TASK_APP);   // keep the IWDG fed while looping
+            osDelay(10);
+        }
+    }
+    // ============================== END DEBUG ==============================
+
     // Main control loop
     while (1)
     {
