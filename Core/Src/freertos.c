@@ -35,6 +35,9 @@
 #include "safety_monitor.h"
 #include "dwt_time.h"
 #include "imu_task.h"
+#include "spi.h"
+#include "ws2812.h"
+#include "assi_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -88,6 +91,13 @@ const osThreadAttr_t appTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t assiTaskHandle;
+const osThreadAttr_t assiTask_attributes = {
+  .name = "assiTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
 osMessageQueueId_t imuQueueHandle;
 osMessageQueueId_t canRxQueueHandle;
 osMessageQueueId_t resRxQueueHandle;
@@ -98,7 +108,7 @@ osSemaphoreId_t imuSemHandle;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 4096 * 4,
+  .stack_size = 3000 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -107,6 +117,7 @@ const osThreadAttr_t defaultTask_attributes = {
 void StartImuTask(void *argument);
 void StartCanTask(void *argument);
 void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
+void StartAssiTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -152,6 +163,7 @@ void MX_FREERTOS_Init(void) {
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
   safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
   appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
+  assiTaskHandle = osThreadNew(StartAssiTask, NULL, &assiTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -167,14 +179,15 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
-
-/* ROS service/subscription callbacks moved to ros_task.c */
-
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN StartDefaultTask */
+  /* USER CODE BEGIN StartDefaultTask*/
+  ws2812_init(&hspi1);
+  /* Start ASSI demo in READY mode by default; the ASSI task will apply colors. */
+  assi_set_mode(AS_MODE_OFF);
+
   ros_task_run();   /* micro-ROS node; defined in ros_task.c; never returns */
   /* USER CODE END StartDefaultTask */
 }
@@ -195,3 +208,4 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 /* StartCanTask is defined in can_task.cpp (extern "C") */
 
 /* USER CODE END Application */
+
