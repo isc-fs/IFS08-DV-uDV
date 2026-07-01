@@ -187,10 +187,6 @@ extern "C" void StartAppTask(void *argument)
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
-        asms_on=true;
-        ts_on=true;
-        res_ok=true;
-
         if (!asms_on)
         {
             as_state = ASState::OFF;
