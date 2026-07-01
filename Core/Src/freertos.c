@@ -35,8 +35,6 @@
 #include "safety_monitor.h"
 #include "dwt_time.h"
 #include "imu_task.h"
-#include "spi.h"
-#include "ws2812.h"
 #include "assi_task.h"
 /* USER CODE END Includes */
 
@@ -184,8 +182,7 @@ void StartDefaultTask(void *argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask*/
-  ws2812_init(&hspi1);
-  /* Start ASSI demo in READY mode by default; the ASSI task will apply colors. */
+  /* USART10 (ASSI LED bridge to the Arduino) is initialized in main(). */
   assi_set_mode(AS_MODE_OFF);
 
   ros_task_run();   /* micro-ROS node; defined in ros_task.c; never returns */

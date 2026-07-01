@@ -21,10 +21,9 @@
 #include "cmsis_os.h"
 #include "adc.h"
 #include "cordic.h"
-#include "dma.h"
 #include "fdcan.h"
 #include "i2c.h"
-#include "spi.h"
+#include "usart.h"
 #include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
@@ -101,7 +100,6 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_FDCAN1_Init();
   MX_FDCAN2_Init();
   MX_FDCAN3_Init();
@@ -109,7 +107,7 @@ int main(void)
   MX_I2C2_Init();
   MX_CORDIC_Init();
   MX_TIM2_Init();
-  MX_SPI1_Init();
+  usart10_init();   /* USART10 TX to Arduino Nano (ASSI LED bridge) */
   /* USER CODE BEGIN 2 */
 
   /* Reboot reset-cause detection (idea from fix/17). A reset caused by

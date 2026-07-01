@@ -33,12 +33,6 @@ assi_mode_t assi_get_mode(void)
     return m;
 }
 
-static void set_color_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    ws2812_set_all(r, g, b);
-    ws2812_show();
-}
-
 void StartAssiTask(void *argument)
 {
     (void)argument;
@@ -52,40 +46,40 @@ void StartAssiTask(void *argument)
         switch (mode)
         {
             case AS_MODE_OFF:
-                set_color_rgb(0,0,0);
+                leds_off();
                 osDelay(200);
                 break;
 
             case AS_MODE_READY:
                 /* Yellow continuous */
-                set_color_rgb(255,255,0);
+                leds_yellow();
                 osDelay(200);
                 break;
 
             case AS_MODE_DRIVING:
                 /* Yellow flashing */
                 flash_state = !flash_state;
-                if (flash_state) set_color_rgb(255,255,0);
-                else set_color_rgb(0,0,0);
+                if (flash_state) leds_yellow();
+                else             leds_off();
                 osDelay(500);
                 break;
 
             case AS_MODE_EMERGENCY:
                 /* Blue flashing (faster) */
                 flash_state = !flash_state;
-                if (flash_state) set_color_rgb(0,0,255);
-                else set_color_rgb(0,0,0);
+                if (flash_state) leds_blue();
+                else             leds_off();
                 osDelay(250);
                 break;
 
             case AS_MODE_FINISHED:
                 /* Blue continuous */
-                set_color_rgb(0,0,255);
+                leds_blue();
                 osDelay(200);
                 break;
 
             default:
-                set_color_rgb(0,0,0); /* invalid → red */
+                leds_off();
                 osDelay(200);
                 break;
         }

@@ -43,7 +43,7 @@ Core/Src/adc.c \
 Core/Src/cordic.c \
 Core/Src/fdcan.c \
 Core/Src/i2c.c \
-Core/Src/spi.c \
+Core/Src/usart.c \
 Core/Src/bmi088.c \
 Core/Src/i2c_utils.c \
 Core/Src/imu_service.c \
@@ -85,8 +85,6 @@ Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c \
 Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c \
-Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c \
-Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c \
 Core/Src/system_stm32h7xx.c \
 Middlewares/Third_Party/FreeRTOS/Source/croutine.c \
 Middlewares/Third_Party/FreeRTOS/Source/event_groups.c \
@@ -114,8 +112,7 @@ Core/Src/safety_eval.c \
 Core/Src/safety_monitor.c \
 Core/Src/hardware_io.c \
 Core/Src/ros_task_commands.c \
-Core/Src/ros_task.c \
-Core/Src/dma.c
+Core/Src/ros_task.c
 
 # C++ sources
 CPP_SOURCES = \
