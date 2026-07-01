@@ -79,6 +79,8 @@ set(C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
     Middlewares/Third_Party/FreeRTOS/Source/croutine.c
     Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
     Middlewares/Third_Party/FreeRTOS/Source/list.c

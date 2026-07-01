@@ -38,18 +38,16 @@ void loop(){
   else if (c=='Y') set(255,255,0);
 }
 ```
-Wiring: STM32 **PG12 (USART10_TX) → Nano RX (D0)**, and **common ground**.
+Wiring: STM32 **PE3 (USART10_TX) → Nano RX (D0)**, and **common ground**.
 
 ## Pin
-`usart.c` uses **PG12 = USART10_TX (AF11)**, matching the team's standard `.ioc`
-(USART10 on PG11 RX / PG12 TX). Only TX is used. To change it, edit
-`USART10_TX_PORT/PIN/AF` in `Core/Src/usart.c`.
+USART10 is configured in CubeMX (`uDV.ioc`) on **PE2 (RX) / PE3 (TX)**; only TX
+is used. The generated `MX_USART10_UART_Init` / `HAL_UART_MspInit` live in
+`Core/Src/usart.c` — change the pin there via CubeMX, not by hand.
 
 ## Implementation notes
-- The HAL UART driver is **not** in this project, so USART10 is driven at
-  register level (`Core/Src/usart.c`). No `HAL_UART_MODULE` needed.
-- **SPI is fully removed** from the code and build (spi.c/dma.c deleted, HAL SPI
-  module disabled, IRQ handlers and build-list entries dropped).
-- **`uDV.ioc` still lists SPI1** — it was NOT hand-edited (blind CubeMX pin/IP
-  renumbering is risky). Before regenerating from CubeMX: disable SPI1 and add
-  USART10 on the correct TX pin there, otherwise a regen will resurrect SPI1.
+- USART10 is **CubeMX-generated HAL** (`huart10`, 115200 8N1). `ws2812.c` sends
+  each command with `HAL_UART_Transmit` (blocking, ~0.17 ms for 2 bytes, no IRQ
+  masking).
+- **SPI is fully removed** — from the `.ioc` (CubeMX), the code, and the build
+  (spi.c/dma.c gone, HAL SPI module disabled, HAL UART module enabled).
