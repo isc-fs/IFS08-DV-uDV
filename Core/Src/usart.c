@@ -1,55 +1,147 @@
+/* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file    usart.c
- * @brief   Minimal register-level USART10 transmit driver (ASSI LED bridge).
- *
- * The HAL UART module is intentionally NOT enabled in this project, so USART10
- * is driven directly through its registers. Transmit-only, 115200 baud, 8N1.
- *
- * Pin: PG12 = USART10_TX (AF11), matching the team's standard .ioc
- * (USART10 on PG11/PG12). RX (PG11) is unused here — transmit only.
- *
- * Kernel clock: USART1/6/9/10 default to PCLK2 (D2PCLK2). BRR is computed from
- * HAL_RCC_GetPCLK2Freq() so it tracks the configured clock tree.
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file    usart.c
+  * @brief   This file provides code for the configuration
+  *          of the USART instances.
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
 #include "usart.h"
-#include "stm32h7xx_hal.h"
 
-#define USART10_TX_PORT   GPIOG
-#define USART10_TX_PIN    GPIO_PIN_12
-#define USART10_TX_AF     GPIO_AF11_USART10
-#define USART10_BAUD      115200U
+/* USER CODE BEGIN 0 */
 
-void usart10_init(void)
+/* USER CODE END 0 */
+
+UART_HandleTypeDef huart10;
+
+/* USART10 init function */
+
+void MX_USART10_UART_Init(void)
 {
-    __HAL_RCC_GPIOG_CLK_ENABLE();
+
+  /* USER CODE BEGIN USART10_Init 0 */
+
+  /* USER CODE END USART10_Init 0 */
+
+  /* USER CODE BEGIN USART10_Init 1 */
+
+  /* USER CODE END USART10_Init 1 */
+  huart10.Instance = USART10;
+  huart10.Init.BaudRate = 115200;
+  huart10.Init.WordLength = UART_WORDLENGTH_8B;
+  huart10.Init.StopBits = UART_STOPBITS_1;
+  huart10.Init.Parity = UART_PARITY_NONE;
+  huart10.Init.Mode = UART_MODE_TX_RX;
+  huart10.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart10.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart10.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart10.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart10.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetTxFifoThreshold(&huart10, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_SetRxFifoThreshold(&huart10, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_UARTEx_DisableFifoMode(&huart10) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART10_Init 2 */
+
+  /* USER CODE END USART10_Init 2 */
+
+}
+
+void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
+{
+
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+  if(uartHandle->Instance==USART10)
+  {
+  /* USER CODE BEGIN USART10_MspInit 0 */
+
+  /* USER CODE END USART10_MspInit 0 */
+
+  /** Initializes the peripherals clock
+  */
+    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART10;
+    PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16910CLKSOURCE_D2PCLK2;
+    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    /* USART10 clock enable */
     __HAL_RCC_USART10_CLK_ENABLE();
 
-    GPIO_InitTypeDef gpio = {0};
-    gpio.Pin       = USART10_TX_PIN;
-    gpio.Mode      = GPIO_MODE_AF_PP;
-    gpio.Pull      = GPIO_NOPULL;
-    gpio.Speed     = GPIO_SPEED_FREQ_LOW;   /* 115200 baud: LOW slew is plenty */
-    gpio.Alternate = USART10_TX_AF;
-    HAL_GPIO_Init(USART10_TX_PORT, &gpio);
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    /**USART10 GPIO Configuration
+    PE2     ------> USART10_RX
+    PE3     ------> USART10_TX
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_2;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF4_USART10;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-    USART10->CR1 = 0U;                       /* disable while configuring       */
-    USART10->CR2 = 0U;                       /* 1 stop bit                      */
-    USART10->CR3 = 0U;                       /* no flow control, no FIFO        */
-    /* Oversampling by 16 (OVER8=0): BRR = f_ck / baud, rounded. 8N1 by reset. */
-    USART10->BRR = (HAL_RCC_GetPCLK2Freq() + (USART10_BAUD / 2U)) / USART10_BAUD;
-    USART10->CR1 = USART_CR1_TE | USART_CR1_UE;
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF11_USART10;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-    while ((USART10->ISR & USART_ISR_TEACK) == 0U) { /* wait transmit-enable ack */ }
+  /* USER CODE BEGIN USART10_MspInit 1 */
+
+  /* USER CODE END USART10_MspInit 1 */
+  }
 }
 
-void usart10_write(const uint8_t *data, uint16_t len)
+void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 {
-    for (uint16_t i = 0U; i < len; i++)
-    {
-        while ((USART10->ISR & USART_ISR_TXE_TXFNF) == 0U) { /* wait TDR empty */ }
-        USART10->TDR = data[i];
-    }
-    while ((USART10->ISR & USART_ISR_TC) == 0U) { /* wait last byte shifted out */ }
+
+  if(uartHandle->Instance==USART10)
+  {
+  /* USER CODE BEGIN USART10_MspDeInit 0 */
+
+  /* USER CODE END USART10_MspDeInit 0 */
+    /* Peripheral clock disable */
+    __HAL_RCC_USART10_CLK_DISABLE();
+
+    /**USART10 GPIO Configuration
+    PE2     ------> USART10_RX
+    PE3     ------> USART10_TX
+    */
+    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_2|GPIO_PIN_3);
+
+  /* USER CODE BEGIN USART10_MspDeInit 1 */
+
+  /* USER CODE END USART10_MspDeInit 1 */
+  }
 }
+
+/* USER CODE BEGIN 1 */
+
+/* USER CODE END 1 */

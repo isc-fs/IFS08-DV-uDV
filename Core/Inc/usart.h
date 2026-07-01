@@ -1,11 +1,23 @@
+/* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file    usart.h
- * @brief   Minimal register-level USART10 transmit driver.
- *          Used as the ASSI LED bridge: the STM32 sends short commands to an
- *          Arduino Nano, which drives the physical WS2812 strip.
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file    usart.h
+  * @brief   This file contains all the function prototypes for
+  *          the usart.c file
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Define to prevent recursive inclusion -------------------------------------*/
 #ifndef __USART_H__
 #define __USART_H__
 
@@ -13,22 +25,28 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
 
-/**
- * @brief Initialize USART10 for transmit-only, 115200 baud, 8N1, on PE3 (AF4).
- * @note  The HAL UART driver is not part of this project, so this is done at
- *        register level. Called once from main() after the clocks are up.
- */
-void usart10_init(void);
+/* USER CODE BEGIN Includes */
 
-/**
- * @brief Blocking transmit of @p len bytes over USART10.
- */
-void usart10_write(const uint8_t *data, uint16_t len);
+/* USER CODE END Includes */
+
+extern UART_HandleTypeDef huart10;
+
+/* USER CODE BEGIN Private defines */
+
+/* USER CODE END Private defines */
+
+void MX_USART10_UART_Init(void);
+
+/* USER CODE BEGIN Prototypes */
+
+/* USER CODE END Prototypes */
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif /* __USART_H__ */
+

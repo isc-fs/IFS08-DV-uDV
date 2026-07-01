@@ -220,7 +220,6 @@ void TIM2_IRQHandler(void)
   /* USER CODE END TIM2_IRQn 1 */
 }
 
-
 /**
   * @brief This function handles USB On The Go HS global interrupt.
   */

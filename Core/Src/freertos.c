@@ -181,7 +181,7 @@ void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
-  /* USER CODE BEGIN StartDefaultTask*/
+  /* USER CODE BEGIN StartDefaultTask */
   /* USART10 (ASSI LED bridge to the Arduino) is initialized in main(). */
   assi_set_mode(AS_MODE_OFF);
 

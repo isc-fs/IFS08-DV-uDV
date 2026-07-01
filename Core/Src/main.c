@@ -23,8 +23,8 @@
 #include "cordic.h"
 #include "fdcan.h"
 #include "i2c.h"
-#include "usart.h"
 #include "tim.h"
+#include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
 
@@ -107,7 +107,7 @@ int main(void)
   MX_I2C2_Init();
   MX_CORDIC_Init();
   MX_TIM2_Init();
-  usart10_init();   /* USART10 TX to Arduino Nano (ASSI LED bridge) */
+  MX_USART10_UART_Init();
   /* USER CODE BEGIN 2 */
 
   /* Reboot reset-cause detection (idea from fix/17). A reset caused by
