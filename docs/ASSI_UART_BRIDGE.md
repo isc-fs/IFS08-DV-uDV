@@ -38,12 +38,12 @@ void loop(){
   else if (c=='Y') set(255,255,0);
 }
 ```
-Wiring: STM32 **USART10_TX → Nano RX (D0)**, and **common ground**.
+Wiring: STM32 **PG12 (USART10_TX) → Nano RX (D0)**, and **common ground**.
 
-## Pin — CONFIRM against the board
-`usart.c` uses **PE3 = USART10_TX (AF4)**. If the Nano's RX is wired to a
-different MCU pin, change `USART10_TX_PORT/PIN/AF` in `Core/Src/usart.c`.
-USART10_TX is only available on the AF4/AF11 pins in the datasheet AF table.
+## Pin
+`usart.c` uses **PG12 = USART10_TX (AF11)**, matching the team's standard `.ioc`
+(USART10 on PG11 RX / PG12 TX). Only TX is used. To change it, edit
+`USART10_TX_PORT/PIN/AF` in `Core/Src/usart.c`.
 
 ## Implementation notes
 - The HAL UART driver is **not** in this project, so USART10 is driven at

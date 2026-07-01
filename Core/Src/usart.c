@@ -6,9 +6,8 @@
  * The HAL UART module is intentionally NOT enabled in this project, so USART10
  * is driven directly through its registers. Transmit-only, 115200 baud, 8N1.
  *
- * Pin: PE3 = USART10_TX (AF4).
- *   >>> Confirm against the board schematic. If the Arduino's RX is wired to a
- *   different MCU pin, change USART10_TX_* below (and uDV.ioc) to match. <<<
+ * Pin: PG12 = USART10_TX (AF11), matching the team's standard .ioc
+ * (USART10 on PG11/PG12). RX (PG11) is unused here — transmit only.
  *
  * Kernel clock: USART1/6/9/10 default to PCLK2 (D2PCLK2). BRR is computed from
  * HAL_RCC_GetPCLK2Freq() so it tracks the configured clock tree.
@@ -17,14 +16,14 @@
 #include "usart.h"
 #include "stm32h7xx_hal.h"
 
-#define USART10_TX_PORT   GPIOE
-#define USART10_TX_PIN    GPIO_PIN_3
-#define USART10_TX_AF     GPIO_AF4_USART10
+#define USART10_TX_PORT   GPIOG
+#define USART10_TX_PIN    GPIO_PIN_12
+#define USART10_TX_AF     GPIO_AF11_USART10
 #define USART10_BAUD      115200U
 
 void usart10_init(void)
 {
-    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOG_CLK_ENABLE();
     __HAL_RCC_USART10_CLK_ENABLE();
 
     GPIO_InitTypeDef gpio = {0};
