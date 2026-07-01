@@ -94,24 +94,24 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     /* USART10 clock enable */
     __HAL_RCC_USART10_CLK_ENABLE();
 
-    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOG_CLK_ENABLE();
     /**USART10 GPIO Configuration
-    PE2     ------> USART10_RX
-    PE3     ------> USART10_TX
+    PG11     ------> USART10_RX
+    PG12     ------> USART10_TX
     */
-    GPIO_InitStruct.Pin = GPIO_PIN_2;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF4_USART10;
-    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Pin = GPIO_PIN_11;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF11_USART10;
-    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+    HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_12;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF11_USART10;
+    HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /* USER CODE BEGIN USART10_MspInit 1 */
 
@@ -131,10 +131,10 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     __HAL_RCC_USART10_CLK_DISABLE();
 
     /**USART10 GPIO Configuration
-    PE2     ------> USART10_RX
-    PE3     ------> USART10_TX
+    PG11     ------> USART10_RX
+    PG12     ------> USART10_TX
     */
-    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_2|GPIO_PIN_3);
+    HAL_GPIO_DeInit(GPIOG, GPIO_PIN_11|GPIO_PIN_12);
 
   /* USER CODE BEGIN USART10_MspDeInit 1 */
 

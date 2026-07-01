@@ -38,12 +38,12 @@ void loop(){
   else if (c=='Y') set(255,255,0);
 }
 ```
-Wiring: STM32 **PE3 (USART10_TX) → Nano RX (D0)**, and **common ground**.
+Wiring: STM32 **PG12 (USART10_TX) → Nano RX (D0)**, and **common ground**.
 
 ## Pin
-USART10 is configured in CubeMX (`uDV.ioc`) on **PE2 (RX) / PE3 (TX)**; only TX
-is used. The generated `MX_USART10_UART_Init` / `HAL_UART_MspInit` live in
-`Core/Src/usart.c` — change the pin there via CubeMX, not by hand.
+USART10 is on **PG11 (RX) / PG12 (TX)**, AF11 — matching the team's standard
+`.ioc`. Only TX is used. The `MX_USART10_UART_Init` / `HAL_UART_MspInit` in
+`Core/Src/usart.c` (and `uDV.ioc`) reflect this.
 
 ## Implementation notes
 - USART10 is **CubeMX-generated HAL** (`huart10`, 115200 8N1). `ws2812.c` sends
