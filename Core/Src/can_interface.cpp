@@ -34,9 +34,6 @@ static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan3;
 
-/* amiTask handle — defined in freertos.c */
-extern osThreadId_t amiTaskHandle;
-
 /* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
  * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
  * Cached on every sendAssiStatus() so the micro-ROS layer can mirror it
@@ -214,10 +211,6 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 
     case CAN_ID_MISSION_SELECT:
         g_can_mission_id.store((int)msg->data[0]);
-        //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
-        if (amiTaskHandle != NULL) {
-            xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
-        }
         break;
 
     /* --- Autonomy state-machine inputs (ported from fix/17) ---

@@ -48,11 +48,10 @@ Core/Src/bmi088.c \
 Core/Src/i2c_utils.c \
 Core/Src/imu_service.c \
 Core/Src/imu_task.c \
-Core/Src/ami_task.c \
+Core/Src/assi.c \
 Core/Src/dwt_time.c \
 Core/Src/comunicacion_direccion.c \
 Core/Src/attitude.c \
-Core/Src/ws2812.c \
 Core/Src/stm32h7xx_it.c \
 Core/Src/stm32h7xx_hal_msp.c \
 Core/Src/stm32h7xx_hal_timebase_tim.c \

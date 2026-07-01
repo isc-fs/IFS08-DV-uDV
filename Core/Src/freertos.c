@@ -29,14 +29,12 @@
 
 #include "imu_service.h"
 #include "can_globals.h"
-#include "ws2812.h"
 #include "i2c.h"
 #include "cordic.h"
 #include "tim.h"
 #include "safety_monitor.h"
 #include "dwt_time.h"
 #include "imu_task.h"
-#include "ami_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -72,13 +70,6 @@ const osThreadAttr_t canTask_attributes = {
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
-osThreadId_t amiTaskHandle;
-const osThreadAttr_t amiTask_attributes = {
-  .name = "amiTask",
-  .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
-};
-
 /* Safety supervisor: highest app priority so it still runs (and refreshes
  * the IWDG / detects stalls) under load. Yields via osDelay each cycle. */
 osThreadId_t safetyTaskHandle;
@@ -102,9 +93,6 @@ osMessageQueueId_t canRxQueueHandle;
 osMessageQueueId_t resRxQueueHandle;
 osMessageQueueId_t debugQueueHandle;
 osSemaphoreId_t imuSemHandle;
-
-/* Mission index shared between canTask (writer) and amiTask (reader) */
-//volatile uint8_t g_mission_index = 0xFF;  /* 0xFF = no mission received */
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -118,7 +106,6 @@ const osThreadAttr_t defaultTask_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 void StartImuTask(void *argument);
 void StartCanTask(void *argument);
-void StartAmiTask(void *argument);
 void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
 /* USER CODE END FunctionPrototypes */
 
@@ -163,7 +150,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
-  amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
   safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
   appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
   /* USER CODE END RTOS_THREADS */
@@ -207,7 +193,5 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 
 /* StartImuTask is defined in imu_task.c */
 /* StartCanTask is defined in can_task.cpp (extern "C") */
-
-/* StartAmiTask is defined in ami_task.c */
 
 /* USER CODE END Application */

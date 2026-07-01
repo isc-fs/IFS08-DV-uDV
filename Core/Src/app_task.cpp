@@ -15,6 +15,7 @@ extern "C" {
     #include "cmsis_os.h"
     #include "hardware_io.h"
     #include "safety_monitor.h"  /* IWDG safety supervisor: heartbeat/arm */
+    #include "assi.h"            /* ASSI status LEDs (D5/PB8), FS-Rules T14.9 */
 }
 
 #include "state_manager.hpp"
@@ -153,6 +154,12 @@ extern "C" void StartAppTask(void *argument)
      * trips the watchdog emergency — this replaces the old TIM3 timer. */
     safety_arm(SAFETY_TASK_APP);
 
+    // ASSI status LEDs (D5/PB8). assi_init drives the chain OFF, which is the
+    // correct AS Off indication (T14.9.1). Track the last rendered colour so we
+    // only re-clock the chain when it actually changes (state or flash edge).
+    assi_init();
+    uint8_t assi_last_r = 0xFF, assi_last_g = 0xFF, assi_last_b = 0xFF;
+
     // Main control loop
     while (1)
     {
@@ -215,6 +222,29 @@ extern "C" void StartAppTask(void *argument)
         {
             Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
             last_as_state = as_state;
+        }
+
+        // Drive the physical ASSI LEDs from the AS state (FS-Rules T14.9.1):
+        //   Off -> off, Ready -> yellow steady, Driving -> yellow flashing,
+        //   Emergency -> blue flashing, Finished -> blue steady.
+        // Flash: 150 ms half-period => ~3.3 Hz, 50 % duty (rules: 2-5 Hz, 50 %).
+        {
+            const bool flash_on = ((hardware_io_now_ms() / 150u) & 1u) != 0u;
+            uint8_t r = 0, g = 0, b = 0;
+            switch (as_state)
+            {
+                case ASState::OFF:                                     break;
+                case ASState::READY:     r = 255; g = 255;             break;
+                case ASState::DRIVING:   if (flash_on) { r = 255; g = 255; } break;
+                case ASState::EMERGENCY: if (flash_on) { b = 255; }    break;
+                case ASState::FINISHED:  b = 255;                      break;
+            }
+            if (r != assi_last_r || g != assi_last_g || b != assi_last_b)
+            {
+                assi_set_all(r, g, b);
+                assi_show();
+                assi_last_r = r; assi_last_g = g; assi_last_b = b;
+            }
         }
 
         /* Liveness beat to the safety supervisor (it owns the IWDG and
