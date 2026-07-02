@@ -22,11 +22,12 @@
 
 /** Signal snapshot the AS transition decision consumes (one tick). */
 struct AsInputs {
-    bool asms_on;    /**< ASMS master switch on (hardware io)  */
-    bool ts_on;      /**< Tractive System active              */
-    bool res_estop;  /**< RES emergency-stop asserted         */
-    bool res_go;     /**< RES "go" asserted                   */
-    bool res_ok;     /**< RES link healthy (received; ok OR go, no e-stop) */
+    bool asms_on;        /**< ASMS master switch on (hardware io)  */
+    bool ts_on;          /**< Tractive System active              */
+    bool res_estop;      /**< RES emergency-stop asserted         */
+    bool res_go;         /**< RES "go" asserted                   */
+    bool res_ok;         /**< RES link healthy (received; ok OR go, no e-stop) */
+    bool ebs_init_done;  /**< EBS init sequence reached EBSInitState::Done */
 };
 
 /**
@@ -57,7 +58,10 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
         return ASState::DRIVING;                   /* sticky — see above     */
     if (in.res_go && prev == ASState::READY)
         return ASState::DRIVING;
-    if (in.res_ok && in.ts_on)
+    /* READY is gated on the EBS init sequence being complete: app_task only
+     * advances the init FSM while in OFF, so arming before Done would strand
+     * it (ASBChecksOK never true). A Failed init keeps the car in OFF. */
+    if (in.res_ok && in.ts_on && in.ebs_init_done)
         return ASState::READY;
     return prev;                                    /* no change              */
 }

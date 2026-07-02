@@ -5,10 +5,11 @@
  *
  * Guards the safety-relevant AS-state logic extracted from app_task's loop:
  * the ASMS-off / Emergency precedence, the RES e-stop and TS-loss emergency
- * triggers, and — the bug this suite was written for — DRIVING being STICKY
- * so a momentary RES "go" can't oscillate READY<->DRIVING or tear a run down
- * when released. (This branch has no /dv/status handshake; that variant is
- * tested on the pipeline-interface branch.)
+ * triggers, the EBS-init gate on arming (no READY until the init sequence
+ * reports Done), and — the bug this suite was written for — DRIVING being
+ * STICKY so a momentary RES "go" can't oscillate READY<->DRIVING or tear a
+ * run down when released. (This branch has no /dv/status handshake; that
+ * variant is tested on the pipeline-interface branch.)
  *
  * Build + run:  make test_as_transition
  */
@@ -57,14 +58,17 @@ enum ResKind { RES_NONE, RES_OK, RES_GO, RES_ESTOP };
 
 // Mirror the producer in app_task.cpp: res_ok is true for a received "ok"
 // AND for "go" (go implies a healthy link), false for e-stop / none.
-static AsInputs make(bool asms, bool ts, ResKind res)
+// ebs_done defaults to true so the pre-gate cases read unchanged; the
+// EBS-init gate cases pass false explicitly.
+static AsInputs make(bool asms, bool ts, ResKind res, bool ebs_done = true)
 {
     AsInputs in{};
-    in.asms_on   = asms;
-    in.ts_on     = ts;
-    in.res_estop = (res == RES_ESTOP);
-    in.res_go    = (res == RES_GO);
-    in.res_ok    = (res == RES_OK) || (res == RES_GO);
+    in.asms_on       = asms;
+    in.ts_on         = ts;
+    in.res_estop     = (res == RES_ESTOP);
+    in.res_go        = (res == RES_GO);
+    in.res_ok        = (res == RES_OK) || (res == RES_GO);
+    in.ebs_init_done = ebs_done;
     return in;
 }
 
@@ -75,10 +79,18 @@ static void named_cases()
     CHECK_EQ(ASState::DRIVING,   make(false, true,  RES_GO),  ASState::OFF);
     CHECK_EQ(ASState::EMERGENCY, make(false, true,  RES_OK),  ASState::OFF);
 
-    // Arming: ASMS + TS + RES ok -> READY.
+    // Arming: ASMS + TS + RES ok (EBS init done) -> READY.
     CHECK_EQ(ASState::OFF,   make(true, true,  RES_OK), ASState::READY);
     // No TS yet -> stay OFF (can't arm).
     CHECK_EQ(ASState::OFF,   make(true, false, RES_OK), ASState::OFF);
+
+    // --- EBS-init gate: no READY until the init sequence reports Done ---
+    // (app_task only steps the EBS init FSM while OFF; arming early would
+    // strand it and ASBChecksOK could never pass. Failed init = stay OFF.)
+    CHECK_EQ(ASState::OFF,   make(true, true, RES_OK, false), ASState::OFF);
+    CHECK_EQ(ASState::OFF,   make(true, true, RES_GO, false), ASState::OFF);
+    // E-stop precedence is NOT weakened by the gate.
+    CHECK_EQ(ASState::OFF,   make(true, true, RES_ESTOP, false), ASState::EMERGENCY);
 
     // READY + RES go -> DRIVING.
     CHECK_EQ(ASState::READY, make(true, true,  RES_GO), ASState::DRIVING);
@@ -116,9 +128,10 @@ static void exhaustive_invariants()
     for (ASState prev : prevs)
       for (int asms = 0; asms < 2; ++asms)
         for (int ts = 0; ts < 2; ++ts)
-          for (ResKind res : ress)
-          {
-              AsInputs in = make(asms, ts, res);
+          for (int ebs = 0; ebs < 2; ++ebs)
+            for (ResKind res : ress)
+            {
+              AsInputs in = make(asms, ts, res, ebs);
               ASState out = as_next_state(prev, in);
 
               // INV1: ASMS off -> OFF, unconditionally.
@@ -151,7 +164,12 @@ static void exhaustive_invariants()
               if (out == ASState::DRIVING && prev != ASState::DRIVING) {
                   CHECK_TRUE(prev == ASState::READY && in.res_go);
               }
-          }
+
+              // INV7: READY is only ENTERED with the EBS init sequence Done.
+              if (out == ASState::READY && prev != ASState::READY) {
+                  CHECK_TRUE(in.ebs_init_done);
+              }
+            }
 }
 
 int main()

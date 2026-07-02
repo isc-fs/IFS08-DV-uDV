@@ -134,7 +134,6 @@ extern "C" void StartAppTask(void *argument)
     EbsManager& ebs = EbsManager::getInstance();
     StateManager& state_mgr = StateManager::getInstance();
 
-    EBSInitState ebs_state = EBSInitState::Start;
     ASState as_state = ASState::OFF;
     ASState last_as_state = ASState::OFF;  // Track last state
     uint32_t ready_start_time = 0;
@@ -197,8 +196,12 @@ extern "C" void StartAppTask(void *argument)
         // Decide the next AS state (pure, host-unit-tested — as_transition.hpp).
         // (Supersedes the bench force-true overrides that were commented out
         // in parallel on 6e25098 — they are removed entirely here.)
+        /* Read the manager directly — a loop-local copy would go stale on
+         * reset_all() (EbsManager.reset() puts the manager back to Start). */
+        bool ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
         as_state = as_next_state(previous_as_state,
-                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok});
+                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok,
+                                          ebs_init_done});
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
@@ -264,9 +267,10 @@ extern "C" void StartAppTask(void *argument)
                 case ASState::OFF:
                     assi_set_mode(AS_MODE_OFF);
                     // Perform EBS initialization sequence steps
-                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
+                    if (ebs.getInitState() != EBSInitState::Done &&
+                        ebs.getInitState() != EBSInitState::Failed)
                     {
-                        ebs_state = ebs.initSequenceStep();
+                        ebs.initSequenceStep();
                     }
                     else
                     {
