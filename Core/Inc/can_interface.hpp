@@ -1,7 +1,6 @@
 #pragma once
 
 #include "can_globals.h"
-#include "bmi088.h"
 #include <cstdint>
 #include "fdcan.h"
 #include "cmsis_os2.h"
@@ -17,8 +16,6 @@ void initRes();
 void sendControl(float accel, float steer);
 void sendAccel(float accel);
 void sendSteer(float steer);
-void sendR2D(bool r2d);
-void sendIMU(const bmi088_scaled_t &imu);
 void sendAssiStatus(uint8_t status);
 
 /* RES CANopen — send NMT "set operational" to RES node 0x11 on FDCAN1.
