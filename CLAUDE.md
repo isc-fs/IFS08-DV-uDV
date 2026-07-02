@@ -55,7 +55,7 @@ All tasks and queues are **created** in [Core/Src/freertos.c](Core/Src/freertos.
 | `defaultTask` | Normal | 12 KB | micro-ROS node: all publishers, subscriber executor, time sync | [ros_task.c](Core/Src/ros_task.c) (`ros_task_run`) |
 | `imuTask` | AboveNormal | 8 KB | BMI088 read → attitude update → push to `imuQueueHandle` | [imu_task.c](Core/Src/imu_task.c) |
 | `canTask` | AboveNormal | 4 KB | Drain `canRxQueueHandle` + `resRxQueueHandle`, data logger TX | [can_task.cpp](Core/Src/can_task.cpp) |
-| `amiTask` | BelowNormal | 2 KB | WS2812 LED color based on mission index | [ami_task.c](Core/Src/ami_task.c) |
+| `assiTask` | BelowNormal | 2 KB | ASSI LED renderer: AS mode → UART commands to the Arduino bridge | [assi_task.c](Core/Src/assi_task.c) |
 | `safetyTask` | High | 2 KB | Two-tier watchdog / IWDG refresh | [safety_monitor.c](Core/Src/safety_monitor.c) |
 | `appTask` | Normal | 4 KB | AS state machine + EBS init sequence | [app_task.cpp](Core/Src/app_task.cpp) |
 
@@ -94,12 +94,12 @@ ROS 2 node `cubemx_node` exposes:
 
 Transport: USB CDC with HDLC framing via `micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c`. Memory: custom FreeRTOS-heap allocators in `microros_allocators.c`.
 
-### WS2812 LED Driver
-8 LEDs driven via SPI1 MOSI (bit-banged encoding: `0xE0`=high bit, `0x80`=low bit at ~2 MHz). `ws2812_set_mission_color(index)` maps mission index 0–9 to colors. Updated by `amiTask` on mission changes.
+### ASSI LEDs (UART → Arduino bridge)
+The STM32 does not drive the WS2812 strip directly (3.3 V-vs-5 V DIN level problem). [ws2812.c](Core/Src/ws2812.c) sends 2-byte commands (`a`=off, `b`=yellow, `c`=blue, newline-framed) over **USART10** (PG12 TX, 115200 8N1) to an Arduino Nano that drives the strip at 5 V. [assi_task.c](Core/Src/assi_task.c) maps the AS mode set by `appTask` (`assi_set_mode`) onto colours and owns the flash timing (150 ms half-period → 3.3 Hz, 50 % duty, T14.9.1). See [docs/ASSI_UART_BRIDGE.md](docs/ASSI_UART_BRIDGE.md).
 
 ## STM32CubeMX Integration
 
-`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration. SPI1 (WS2812 driver, PA7 = `SPI1_MOSI`, transmit-only master) is a fully CubeMX-managed peripheral: enabled in `uDV.ioc`, with `MX_SPI1_Init`/`HAL_SPI_MspInit` generated into [Core/Src/spi.c](Core/Src/spi.c). It must stay in the `.ioc` — if SPI1 is removed there, regeneration drops `HAL_SPI_MODULE_ENABLED` from `stm32h7xx_hal_conf.h` and the build breaks with `unknown type name 'SPI_HandleTypeDef'`.
+`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration. USART10 (ASSI Arduino bridge, PG11 RX / PG12 TX, AF11) is a fully CubeMX-managed peripheral: enabled in `uDV.ioc`, with `MX_USART10_UART_Init`/`HAL_UART_MspInit` generated into [Core/Src/usart.c](Core/Src/usart.c). It must stay in the `.ioc` — if it is removed there, regeneration drops `HAL_UART_MODULE_ENABLED` from `stm32h7xx_hal_conf.h` and the build breaks. (SPI1 was fully removed with the old direct WS2812 driver.) **The clock tree in `uDV.ioc` is 528 MHz (VOS0, PLLN=44, HPRE=DIV2)** — do not import a different team `.ioc`'s clock config without regenerating `tim.c`/`fdcan.c`/`i2c.c`/`adc.c` consistently; TIM2's 400 Hz tick and the FDCAN bit timing depend on it.
 
 ## Key Constraints
 
