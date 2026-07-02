@@ -72,6 +72,23 @@ extern "C" {
  * at 10 Hz and time out at 4 missed cycles, so on a link loss each drops to
  * a safe state within the rules bound. */
 #define DV_STATUS_STALE_MS   400u
+/* FS-Rules T11.9.4 cap (ms): a lost safety-critical message must be detected
+ * and the safe state entered within this bound. DV_STATUS_STALE_MS must stay
+ * strictly under it. Mirrors HEARTBEAT_STALE_CAP_S in the pipeline's
+ * interface_contract.py (0.5 s); the two repos have no build-time link, so
+ * the static_assert below is the firmware-side guard against silent drift. */
+#define DV_STATUS_STALE_CAP_MS 500u
+#if defined(__cplusplus)
+static_assert(DV_STATUS_STALE_MS < DV_STATUS_STALE_CAP_MS,
+              "DV_STATUS_STALE_MS must stay under the FS-Rules T11.9.4 500 ms "
+              "detect-and-safe cap (keep in lockstep with the pipeline's "
+              "HEARTBEAT_STALE_S in interface_contract.py)");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(DV_STATUS_STALE_MS < DV_STATUS_STALE_CAP_MS,
+               "DV_STATUS_STALE_MS must stay under the FS-Rules T11.9.4 500 ms "
+               "detect-and-safe cap (keep in lockstep with the pipeline's "
+               "HEARTBEAT_STALE_S in interface_contract.py)");
+#endif
 /* While AS Driving, zero actuation if ctrl/cmd stops arriving within this
  * window, so a dropped link can never latch the last throttle/steering. */
 #define DV_CTRL_CMD_STALE_MS  500u

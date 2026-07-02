@@ -74,8 +74,9 @@ void safety_arm(safety_task_id_t id)
  *
  * So both actions are required for compliance — firing EBS alone is not
  * the safe state:
- *   1. EBS actuators: D1/D2 HIGH (fix/15 polarity, HIGH = fire). The
- *      EBS itself is a passive, mechanical-energy system (T15.2.1).
+ *   1. EBS actuators: D1/D2 LOW (confirmed polarity, LOW = fire — the
+ *      power-on/reset/power-loss level, so it is fail-safe). The EBS
+ *      itself is a passive, mechanical-energy system (T15.2.1).
  *   2. Open the SDC: D4 LOW. This matches dev's hardware_io
  *      (set_as_close_sdc(false) → D4 LOW = open) and fix/15's power-on
  *      GPIO state (D4 LOW), i.e. LOW is the fail-safe "open" level — the
@@ -87,9 +88,10 @@ void safety_arm(safety_task_id_t id)
  *     is a no-op. */
 static void safety_enter_safe_state(void)
 {
-    /* Brakes: fire EBS. */
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+    /* Brakes: fire EBS. LOW = fired (fail-safe / power-on level), HIGH =
+     * released — see hardware_io_is_ebs_active / ebs_manager. */
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
     /* Open the SDC (→ AIRs open / TS off). Required by T15.3.5/T11.9.5. */
     HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
 }

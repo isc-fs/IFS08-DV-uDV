@@ -51,12 +51,16 @@ EBSInitState EbsManager::initSequenceStep()
             }
             break;
 
+        // EBS actuator self-test (FS-Rules T15.2). Polarity: LOW = fire
+        // (build brake pressure), HIGH = release. Each actuator is fired
+        // in turn, its brake-line pressure verified, then released; after
+        // Done both are released (HIGH) ready for normal operation.
         case EBSInitState::WaitTS:
             // TS is sensed locally: TSMS (A6) AND ASMS (A3) HIGH (was CAN 0x504).
             if (hardware_io_read_asms_on() && hardware_io_read_tsms_on())
             {
                 init_state_ = EBSInitState::CheckActuator1;
-                hardware_io_enable_ebs_actuator_1(true);
+                hardware_io_enable_ebs_actuator_1(false);  // fire A1 (LOW)
             }
             break;
 
@@ -64,7 +68,7 @@ EBSInitState EbsManager::initSequenceStep()
             if (checkBrakeLinePressure())
             {
                 init_state_ = EBSInitState::WaitInterActuatorCheck;
-                hardware_io_enable_ebs_actuator_1(false);
+                hardware_io_enable_ebs_actuator_1(true);   // release A1 (HIGH)
                 start_time_ = hardware_io_now_ms();
             }
             break;
@@ -73,7 +77,7 @@ EBSInitState EbsManager::initSequenceStep()
             if (hardware_io_now_ms() - start_time_ > INTER_ACTUATOR_WAIT_MS)
             {
                 init_state_ = EBSInitState::CheckActuator2;
-                hardware_io_enable_ebs_actuator_2(true);
+                hardware_io_enable_ebs_actuator_2(false);  // fire A2 (LOW)
             }
             break;
 
@@ -81,7 +85,7 @@ EBSInitState EbsManager::initSequenceStep()
             if (checkBrakeLinePressure())
             {
                 init_state_ = EBSInitState::Done;
-                hardware_io_enable_ebs_actuator_2(false);
+                hardware_io_enable_ebs_actuator_2(true);    // release A2 (HIGH)
             }
             break;
 
@@ -125,16 +129,18 @@ bool EbsManager::SafeManual()
            (a2_p < EMPTY_ACTUATOR_STORAGE_THRESHOLD);
 }
 
+// EBS polarity (confirmed): LOW = fire the brake, HIGH = release. LOW is
+// the power-on/reset level, so the brake is fail-safe on reset/power loss.
 void EbsManager::activateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(true);
-    hardware_io_enable_ebs_actuator_2(true);
+    hardware_io_enable_ebs_actuator_1(false);   // fire (LOW)
+    hardware_io_enable_ebs_actuator_2(false);   // fire (LOW)
 }
 
 void EbsManager::deactivateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(false);
-    hardware_io_enable_ebs_actuator_2(false);
+    hardware_io_enable_ebs_actuator_1(true);    // release (HIGH)
+    hardware_io_enable_ebs_actuator_2(true);    // release (HIGH)
 }
 
 void EbsManager::reset()

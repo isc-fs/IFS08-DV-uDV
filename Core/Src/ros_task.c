@@ -54,6 +54,13 @@
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
 #define STATE_DUMP_INTERVAL   200   // /debug state heartbeat: every 200 IMU samples (~2 Hz at 400 Hz)
+// /assi/state liveness heartbeat: published on a fixed wall-clock cadence,
+// DECOUPLED from the IMU sample rate (finding #3), so a stalled/slow IMU
+// can't stall the signal the DV pipeline watches. The main loop waits on the
+// IMU queue for at most IMU_QUEUE_WAIT_MS, so it still wakes to publish the
+// heartbeat even with no IMU samples arriving.
+#define ASSI_PUB_INTERVAL_MS  100u  // /assi/state heartbeat period (~10 Hz)
+#define IMU_QUEUE_WAIT_MS     50u   // max block on the IMU queue per loop
 
 /* RTOS queues created in freertos.c (MX_FREERTOS_Init). */
 extern osMessageQueueId_t imuQueueHandle;
@@ -120,15 +127,16 @@ void force_ebs_callback(const void * req, void * res)
 
   char srv_msg[128];
 
-  // Evaluamos el bool que nos llega en request->data
+  // request->data == true  -> fire the EBS (pipeline emergency request).
+  // EBS polarity (confirmed): LOW = fire, HIGH = release (fail-safe).
   if (request->data) {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando apertura de EBS");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET); // Forzar EBS abierto
-    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_SET); // Forzar EBS abierto
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando frenada EBS (fire)");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET); // fire EBS
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET); // fire EBS
   } else {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Vuelta a estado normal");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Liberando EBS (release)");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);   // release EBS
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);   // release EBS
   }
 
   // Enviamos el mensaje al queue de debug
@@ -394,6 +402,19 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
     "assi/state");
 
+  // /assi/pub_gap_max_ms (Int32): running max gap (ms) between successive
+  // /assi/state publishes. Instrumentation for finding #4 — lets the DV
+  // pipeline's staleness window (DV_STATUS_STALE_MS / _ASSI_STALE_S) be
+  // validated on-target under load: watch this climb and confirm it stays
+  // well under the 400 ms window. Best-effort like the other telemetry.
+  rcl_publisher_t assi_gap_pub;
+  std_msgs__msg__Int32 assi_gap_msg;
+  assi_gap_msg.data = 0;
+  rclc_publisher_init_best_effort(
+    &assi_gap_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    "assi/pub_gap_max_ms");
+
   // Raw AS-state publisher (~10 Hz) — the AS state machine state itself
   // (ASState: OFF=0 READY=1 DRIVING=2 EMERGENCY=3 FINISHED=4), distinct
   // from the ASSI-indicator code on /assi/state. General-purpose AS-state
@@ -502,6 +523,13 @@ void ros_task_run(void)
   uint16_t slow_pub_counter    = 0;
   uint16_t steering_fb_counter = 0;
 
+  /* /assi/state heartbeat pacing + inter-publish gap instrumentation.
+     last_assi_pub_ms == 0 also serves as the "no publish yet" sentinel so the
+     first interval (tick count since boot) is not recorded as a gap. */
+  uint32_t last_assi_pub_ms = 0;
+  uint32_t assi_gap_max_ms  = 0;
+  bool     have_last_assi   = false;
+
   /* State-machine snapshot tracking for the /debug dump. Seed with the current
      values so we don't emit a spurious "change" on the first sample; the first
      heartbeat publishes the initial snapshot. */
@@ -514,7 +542,40 @@ void ros_task_run(void)
   for (;;)
   {
     imu_sample_t sample;
-    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
+    osStatus_t imu_status =
+        osMessageQueueGet(imuQueueHandle, &sample, NULL, IMU_QUEUE_WAIT_MS);
+
+    // --- /assi/state liveness heartbeat (decoupled from IMU cadence) ---
+    // Paced on a fixed wall clock and evaluated every loop iteration, whether
+    // or not an IMU sample arrived, so a stalled or slow IMU can no longer
+    // stall the heartbeat the DV pipeline watches for liveness (finding #3).
+    uint32_t assi_now_ms = osKernelGetTickCount();
+    if ((uint32_t)(assi_now_ms - last_assi_pub_ms) >= ASSI_PUB_INTERVAL_MS)
+    {
+      if (have_last_assi)
+      {
+        uint32_t gap = assi_now_ms - last_assi_pub_ms;   // inter-publish gap (ms)
+        if (gap > assi_gap_max_ms) assi_gap_max_ms = gap;
+      }
+      have_last_assi   = true;
+      last_assi_pub_ms = assi_now_ms;
+
+      // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
+      assi_msg.data = can_c_get_assi_status_code();
+      (void)rcl_publish(&assi_pub, &assi_msg, NULL);
+
+      // #4 instrumentation: running max gap between /assi/state publishes, so
+      // the pipeline's staleness window can be validated on-target under load.
+      assi_gap_msg.data = (int32_t)assi_gap_max_ms;
+      (void)rcl_publish(&assi_gap_pub, &assi_gap_msg, NULL);
+
+      // Keep servicing inbound DDS (dv/status, ctrl/cmd, force_ebs) even when
+      // the IMU has stalled, so the whole interface stays live — not just the
+      // outbound heartbeat.
+      rclc_executor_spin_some(&executor, 0);
+    }
+
+    if (imu_status == osOK)
     {
       // Timestamp
       int64_t stamp_ns = epoch_offset_ns + (int64_t)sample.timestamp_us * 1000LL;
@@ -598,9 +659,9 @@ void ros_task_run(void)
         go_msg.data = (int32_t)can_c_get_go_signal();
         (void)rcl_publish(&go_pub, &go_msg, NULL);
 
-        // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
-        assi_msg.data = can_c_get_assi_status_code();
-        (void)rcl_publish(&assi_pub, &assi_msg, NULL);
+        // NOTE: /assi/state (the pipeline liveness heartbeat) is published
+        // above on its own wall-clock cadence, decoupled from this IMU-paced
+        // block — see the heartbeat section at the top of the loop.
 
         // Raw AS state-machine state (ASState enum, not the ASSI code)
         as_state_msg.data = ros_get_as_state();
