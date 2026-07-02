@@ -40,15 +40,15 @@ static void leds_send(const char *cmd /* 2 bytes: letter + '\n' */)
 
 void leds_off(void)
 {
-    leds_send("O\n");
+    leds_send("a\n");
 }
 
 void leds_blue(void)
 {
-    leds_send("B\n");
+    leds_send("c\n");
 }
 
 void leds_yellow(void)
 {
-    leds_send("Y\n");
+    leds_send("b\n");
 }

@@ -1,7 +1,3 @@
-/*
- * assi_task.h
- * ASSI (status lights) FreeRTOS task API
- */
 #ifndef ASSI_TASK_H
 #define ASSI_TASK_H
 
@@ -16,11 +12,19 @@ typedef enum {
     AS_MODE_FINISHED,
 } assi_mode_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Set/get current AS mode */
 void assi_set_mode(assi_mode_t mode);
 assi_mode_t assi_get_mode(void);
 
-/* Task entry (created from MX_FREERTOS_Init) */
+/* Task entry */
 void StartAssiTask(void *argument);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ASSI_TASK_H */

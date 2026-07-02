@@ -35,7 +35,9 @@
 #include "safety_monitor.h"
 #include "dwt_time.h"
 #include "imu_task.h"
+#include "usart.h"
 #include "assi_task.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -183,7 +185,7 @@ void StartDefaultTask(void *argument)
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
   /* USART10 (ASSI LED bridge to the Arduino) is initialized in main(). */
-  assi_set_mode(AS_MODE_OFF);
+  //assi_set_mode(AS_MODE_DRIVING);
 
   ros_task_run();   /* micro-ROS node; defined in ros_task.c; never returns */
   /* USER CODE END StartDefaultTask */

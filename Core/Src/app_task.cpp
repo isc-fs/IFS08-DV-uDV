@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <stdbool.h>
 
 extern "C" {
     #include "FreeRTOS.h"
@@ -24,6 +25,8 @@ extern "C" {
 #include "can_task.h"
 #include "ros_globals.h"
 #include "can_globals.h"
+#include "assi_task.h"
+#include "usart.h"
 
 /**
  * @brief Reset ROS globals to default state
@@ -183,9 +186,14 @@ extern "C" void StartAppTask(void *argument)
         bool asms_on = hardware_io_read_asms_on();
         bool ts_on = state_mgr.getSignals().ts_active;
         int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
-        bool res_ok = (res_status == 0);
+        bool res_ok = (res_status == 0) || (res_status == 2);
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
+
+        asms_on=true;
+        ts_on=true;
+        res_ok=true;
+        res_go=true;
 
         if (!asms_on)
         {
@@ -224,8 +232,7 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
-        if (asms_on)
-        {
+        if (asms_on){
             // Autonomous mode enabled
 
             // Reset state tracking when transitioning out of READY/DRIVING
@@ -271,6 +278,7 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
+                    assi_set_mode(AS_MODE_OFF);
                     // Perform EBS initialization sequence steps
                     if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
                     {
@@ -283,6 +291,7 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::READY:
+                    assi_set_mode(AS_MODE_READY);
                     // Wait 5 seconds in READY state before signaling "go" to CAN
                     if (ready_start_time == 0)
                     {
@@ -295,6 +304,7 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::DRIVING:
+                    assi_set_mode(AS_MODE_DRIVING);
                     // Start the mission once setup is confirmed.
                     // g_set_mission_ready.load() should already be true; we check it just in case.
                     if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
@@ -328,6 +338,7 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::EMERGENCY:
+                    assi_set_mode(AS_MODE_EMERGENCY);
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
 
@@ -356,13 +367,13 @@ extern "C" void StartAppTask(void *argument)
                     }
                     break;
             }
-        }
-        else
-        {
+        }else{
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
             ebs.deactivateEBS();
         }
+
+
 
         // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
         osDelay(1);

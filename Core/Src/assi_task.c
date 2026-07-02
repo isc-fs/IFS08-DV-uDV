@@ -47,13 +47,13 @@ void StartAssiTask(void *argument)
         {
             case AS_MODE_OFF:
                 leds_off();
-                osDelay(200);
+                osDelay(250);
                 break;
 
             case AS_MODE_READY:
                 /* Yellow continuous */
                 leds_yellow();
-                osDelay(200);
+                osDelay(250);
                 break;
 
             case AS_MODE_DRIVING:
@@ -61,7 +61,7 @@ void StartAssiTask(void *argument)
                 flash_state = !flash_state;
                 if (flash_state) leds_yellow();
                 else             leds_off();
-                osDelay(500);
+                osDelay(250);
                 break;
 
             case AS_MODE_EMERGENCY:
@@ -75,12 +75,12 @@ void StartAssiTask(void *argument)
             case AS_MODE_FINISHED:
                 /* Blue continuous */
                 leds_blue();
-                osDelay(200);
+                osDelay(250);
                 break;
 
             default:
                 leds_off();
-                osDelay(200);
+                osDelay(250);
                 break;
         }
     }
