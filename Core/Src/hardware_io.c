@@ -132,9 +132,10 @@ bool hardware_io_is_ebs_active(void)
 {
     GPIO_PinState p1 = HAL_GPIO_ReadPin(D1_GPIO_Port, D1_Pin);
     GPIO_PinState p2 = HAL_GPIO_ReadPin(D2_GPIO_Port, D2_Pin);
-    /* fix/15 polarity: EBS actuators are driven HIGH to activate braking
-     * (matches hardware_io_enable_ebs_actuator_* above). Reading LOW here
-     * (dev's active-low assumption) would make EMERGENCY/FINISHED
-     * unreachable in the state machine. */
-    return (p1 == GPIO_PIN_SET) || (p2 == GPIO_PIN_SET);
+    /* EBS polarity (confirmed): actuators are driven LOW to FIRE the brake,
+     * HIGH to release it. Fail-safe — LOW is the power-on/reset level
+     * (gpio.c inits D1/D2 LOW), so a reset or power loss lands braked;
+     * matches ebs_manager's activate(LOW)/deactivate(HIGH). The brake is
+     * "active" when EITHER channel reads LOW. */
+    return (p1 == GPIO_PIN_RESET) || (p2 == GPIO_PIN_RESET);
 }

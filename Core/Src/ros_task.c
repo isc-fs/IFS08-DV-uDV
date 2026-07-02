@@ -118,15 +118,16 @@ void force_ebs_callback(const void * req, void * res)
 
   char srv_msg[128];
 
-  // Evaluamos el bool que nos llega en request->data
+  // request->data == true  -> fire the EBS (pipeline emergency request).
+  // EBS polarity (confirmed): LOW = fire, HIGH = release (fail-safe).
   if (request->data) {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando apertura de EBS");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET); // Forzar EBS abierto
-    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_SET); // Forzar EBS abierto
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando frenada EBS (fire)");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET); // fire EBS
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET); // fire EBS
   } else {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Vuelta a estado normal");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(D1_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Liberando EBS (release)");
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);   // release EBS
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);   // release EBS
   }
 
   // Enviamos el mensaje al queue de debug

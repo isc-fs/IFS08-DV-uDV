@@ -197,9 +197,11 @@ void StartDefaultTask(void *argument)
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
   (void)xTask; (void)pcTaskName;
-  // Both LEDs on = stack overflow detected
-  HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+  // Fatal: fire the EBS (D1/D2 are the EBS actuators; LOW = fire, the
+  // fail-safe level) and hang so the IWDG resets us into the latched
+  // safe state.
+  HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
   for (;;) {}
 }
 

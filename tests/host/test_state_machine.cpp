@@ -23,8 +23,10 @@
 
 // ---------------------------------------------------------------------
 // Controllable hardware_io stub (replaces the HAL-backed hardware_io.c).
-// Models the EBS actuator pins so is_ebs_active() reflects the HIGH=fire
-// convention the real driver uses (enable(true) -> pin HIGH -> active).
+// Models the EBS actuator pins so is_ebs_active() reflects the confirmed
+// LOW=fire convention the real driver uses: s_ebs_pinN holds the raw pin
+// level (enable(true) -> HIGH -> released; enable(false) -> LOW -> fired),
+// and the brake is "active" when either pin is LOW.
 // ---------------------------------------------------------------------
 namespace {
 bool     s_asms_on        = false;
@@ -32,8 +34,8 @@ bool     s_tsms_on        = false;
 bool     s_sdc_ready      = false;
 float    s_pressure1      = 0.0f;
 float    s_pressure2      = 0.0f;
-bool     s_ebs_pin1       = false;   // D1 (HIGH = fire)
-bool     s_ebs_pin2       = false;   // D2 (HIGH = fire)
+bool     s_ebs_pin1       = false;   // D1 raw level (LOW=fire, HIGH=release)
+bool     s_ebs_pin2       = false;   // D2 raw level (LOW=fire, HIGH=release)
 bool     s_sdc_closed     = false;   // D4 (HIGH = SDC closed)
 uint32_t s_now_ms         = 0;
 }  // namespace
@@ -42,7 +44,7 @@ extern "C" {
 void  hardware_io_set_as_close_sdc(bool on)            { s_sdc_closed = on; }
 void  hardware_io_enable_ebs_actuator_1(bool enable)   { s_ebs_pin1 = enable; }
 void  hardware_io_enable_ebs_actuator_2(bool enable)   { s_ebs_pin2 = enable; }
-bool  hardware_io_is_ebs_active(void)                  { return s_ebs_pin1 || s_ebs_pin2; }
+bool  hardware_io_is_ebs_active(void)                  { return !s_ebs_pin1 || !s_ebs_pin2; }
 bool  hardware_io_read_sdc_is_ready(void)              { return s_sdc_ready; }
 bool  hardware_io_read_asms_on(void)                   { return s_asms_on; }
 bool  hardware_io_read_tsms_on(void)                   { return s_tsms_on; }
@@ -143,15 +145,15 @@ static void test_ebs_happy_path(void)
     CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
     s_asms_on = true; s_tsms_on = true;          // TS = ASMS(A3) && TSMS(A6)
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
-    CHECK(s_ebs_pin1 == true);                   // A1 energised
+    CHECK(s_ebs_pin1 == false);                  // A1 fired (LOW)
     g_can_brake_pressure.store(2.0f);
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitInterActuatorCheck);
-    CHECK(s_ebs_pin1 == false);                  // A1 released
+    CHECK(s_ebs_pin1 == true);                   // A1 released (HIGH)
     s_now_ms += 6000;
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator2);
-    CHECK(s_ebs_pin2 == true);                   // A2 energised
+    CHECK(s_ebs_pin2 == false);                  // A2 fired (LOW)
     CHECK(ebs.initSequenceStep() == EBSInitState::Done);
-    CHECK(s_ebs_pin2 == false);                  // A2 released
+    CHECK(s_ebs_pin2 == true);                   // A2 released (HIGH)
     CHECK(ebs.ASBChecksOK() == true);
 }
 
@@ -190,7 +192,8 @@ static void test_ebs_checks(void)
     /* SafeManual: both tanks < 0.1 (empty). */
     s_pressure1 = 0.05f; s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == true);
     s_pressure1 = 0.2f;  s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == false);
-    /* activateEBS energises both actuators (HIGH = fire). */
+    /* activateEBS drives both actuators LOW (LOW = fire, fail-safe);
+     * deactivateEBS drives them HIGH (release); is_ebs_active reads LOW. */
     ebs.deactivateEBS(); CHECK(hardware_io_is_ebs_active() == false);
     ebs.activateEBS();   CHECK(hardware_io_is_ebs_active() == true);
 }
@@ -259,7 +262,7 @@ static void test_sm_emergency_on_ebs_active(void)
     StateManager& sm = StateManager::getInstance();
     EbsManager& ebs = EbsManager::getInstance();
     drive_ebs_to_done(ebs);
-    ebs.activateEBS();                 // EBS fired, pins HIGH
+    ebs.activateEBS();                 // EBS fired, pins LOW
     g_finished_cmd.store(false);       // mission not finished
     sm.update();
     CHECK(sm.getState() == ASState::EMERGENCY);

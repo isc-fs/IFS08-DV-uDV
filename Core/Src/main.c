@@ -112,16 +112,17 @@ int main(void)
 
   /* Reboot reset-cause detection (idea from fix/17). A reset caused by
    * the IWDG means a prior fatal hang/lockup. Immediately assert the
-   * safe state — EBS fired + SDC open (fix/15 polarity: HIGH = fire,
-   * D4 LOW = SDC open) — and tell the safety monitor to come up LATCHED
-   * in emergency rather than re-arming into normal operation. GPIO is
-   * already configured as output by MX_GPIO_Init() above. The reset
-   * flags persist across the reset, so this is observed even though the
-   * IWDG itself is started later (in the safety task). */
+   * safe state — EBS fired + SDC open (confirmed polarity: LOW = fire,
+   * D4 LOW = SDC open; both are the fail-safe power-on level) — and tell
+   * the safety monitor to come up LATCHED in emergency rather than
+   * re-arming into normal operation. GPIO is already configured as output
+   * by MX_GPIO_Init() above. The reset flags persist across the reset, so
+   * this is observed even though the IWDG itself is started later (in the
+   * safety task). */
   if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != RESET)
   {
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);   /* fire EBS  */
-    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);   /* fire EBS  */
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET); /* fire EBS  */
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET); /* fire EBS  */
     HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET); /* open SDC  */
     safety_flag_watchdog_reset();
   }
