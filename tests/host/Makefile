@@ -36,7 +36,7 @@ SM_SRCS     := test_state_machine.cpp \
                $(CORE_SRC)/can_globals.cpp \
                $(CORE_SRC)/ros_globals.cpp
 
-BINS := test_safety_eval test_state_machine test_rules_compliance
+BINS := test_safety_eval test_state_machine test_rules_compliance test_as_transition
 
 .PHONY: all test clean
 all: test
@@ -56,11 +56,18 @@ test_state_machine: $(SM_SRCS)
 test_rules_compliance: test_rules_compliance.cpp safety_eval.o
 	$(CXX) $(CXXFLAGS) -o $@ test_rules_compliance.cpp safety_eval.o
 
+# ---- suite 4: AS transition decision (pipeline handshake + DV watchdog) --
+# Header-only pure logic (as_transition.hpp); needs the RTOS-type stubs only
+# because state_manager.hpp transitively includes them. No firmware .cpp linked.
+test_as_transition: test_as_transition.cpp
+	$(CXX) $(SM_CXXFLAGS) -o $@ test_as_transition.cpp
+
 test: $(BINS)
 	@echo "=== build_integrity ===";       sh ./check_build_integrity.sh
 	@echo "=== test_safety_eval ===";      ./test_safety_eval
 	@echo "=== test_state_machine ===";    ./test_state_machine
 	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
+	@echo "=== test_as_transition ===";    ./test_as_transition
 
 clean:
 	rm -rf $(BINS) *.o *.dSYM

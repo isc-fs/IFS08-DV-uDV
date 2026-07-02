@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include "state_manager.hpp"
+#include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -211,51 +212,23 @@ extern "C" void StartAppTask(void *argument)
         bool     dv_seen       = (g_dv_status_stamp_ms.load() != 0u);
         bool     dv_fresh      = dv_seen &&
                                  ((now_ms - g_dv_status_stamp_ms.load()) < DV_STATUS_STALE_MS);
-        bool     dv_ready      = dv_fresh && (dv_status == DV_STATUS_READY);
-        bool     dv_finished   = dv_fresh && (dv_status == DV_STATUS_FINISHED);
-        bool     dv_emergency  = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
-                                              dv_status == DV_STATUS_FAILED);
-        // Pipeline heartbeat lost while we were driving (link/DVPC dead).
-        bool     dv_lost_driving = (previous_as_state == ASState::DRIVING) && !dv_fresh;
 
-        if (!asms_on)
-        {
-            as_state = ASState::OFF;
-        }
-        else if (previous_as_state == ASState::EMERGENCY)
-        {
-            as_state = ASState::EMERGENCY;
-        }
-        else if (previous_as_state == ASState::FINISHED)
-        {
-            // Mission complete latches until ASMS off (rule #9 analogue).
-            as_state = ASState::FINISHED;
-        }
-        else if (res_estop
-                 || (!ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
-                 || (dv_emergency && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
-                 || dv_lost_driving)
-        {
-            // RES e-stop, TS lost, pipeline-raised emergency, or a lost
-            // pipeline heartbeat mid-run -> AS Emergency.
-            as_state = ASState::EMERGENCY;
-        }
-        else if (previous_as_state == ASState::DRIVING && dv_finished)
-        {
-            // Pipeline reported the mission finished (was RuntimeControl
-            // outcome=finished) -> end the run cleanly.
-            as_state = ASState::FINISHED;
-        }
-        else if (res_go && previous_as_state == ASState::READY && dv_ready)
-        {
-            // RES "go" is honoured ONLY while the pipeline reports READY —
-            // the handshake that replaces waiting on the old SetMission result.
-            as_state = ASState::DRIVING;
-        }
-        else if (res_ok && ts_on)
-        {
-            as_state = ASState::READY;
-        }
+        // Decide the next AS state via the pure, host-tested transition (see
+        // as_transition.hpp). dv_* fold in freshness: the "go" gate needs a
+        // fresh DV READY, and a stale /dv/status while driving trips Emergency.
+        AsInputs as_in;
+        as_in.asms_on      = asms_on;
+        as_in.ts_on        = ts_on;
+        as_in.res_estop    = res_estop;
+        as_in.res_go       = res_go;
+        as_in.res_ok       = res_ok;
+        as_in.dv_fresh     = dv_fresh;
+        as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);
+        as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
+        as_in.dv_emergency = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
+                                          dv_status == DV_STATUS_FAILED);
+
+        as_state = as_next_state(previous_as_state, as_in);
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
