@@ -19,6 +19,7 @@ extern "C" {
 }
 
 #include "state_manager.hpp"
+#include "as_transition.hpp"   /* pure as_next_state() — host-unit-tested */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -186,35 +187,18 @@ extern "C" void StartAppTask(void *argument)
         bool asms_on = hardware_io_read_asms_on();
         bool ts_on = state_mgr.getSignals().ts_active;
         int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
+        /* "go" also means the RES link is healthy (status 2 = received, go
+         * asserted, no e-stop), so a "go" held before arming still satisfies
+         * the READY condition instead of blocking it. */
         bool res_ok = (res_status == 0) || (res_status == 2);
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
-        //asms_on=true;
-        //ts_on=true;
-        //res_ok=true;
-        //res_go=true;
-
-        if (!asms_on)
-        {
-            as_state = ASState::OFF;
-        }
-        else if (previous_as_state == ASState::EMERGENCY)
-        {
-            as_state = ASState::EMERGENCY;
-        }
-        else if (res_estop || !ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))
-        {
-            as_state = ASState::EMERGENCY;
-        }
-        else if (res_go && previous_as_state == ASState::READY)
-        {
-            as_state = ASState::DRIVING;
-        }
-        else if (res_ok && ts_on)
-        {
-            as_state = ASState::READY;
-        }
+        // Decide the next AS state (pure, host-unit-tested — as_transition.hpp).
+        // (Supersedes the bench force-true overrides that were commented out
+        // in parallel on 6e25098 — they are removed entirely here.)
+        as_state = as_next_state(previous_as_state,
+                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok});
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
