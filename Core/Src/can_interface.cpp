@@ -289,6 +289,7 @@ void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
     switch (msg->id)
     {
     case CAN_ID_RES_PDO_TX: {
+        if (msg->dlc < 1U) break;   /* dlc=0 is legal CAN — don't decode e-stop from garbage */
         g_res_estop.store((msg->data[0] & 0x01U) == 0U);
         g_res_go_signal.store((msg->data[0] & 0x04U) != 0U ? 1U : 0U);
         if (msg->dlc >= 7U) g_res_radio_quality.store(msg->data[6]);
@@ -300,7 +301,13 @@ void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
     }
 
     case CAN_ID_RES_BOOTUP:
-        sendNmtSetOperational();
+        /* 0x700+node carries boot-up (data[0]==0x00) AND heartbeats
+         * (0x04/0x05/0x7F...). Only boot-up warrants an NMT start —
+         * re-sending it on every heartbeat spams the bus. */
+        if (msg->dlc >= 1U && msg->data[0] == 0x00U)
+        {
+            sendNmtSetOperational();
+        }
         break;
 
     default:
