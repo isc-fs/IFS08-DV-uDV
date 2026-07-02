@@ -127,14 +127,14 @@ bool EbsManager::SafeManual()
 
 void EbsManager::activateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(true);
-    hardware_io_enable_ebs_actuator_2(true);
+    hardware_io_enable_ebs_actuator_1(false);
+    hardware_io_enable_ebs_actuator_2(false);
 }
 
 void EbsManager::deactivateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(false);
-    hardware_io_enable_ebs_actuator_2(false);
+    hardware_io_enable_ebs_actuator_1(true);
+    hardware_io_enable_ebs_actuator_2(true);
 }
 
 void EbsManager::reset()

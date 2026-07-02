@@ -355,6 +355,7 @@ extern "C" void StartAppTask(void *argument)
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
             ebs.deactivateEBS();
+            assi_set_mode(AS_MODE_OFF);
         }
 
 
