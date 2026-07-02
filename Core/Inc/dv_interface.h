@@ -64,10 +64,14 @@ extern "C" {
 #define DV_TOPIC_CTRL_CMD     "ctrl/cmd"
 #define DV_SERVICE_FORCE_EBS  "force_ebs"
 
-/* Liveness windows (ms). The pipeline treats assi/state as stale after
- * 1.5 s (_ASSI_STALE_S); keep the uDV's dv/status window comfortably below
- * that so, on a link loss, both sides independently agree who died. */
-#define DV_STATUS_STALE_MS   1000u
+/* Liveness windows (ms). dv/status is published at ~10 Hz (100 ms period),
+ * so 400 ms = 4 missed cycles: jitter-safe, yet under the FS-Rules T11.9.4
+ * cap of 500 ms to detect a lost safety-critical message and enter the safe
+ * state. Coordinated with the pipeline, which watches assi/state on the same
+ * 400 ms window (_ASSI_STALE_S in mission_control_node); both sides publish
+ * at 10 Hz and time out at 4 missed cycles, so on a link loss each drops to
+ * a safe state within the rules bound. */
+#define DV_STATUS_STALE_MS   400u
 /* While AS Driving, zero actuation if ctrl/cmd stops arriving within this
  * window, so a dropped link can never latch the last throttle/steering. */
 #define DV_CTRL_CMD_STALE_MS  500u

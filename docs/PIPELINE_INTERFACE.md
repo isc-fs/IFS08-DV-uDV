@@ -39,9 +39,12 @@ DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6`.
    `dv/status = EMERGENCY`/`FAILED`, RES e-stop, TS loss, or a **stale
    `dv/status` mid-run** → AS Emergency + EBS.
 
-Liveness: `dv/status` older than `DV_STATUS_STALE_MS` (1 s) while driving is
-treated as a dead pipeline → safe state. The pipeline's matching window on
-`assi/state` is 1.5 s, so both sides independently agree who died.
+Liveness: `dv/status` older than `DV_STATUS_STALE_MS` (400 ms) while driving
+is treated as a dead pipeline → safe state. The pipeline watches `assi/state`
+on the same 400 ms window (`_ASSI_STALE_S` in `mission_control_node`). Both
+sides publish at 10 Hz and time out at 4 missed cycles, so on a link loss each
+independently drops to a safe state — and within the FS-Rules T11.9.4 500 ms
+cap for detecting a lost safety-critical message.
 
 ## Implementation map
 
