@@ -26,12 +26,13 @@ set(C_SOURCES
     Core/Src/cordic.c
     Core/Src/fdcan.c
     Core/Src/i2c.c
-    Core/Src/spi.c
+    Core/Src/usart.c
     Core/Src/bmi088.c
     Core/Src/i2c_utils.c
     Core/Src/imu_service.c
     Core/Src/imu_task.c
-    Core/Src/assi.c
+    Core/Src/ws2812.c
+    Core/Src/assi_task.c
     Core/Src/dwt_time.c
     Core/Src/attitude.c
     Core/Src/tim.c
@@ -78,8 +79,8 @@ set(C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
-    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
-    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
     Middlewares/Third_Party/FreeRTOS/Source/croutine.c
     Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
     Middlewares/Third_Party/FreeRTOS/Source/list.c

@@ -88,6 +88,16 @@ const osThreadAttr_t appTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+/* ASSI status-LED renderer (assi_task.c): maps the AS mode set by app_task
+ * onto UART commands to the Arduino LED bridge (see docs/ASSI_UART_BRIDGE.md).
+ * Pure indication, no control role — lowest app priority. */
+osThreadId_t assiTaskHandle;
+const osThreadAttr_t assiTask_attributes = {
+  .name = "assiTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
 osMessageQueueId_t imuQueueHandle;
 osMessageQueueId_t canRxQueueHandle;
 osMessageQueueId_t resRxQueueHandle;
@@ -107,6 +117,7 @@ const osThreadAttr_t defaultTask_attributes = {
 void StartImuTask(void *argument);
 void StartCanTask(void *argument);
 void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
+void StartAssiTask(void *argument);  /* ASSI LED renderer, in assi_task.c */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -152,6 +163,7 @@ void MX_FREERTOS_Init(void) {
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
   safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
   appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
+  assiTaskHandle = osThreadNew(StartAssiTask, NULL, &assiTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
