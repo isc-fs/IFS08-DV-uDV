@@ -63,6 +63,16 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
         return ASState::EMERGENCY;
     if (prev == ASState::DRIVING && in.dv_finished)
         return ASState::FINISHED;                  /* pipeline reported done */
+    if (prev == ASState::DRIVING)
+        return ASState::DRIVING;                   /* DRIVING is sticky: GO is a
+                                                      trigger, not a level — only
+                                                      the exits above end a run
+                                                      (estop / TS loss / DV emerg /
+                                                      DV lost / DV finished / ASMS
+                                                      off). Without this, a held GO
+                                                      oscillates READY<->DRIVING and
+                                                      a released GO tears the
+                                                      mission down mid-drive. */
     if (in.res_go && prev == ASState::READY && in.dv_ready)
         return ASState::DRIVING;                   /* go honoured only if DV READY */
     if (in.res_ok && in.ts_on)

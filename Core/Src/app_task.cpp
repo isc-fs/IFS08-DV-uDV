@@ -198,7 +198,10 @@ extern "C" void StartAppTask(void *argument)
         bool ts_on = state_mgr.getSignals().ts_active;
         uint32_t now_ms = osKernelGetTickCount();
         int32_t res_status = can_c_get_res_status(now_ms, 150U);
-        bool res_ok = (res_status == 0);
+        /* "go" also means the RES link is healthy (status 2 = received, go
+         * asserted, no e-stop) — otherwise a GO held before arming would
+         * block the READY condition forever (ported from fix/19). */
+        bool res_ok = (res_status == 0) || (res_status == 2);
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 

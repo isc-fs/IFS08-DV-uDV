@@ -73,7 +73,9 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv)
     in.ts_on        = ts;
     in.res_estop    = (res == RES_ESTOP);
     in.res_go       = (res == RES_GO);
-    in.res_ok       = (res == RES_OK);
+    /* Mirrors the producer in app_task.cpp: "go" also means the RES link is
+     * healthy (res_ok true for status 0 AND status 2 — the fix/19 port). */
+    in.res_ok       = (res == RES_OK) || (res == RES_GO);
     in.dv_fresh     = (dv != DV_STALE);
     in.dv_ready     = (dv == DV_FRESH_READY);
     in.dv_finished  = (dv == DV_FRESH_FINISHED);
@@ -99,8 +101,17 @@ static void test_named_cases(void)
     CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY), ASState::DRIVING);
 
     // Driving, pipeline still Running (fresh, not ready/finished/emerg),
-    // RES still go -> stay DRIVING.
+    // RES still go -> stay DRIVING (no READY<->DRIVING oscillation with a
+    // held GO, even though go now implies res_ok).
     CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_OTHER), ASState::DRIVING);
+    // Driving, GO RELEASED (RES back to plain ok) -> STAY DRIVING. GO is a
+    // trigger, not a level: releasing it must not tear the mission down.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_OK, DV_FRESH_OTHER), ASState::DRIVING);
+    // GO held while still OFF (pressed before arming): with go implying
+    // res_ok (fix/19 port), the car can still reach READY...
+    CHECK_EQ(ASState::OFF, make(true, true, RES_GO, DV_STALE), ASState::READY);
+    // ...and the very next tick READY+go+DV_READY takes it to DRIVING.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY), ASState::DRIVING);
     // Driving, pipeline reports FINISHED -> FINISHED.
     CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_FINISHED), ASState::FINISHED);
     // Driving, pipeline reports EMERGENCY -> EMERGENCY.
@@ -168,6 +179,15 @@ static void test_invariants(void)
                 // Driving forces Emergency.
                 if (prev == ASState::DRIVING && !in.dv_fresh) {
                     CHECK_TRUE(out == ASState::EMERGENCY);
+                }
+
+                // INV7 DRIVING persistence: while Driving with a healthy world
+                // (no e-stop, TS on, DV fresh and not finished/emergency), the
+                // run continues REGARDLESS of the RES go level — a held or
+                // released GO never bounces the state.
+                if (prev == ASState::DRIVING && !in.res_estop && in.ts_on &&
+                    in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
+                    CHECK_TRUE(out == ASState::DRIVING);
                 }
             }
 }
