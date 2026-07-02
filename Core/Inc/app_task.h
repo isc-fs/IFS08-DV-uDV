@@ -11,12 +11,16 @@
 extern "C" {
 #endif
 
+#define STEER_PING_INTERVAL_MS  200
+#define STEER_REPS_PER_ANGLE    5   // repetitions per angle (5 × 200 ms = 1 s each)
+
 /**
  * @brief  Application task entry point
  * @param  argument: Not used
  * @retval None
  */
 void StartAppTask(void *argument);
+void move_steer_sin();
 
 #ifdef __cplusplus
 }

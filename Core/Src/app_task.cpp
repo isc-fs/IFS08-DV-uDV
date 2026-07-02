@@ -141,6 +141,7 @@ extern "C" void StartAppTask(void *argument)
     int last_mission_id = -1;
     bool set_mission_sent = false;
     bool start_mission_sent = false;
+    uint32_t mission_time = osKernelGetTickCount();
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -157,6 +158,8 @@ extern "C" void StartAppTask(void *argument)
      * trips the watchdog emergency — this replaces the old TIM3 timer. */
     safety_arm(SAFETY_TASK_APP);
 
+    uint32_t last_ping_tick  = osKernelGetTickCount();
+
     // Main control loop
     while (1)
     {
@@ -171,6 +174,8 @@ extern "C" void StartAppTask(void *argument)
         //7. configura para que la mision por defecto sea INSPECTION
         //8. Por el momento no hay forma de transicinar a AS_finished.
         //9. La unica forma de salir de AS_emergency es pasar por asms off.
+
+        uint32_t now = osKernelGetTickCount();
 
         // Check for reset command (issued by external supervisor)
         if (g_reset_cmd.load())
@@ -197,8 +202,24 @@ extern "C" void StartAppTask(void *argument)
         // Decide the next AS state (pure, host-unit-tested — as_transition.hpp).
         // (Supersedes the bench force-true overrides that were commented out
         // in parallel on 6e25098 — they are removed entirely here.)
-        as_state = as_next_state(previous_as_state,
-                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok});
+        if (!asms_on) {
+            as_state = ASState::OFF;
+        } else if (previous_as_state == ASState::EMERGENCY) {
+            as_state = ASState::EMERGENCY;
+        } else if (res_estop || (!ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))) {
+            as_state = ASState::EMERGENCY;
+        } else if (previous_as_state == ASState::DRIVING) {
+            as_state = ASState::DRIVING; // Sticky
+        } else if (previous_as_state == ASState::FINISHED) {
+            as_state = ASState::FINISHED; // Sticky
+        } else if (res_go && as_state == ASState::READY) {
+            as_state = ASState::DRIVING;
+            mission_time = osKernelGetTickCount(); // Efecto secundario mantenido
+        } else if (res_ok && ts_on) {
+            as_state = ASState::READY;
+        } else {
+            as_state = previous_as_state;
+        }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
@@ -263,6 +284,7 @@ extern "C" void StartAppTask(void *argument)
             {
                 case ASState::OFF:
                     assi_set_mode(AS_MODE_OFF);
+                    ebs.activateEBS();
                     // Perform EBS initialization sequence steps
                     if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
                     {
@@ -276,6 +298,7 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::READY:
                     assi_set_mode(AS_MODE_READY);
+                    ebs.activateEBS();
                     // Wait 5 seconds in READY state before signaling "go" to CAN
                     if (ready_start_time == 0)
                     {
@@ -289,36 +312,28 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                     assi_set_mode(AS_MODE_DRIVING);
-                    // Start the mission once setup is confirmed.
-                    // g_set_mission_ready.load() should already be true; we check it just in case.
-                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
-                    {
-                        if (send_start_mission_command(current_mission_id))
-                        {
-                            start_mission_sent = true;
-                        }
-                    }
-                    else
-                    {
-                        // Mission is running - check for emergency/finish conditions
-                        if (g_emergency_cmd.load() || g_finished_cmd.load())
-                        {
-                            // Trigger emergency brake
-                            ebs.activateEBS();
+                    ebs.deactivateEBS();
 
-                            // Cancel mission if still active
-                            if (g_mission_going_cmd.load())
-                            {
-                                send_cancel_mission_command();
+                    switch (g_can_mission_id.load()){
+                        case 0:  //Inspection
+                            move_steer_sin();
+                            //sen_motor_power(15); //15%
+                            if(now-mission_time > 30000){
+                                as_state = ASState::FINISHED;
                             }
-                        }
-                        else
-                        {
-                            // Send control commands continuously (ECU expects constant stream)
-                            Can::sendAccel(g_accel_cmd.load());
-                            Can::sendSteer(g_steer_cmd.load());
-                        }
+                            break;
+                        case 1:  //EBS test
+                            Can::sendSteeringAngle(0.0f);
+                            //sen_motor_power(50); //15%
+                            break;
+                        case 2:  //Trackdrive
+                            //Can::sendSteeringAngle(0.0f);
+                            //sen_motor_power(50); //15%
+                            break;
+                        default:
+                            break;
                     }
+
                     break;
 
                 case ASState::EMERGENCY:
@@ -339,22 +354,14 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
+                    assi_set_mode(AS_MODE_FINISHED);
                     // Mission complete - EBS already active, just ensure mission is cancelled
-                    if (g_set_mission_in_progress.load())
-                    {
-                        send_cancel_set_mission_command();
-                    }
-
-                    if (g_mission_going_cmd.load())
-                    {
-                        send_cancel_mission_command();
-                    }
                     break;
             }
         }else{
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
-            ebs.deactivateEBS();
+            ebs.activateEBS();
             assi_set_mode(AS_MODE_OFF);
         }
 
@@ -362,5 +369,21 @@ extern "C" void StartAppTask(void *argument)
 
         // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
         osDelay(1);
+    }
+}
+
+void move_steer_sin(){
+    {
+        static uint32_t last_ping_tick = 0;
+        static float time_accumulator = 0.0f;
+
+        uint32_t now = osKernelGetTickCount();
+
+        if ((now - last_ping_tick) >= 200) {
+            float angle = 90.0f * sinf(2.0f * 3.1415f * 0.3f * time_accumulator);
+            Can::sendSteeringAngle((int16_t)angle);
+            time_accumulator += 0.2f; 
+            last_ping_tick = now;
+        }
     }
 }
