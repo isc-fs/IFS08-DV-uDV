@@ -11,9 +11,9 @@ USART10 TX, **115200 8N1**, one ASCII command per state, newline-terminated:
 
 | Command | Meaning |
 |---------|---------|
-| `O\n`   | LEDs off |
-| `B\n`   | LEDs blue |
-| `Y\n`   | LEDs yellow |
+| `a\n`   | LEDs off |
+| `b\n`   | LEDs yellow |
+| `c\n`   | LEDs blue |
 
 Commands are re-sent every ASSI refresh (~2–5 Hz), so a dropped byte self-heals
 on the next refresh. Single-char keeps parsing trivial and is easy to eyeball in
@@ -33,9 +33,9 @@ void setup(){ Serial.begin(115200); strip.begin(); set(0,0,0); }
 void loop(){
   if(!Serial.available()) return;
   char c = Serial.read();
-  if      (c=='O') set(0,0,0);
-  else if (c=='B') set(0,0,255);
-  else if (c=='Y') set(255,255,0);
+  if      (c=='a') set(0,0,0);
+  else if (c=='b') set(255,255,0);
+  else if (c=='c') set(0,0,255);
 }
 ```
 Wiring: STM32 **PG12 (USART10_TX) → Nano RX (D0)**, and **common ground**.

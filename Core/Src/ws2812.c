@@ -5,9 +5,9 @@
  *
  * Wire protocol (STM32H7 -> Arduino Nano, USART10 TX, 115200 8N1):
  *   one ASCII command character, newline-terminated for framing:
- *     'O' + '\n'  ->  LEDs off
- *     'B' + '\n'  ->  LEDs blue
- *     'Y' + '\n'  ->  LEDs yellow
+ *     'a' + '\n'  ->  LEDs off
+ *     'b' + '\n'  ->  LEDs yellow
+ *     'c' + '\n'  ->  LEDs blue
  *
  * The Arduino reads a line and drives the physical WS2812 strip. Commands are
  * (re)sent every ASSI refresh (~2-5 Hz), so a dropped byte self-heals on the
@@ -21,9 +21,9 @@
  *   void loop() {
  *     if (Serial.available()) {
  *       char c = Serial.read();
- *       if      (c == 'O') setStrip(0, 0, 0);
- *       else if (c == 'B') setStrip(0, 0, 255);
- *       else if (c == 'Y') setStrip(255, 255, 0);
+ *       if      (c == 'a') setStrip(0, 0, 0);
+ *       else if (c == 'b') setStrip(255, 255, 0);
+ *       else if (c == 'c') setStrip(0, 0, 255);
  *     }
  *   }
  ******************************************************************************
