@@ -94,12 +94,12 @@ ROS 2 node `cubemx_node` exposes:
 
 Transport: USB CDC with HDLC framing via `micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c`. Memory: custom FreeRTOS-heap allocators in `microros_allocators.c`.
 
-### WS2812 LED Driver
-8 LEDs driven via SPI1 MOSI (bit-banged encoding: `0xE0`=high bit, `0x80`=low bit at ~2 MHz). `ws2812_set_mission_color(index)` maps mission index 0–9 to colors. Updated by `amiTask` on mission changes.
+### ASSI LEDs (UART bridge)
+The STM32 does not drive the WS2812 strip directly (3.3 V DIN was unreliable). It sends single-char commands (`a`=off, `b`=yellow, `c`=blue, newline-terminated) over **USART10** (PG12 TX, 115200 8N1) to an Arduino Nano that drives the strip. See [docs/ASSI_UART_BRIDGE.md](docs/ASSI_UART_BRIDGE.md). `assi_task.c` maps the 5 ASSI modes onto `leds_off/leds_yellow/leds_blue` in [ws2812.c](Core/Src/ws2812.c) — SPI is fully removed from the `.ioc` and the build.
 
 ## STM32CubeMX Integration
 
-`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration. SPI1 (WS2812 driver, PA7 = `SPI1_MOSI`, transmit-only master) is a fully CubeMX-managed peripheral: enabled in `uDV.ioc`, with `MX_SPI1_Init`/`HAL_SPI_MspInit` generated into [Core/Src/spi.c](Core/Src/spi.c). It must stay in the `.ioc` — if SPI1 is removed there, regeneration drops `HAL_SPI_MODULE_ENABLED` from `stm32h7xx_hal_conf.h` and the build breaks with `unknown type name 'SPI_HandleTypeDef'`.
+`uDV.ioc` is the CubeMX project file. CubeMX generates peripheral init code into `Core/Src/` and `Core/Inc/`. **Only edit code inside `/* USER CODE BEGIN/END */` blocks** to survive regeneration.
 
 ## Key Constraints
 

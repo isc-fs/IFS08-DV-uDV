@@ -23,7 +23,7 @@ enum class ASState {
 
 struct StateManagerSignals {
     bool asms_on = false;           // ASMS on signal (hardware io)
-    bool ts_active = false;         // Tractive System active (can)
+    bool ts_active = false;         // Tractive System active (local: ASMS ∧ TSMS ADC)
     bool sdc_res_open = false;      // SDC resistor open (can)
     bool ebs_activated = false;     // EBS activated (hardware io)
     bool abs_checks_ok = false;     // All brake system checks passed (hardware io)

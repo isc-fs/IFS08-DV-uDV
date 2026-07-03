@@ -256,18 +256,22 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
             uint16_t raw_u = ((uint16_t)msg->data[1] << 8) | (uint16_t)msg->data[0];
             int16_t raw_angle = (int16_t)raw_u;
             
+            /* Store RAW wire units (0.1 deg/bit) — consumers scale.
+             * Storing a scaled float truncated through the int16 atomic
+             * and every reader re-scaled it (10x low). */
             if (raw_u != 0x7FFF) {
-                g_steering_angle_raw.store(raw_angle * 0.1f); // Requiere que g_steering_angle_raw sea float
+                g_steering_angle_raw.store(raw_angle);
             } else {
-                g_steering_angle_raw.store(0.0f); 
+                g_steering_angle_raw.store(0);
             }
 
             // 2. Parseo y validación de la Velocidad (con signo int8_t)
             if (msg->data[2] != 0xFF) {
-                int8_t raw_speed = (int8_t)msg->data[2];
-                g_steering_speed_raw.store(raw_speed * 4.0f); // Requiere que g_steering_speed_raw sea float
+                /* Raw wire units too (4 deg/s per bit) — *4 overflowed
+                 * the byte-wide atomic for |speed| > 63. */
+                g_steering_speed_raw.store((int8_t)msg->data[2]);
             } else {
-                g_steering_speed_raw.store(0.0f);
+                g_steering_speed_raw.store(0);
             }
 
             // 3. Estado (Si quieres seguir guardando el byte crudo)
