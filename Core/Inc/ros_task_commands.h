@@ -1,63 +1,46 @@
+/**
+ * @file    ros_task_commands.h
+ * @brief   Mission-orchestration command interface used by app_task.
+ *
+ * On fix/17 these were micro-ROS action-client calls (SetMission /
+ * RuntimeControl over the custom `dv_msgs` package). That action layer
+ * (ros_interface.cpp + dv_msgs) is intentionally NOT integrated on this
+ * branch — it does not compile and depends on a package that does not
+ * exist in the tree. These are no-op STUBS that keep app_task's state
+ * machine compiling and running.
+ *
+ * ⚠️  Until wired to the real ROS layer, nothing sets g_set_mission_ready
+ *     / g_mission_going_cmd, so the autonomous path will not advance past
+ *     AS Off (mission_selected stays false). The state machine, EBS init
+ *     sequence, ASSI emission and CAN-driven inputs all still work.
+ *
+ * TODO(ros-layer): replace with real SetMission/RuntimeControl calls (or
+ * std_srvs/std_msgs equivalents) that drive the ros_globals command
+ * atomics. See docs / the comparison with fix/17's ros_interface.cpp.
+ */
 #ifndef ROS_TASK_COMMANDS_H
 #define ROS_TASK_COMMANDS_H
 
-#include "FreeRTOS.h"
-#include "queue.h"
-#include "ros_globals.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// Commands from AppTask to RosTask
-typedef enum {
-    ROS_CMD_NONE = 0,
-    ROS_CMD_SET_MISSION,
-    ROS_CMD_START_MISSION,
-    ROS_CMD_CANCEL_MISSION
-} RosCmd;
+/** Begin mission setup. Returns true if the command was dispatched. */
+bool send_set_mission_command(int mission_id);
 
-typedef struct {
-    RosCmd cmd;
-    int mission_id;
-} RosCommandMessage;
+/** Begin the run once setup is confirmed. Returns true if dispatched. */
+bool send_start_mission_command(int mission_id);
 
-// Helper functions to send commands to the ROS queue
-static inline void send_set_mission_command(int mission_id)
-{
-    if (g_ros_cmd_queue == NULL) return;
+/** Cancel a running mission. */
+void send_cancel_mission_command(void);
 
-    RosCommandMessage msg;
-    msg.cmd = ROS_CMD_SET_MISSION;
-    msg.mission_id = mission_id;
-
-    xQueueSend(g_ros_cmd_queue, &msg, 0);
-}
-
-static inline void send_start_mission_command(int mission_id)
-{
-    if (g_ros_cmd_queue == NULL) return;
-
-    RosCommandMessage msg;
-    msg.cmd = ROS_CMD_START_MISSION;
-    msg.mission_id = mission_id;
-
-    xQueueSend(g_ros_cmd_queue, &msg, 0);
-}
-
-static inline void send_cancel_mission_command()
-{
-    if (g_ros_cmd_queue == NULL) return;
-
-    RosCommandMessage msg;
-    msg.cmd = ROS_CMD_CANCEL_MISSION;
-    msg.mission_id = 0; // not used
-
-    xQueueSend(g_ros_cmd_queue, &msg, 0);
-}
+/** Cancel an in-progress mission setup. */
+void send_cancel_set_mission_command(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // ROS_TASK_COMMANDS_H
+#endif /* ROS_TASK_COMMANDS_H */

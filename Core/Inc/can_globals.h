@@ -49,14 +49,23 @@ extern std::atomic<bool> g_reset_cmd;
 /* Steering sensor (FDCAN3 ID 0x2B0).  Raw representation matches the LWS
  * sensor wire format so the CAN layer doesn't allocate floats in ISR.
  *   angle_raw  : 0.1 deg/bit, signed
- *   speed_raw  : 4 deg/s per bit, unsigned
+ *   speed_raw  : 4 deg/s per bit, signed (decode casts the wire byte)
  *   status     : bit0=OK, bit1=CAL, bit2=TRIM
  *   last_rx_tick : osKernelGetTickCount() at the last received frame
  */
 extern std::atomic<int16_t>  g_steering_angle_raw;
-extern std::atomic<uint8_t>  g_steering_speed_raw;
+extern std::atomic<int8_t>   g_steering_speed_raw;
 extern std::atomic<uint8_t>  g_steering_status;
 extern std::atomic<uint32_t> g_steering_last_rx_tick;
+
+/* Steering controller feedback (FDCAN3 ID 0x500, 20 Hz).
+ *   angle_actual : int8 × 0.5 °/bit → actual LWS angle in degrees
+ *   angle_target : int8 × 0.5 °/bit → last angle commanded by uDV
+ *   angle_motor  : int8 × 0.5 °/bit → stepper position calculated by steps
+ */
+extern std::atomic<float>    g_steer_angle_actual;
+extern std::atomic<float>    g_steer_angle_target;
+extern std::atomic<float>    g_steer_angle_motor;
 
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
@@ -68,5 +77,23 @@ extern std::atomic<bool>     g_res_pre_alarm;
 extern std::atomic<uint32_t> g_res_last_rx_tick;
 
 #endif /* __cplusplus */
+
+/* C-callable accessors — implemented in can_interface.cpp, usable from C files */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+float    can_c_get_steering_angle_deg(void);
+int32_t  can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms);
+int32_t  can_c_get_mission_index(void);
+uint8_t  can_c_get_go_signal(void);
+float    can_c_get_steer_angle_actual(void);
+float    can_c_get_steer_angle_target(void);
+float    can_c_get_steer_angle_motor(void);
+uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CAN_GLOBALS_H

@@ -27,12 +27,18 @@ void StateManager::updateSignals()
 {
     // Read from HardwareIO (digital inputs) and CAN atomics
     signals_.asms_on = hardware_io_read_asms_on();
-    signals_.ts_active = g_can_ts_active.load();
+    // TS active is sensed locally on the uDV board: TSMS (A6) AND ASMS (A3)
+    // both HIGH. (Previously waited for CAN 0x504 TS_ACTIVE, which nothing on
+    // the car transmits, so the state machine saw TS permanently off.)
+    signals_.ts_active = signals_.asms_on && hardware_io_read_tsms_on();
+    // sdc_res_open comes via CAN 0x506 ("RES opened the SDC"). On-board derivation
+    // from A1=RES_1_IN was considered but rejected (only 1 RES channel reaches the
+    // MCU). See docs/STATE_MACHINE_INPUTS.md
     signals_.sdc_res_open = g_can_sdc_res_open.load();
 
     // Read from EbsManager and hardware pins.
     // Do NOT trust the hardware readback while the EBS initialization is
-    // actively exercising the actuators (these states drive the pins low):
+    // actively exercising the actuators (these states pulse the pins):
     //   CheckActuator1, WaitInterActuatorCheck, CheckActuator2
     EBSInitState es = ebs_.getInitState();
     const bool in_actuator_check = (es == EBSInitState::CheckActuator1 ||
@@ -40,13 +46,19 @@ void StateManager::updateSignals()
                                    es == EBSInitState::CheckActuator2);
     signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
     signals_.abs_checks_ok = ebs_.ASBChecksOK();
+    // brakes_engaged comes via CAN 0x505: hydraulic brake-line pressure read by
+    // another ECU (not sensed on the uDV; A4/A5 are EBS air-tank pressures).
+    // See docs/STATE_MACHINE_INPUTS.md
     signals_.brakes_engaged = (g_can_brake_pressure.load() >= g_brake_pressure_threshold);
 
-    // Read from CAN globals (via atomics)
+    // TODO(inputs): R2D != GO. GO comes from the RES (CAN / hardwired A2=GO_RES);
+    // R2D is given *to* the ECU. The OFF->DRIVING gate on r2d needs rework — the
+    // drive trigger should be GO, with R2D as an output. Left as-is for now.
+    // See docs/STATE_MACHINE_INPUTS.md
     signals_.r2d = g_can_r2d.load();
     signals_.vehicle_standstill = g_imu_vehicle_standstill.load();
     int mission_id = g_can_mission_id.load();
-    signals_.mission_selected = (mission_id > 0);
+    signals_.mission_selected = (mission_id > 0 && g_set_mission_ready.load());
 
     // Read from ROS globals (via atomics)
     signals_.mission_finished = g_finished_cmd.load();

@@ -20,6 +20,7 @@ extern "C" {
 
 #include "can_interface.hpp"
 #include "can_task.h"
+#include "safety_monitor.h"   /* heartbeat / arm (extern "C" guarded) */
 
 /**
  * @brief C wrapper function that FreeRTOS calls
@@ -27,7 +28,12 @@ extern "C" {
  * Implements the CAN communication task
  */
 /* DataLogger TX cadence: DS 2.2 specifies a 100 ms heartbeat for 0x500/501/502. */
-#define DL_TX_INTERVAL_MS  100
+#define DL_TX_INTERVAL_MS       100
+#define STEER_PING_INTERVAL_MS  200
+#define STEER_REPS_PER_ANGLE    5   // repetitions per angle (5 × 200 ms = 1 s each)
+
+static const float STEER_SEQ[] = { 0, 60, 120, 180, 120, 180, 60, 0 };
+static const uint8_t STEER_SEQ_LEN = sizeof(STEER_SEQ) / sizeof(STEER_SEQ[0]);
 
 extern "C" void StartCanTask(void *argument)
 {
@@ -39,12 +45,23 @@ extern "C" void StartCanTask(void *argument)
     Can::init();
     Can::initRes();
 
-    uint32_t last_dl_tick = osKernelGetTickCount();
+    Can::sendSteeringMotor(1);  // Motor start — sent once before angle loop
+
+    /* Both buses up: the safety monitor now watches this loop. */
+    safety_arm(SAFETY_TASK_CAN);
+
+    uint32_t last_dl_tick    = osKernelGetTickCount();
+    uint32_t last_ping_tick  = osKernelGetTickCount();
+    uint8_t  seq_idx  = 0;
+    uint8_t  seq_reps = 0;
 
     // Task loop - runs indefinitely until the task is deleted
     while (1)
     {
-        can_msg_t rx_msg;
+            /* Liveness beat — one per service loop (~5 ms). */
+            safety_heartbeat(SAFETY_TASK_CAN);
+
+            can_msg_t rx_msg;
 
         // FDCAN3 (AMI + steering) — non-blocking
         if (osMessageQueueGet(canRxQueueHandle, &rx_msg, NULL, 0) == osOK)
@@ -59,12 +76,24 @@ extern "C" void StartCanTask(void *argument)
             Can::resRxDispatch(&rx_msg);
         }
 
-        // DataLogger TX every 100 ms (DS 2.2 cadence).
         uint32_t now = osKernelGetTickCount();
+
+        // DataLogger TX every 100 ms (DS 2.2 cadence).
         if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)
         {
             Can::sendDataLogger();
             last_dl_tick = now;
+        }
+
+        // FDCAN3 steering angle sequence at 5 Hz, STEER_REPS_PER_ANGLE per step.
+        if ((now - last_ping_tick) >= STEER_PING_INTERVAL_MS)
+        {
+            Can::sendSteeringAngle(STEER_SEQ[seq_idx]);
+            if (++seq_reps >= STEER_REPS_PER_ANGLE) {
+                seq_reps = 0;
+                if (++seq_idx >= STEER_SEQ_LEN) seq_idx = 0;
+            }
+            last_ping_tick = now;
         }
 
         osDelay(5);

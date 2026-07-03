@@ -25,22 +25,31 @@ set(C_SOURCES
     Core/Src/adc.c
     Core/Src/cordic.c
     Core/Src/fdcan.c
-    Core/Src/ws2812.c
     Core/Src/i2c.c
+    Core/Src/usart.c
     Core/Src/bmi088.c
     Core/Src/i2c_utils.c
     Core/Src/imu_service.c
+    Core/Src/imu_task.c
+    Core/Src/ws2812.c
+    Core/Src/assi_task.c
+    Core/Src/dwt_time.c
     Core/Src/attitude.c
     Core/Src/tim.c
-    Core/Src/spi.c
+    Core/Src/comunicacion_direccion.c
+    # Safety / watchdog + AS state-machine support (keep in sync with Makefile)
+    Core/Src/iwdg.c
+    Core/Src/safety_eval.c
+    Core/Src/safety_monitor.c
+    Core/Src/hardware_io.c
+    Core/Src/ros_task_commands.c
+    Core/Src/ros_task.c
     Core/Src/stm32h7xx_it.c
     Core/Src/stm32h7xx_hal_msp.c
     Core/Src/stm32h7xx_hal_timebase_tim.c
     Core/Src/system_stm32h7xx.c
     Core/Src/sysmem.c
     Core/Src/syscalls.c
-    Core/Src/hardware_io.c
-    Core/Src/dwt_time.c
     USB_DEVICE/App/usb_device.c
     USB_DEVICE/App/usbd_desc.c
     USB_DEVICE/App/usbd_cdc_if.c
@@ -70,8 +79,8 @@ set(C_SOURCES
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_cordic.c
     Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_fdcan.c
-    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c
-    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c
+    Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
     Middlewares/Third_Party/FreeRTOS/Source/croutine.c
     Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
     Middlewares/Third_Party/FreeRTOS/Source/list.c
@@ -94,18 +103,15 @@ set(C_SOURCES
 )
 
 # C++ sources
-set(CXX_SOURCES
-    Core/Src/imu_task.cpp
-    Core/Src/ami_task.cpp
-    Core/Src/app_task.cpp
-    Core/Src/can_task.cpp
-    Core/Src/can_globals.cpp
+set(CPP_SOURCES
     Core/Src/can_interface.cpp
-    Core/Src/ros_task.cpp
-    Core/Src/ros_globals.cpp
-    Core/Src/ros_interface.cpp
+    Core/Src/can_globals.cpp
+    Core/Src/can_task.cpp
+    # AS state machine (keep in sync with Makefile)
+    Core/Src/app_task.cpp
     Core/Src/state_manager.cpp
     Core/Src/ebs_manager.cpp
+    Core/Src/ros_globals.cpp
 )
 
 # ASM sources
@@ -127,31 +133,28 @@ set(INCLUDE_DIRS
     Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
     Drivers/CMSIS/Device/ST/STM32H7xx/Include
     Drivers/CMSIS/Include
-    # micro-ROS includes (NOT _ide path — use Docker Makefile builder, not CubeIDE)
+    # micro-ROS includes (CORREGIDO)
     micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/microros_include
 )
 
 # Executable
-add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${CXX_SOURCES} ${ASM_SOURCES})
+add_executable(${PROJECT_NAME}.elf ${C_SOURCES} ${CPP_SOURCES} ${ASM_SOURCES})
 target_include_directories(${PROJECT_NAME}.elf PRIVATE ${INCLUDE_DIRS})
 
 # Compiler flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${MCU_FLAGS} -Og -Wall -fdata-sections -ffunction-sections")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MCU_FLAGS} -Og -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${MCU_FLAGS} -Og -std=c++11 -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} ${MCU_FLAGS} -Wall -fdata-sections -ffunction-sections")
 
 # Debug flags
 set(CMAKE_C_FLAGS_DEBUG "-g -gdwarf-2")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -gdwarf-2")
 
 # Linker flags
-# micro-ROS usb_cdc_transport.c (submodule) expects FS-named USB symbols.
-# Our CubeMX project uses USB HS, so alias FS symbols to the HS instances
-# at link time.  This avoids modifying the submodule.
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.specs -T${LINKER_SCRIPT} -lc -lm -Wl,-Map=\"${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map\",--cref -Wl,--gc-sections -Wl,--defsym=hUsbDeviceFS=hUsbDeviceHS -Wl,--defsym=USBD_Interface_fops_FS=USBD_Interface_fops_HS")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${MCU_FLAGS} -specs=nano.specs -T${LINKER_SCRIPT} -lc -lm -Wl,-Map=\"${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map\",--cref -Wl,--gc-sections")
 
-# micro-ROS static library
+# micro-ROS static library (CORREGIDO)
 target_link_libraries(${PROJECT_NAME}.elf
-    # NOT _ide path — built via Docker Makefile builder
     ${CMAKE_SOURCE_DIR}/micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/libmicroros.a
 )
 

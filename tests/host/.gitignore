@@ -1,0 +1,7 @@
+# Host test build artifacts (produced by `make` in this dir)
+test_safety_eval
+test_state_machine
+test_rules_compliance
+test_as_transition
+*.o
+*.dSYM/

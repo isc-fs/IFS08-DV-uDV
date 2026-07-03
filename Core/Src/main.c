@@ -23,20 +23,14 @@
 #include "cordic.h"
 #include "fdcan.h"
 #include "i2c.h"
-#include "spi.h"
 #include "tim.h"
+#include "usart.h"
 #include "usb_device.h"
 #include "gpio.h"
-#include <stdbool.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "hardware_io.h"
-#include "dwt_time.h"
-
-/* C wrapper to call into CanInterface from ISR */
-extern void can_interface_send_assi_emergency_from_isr(void);
-extern void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan);
+#include "safety_monitor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -101,9 +95,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  /* Enable DWT cycle counter before any task starts so dwt_micros() in
-   * imu_task and ros_interface share a consistent wrap-counter. */
-  dwt_init();
+
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -115,16 +107,28 @@ int main(void)
   MX_I2C2_Init();
   MX_CORDIC_Init();
   MX_TIM2_Init();
-  MX_SPI1_Init();
-  MX_TIM3_Init();
+  MX_USART10_UART_Init();
   /* USER CODE BEGIN 2 */
-  /* NOTE: TIM3 is the app-stall watchdog with a ~50 ms period.  Its ISR
-   * fires hardware_io_set_as_close_sdc(false) + EBS actuator triggers
-   * + an ASSI emergency CAN frame.  It must NOT start running until the
-   * task that pets it (app_task) is up — otherwise it fires during
-   * boot, before Can::init() has started FDCAN3, the CAN TX call
-   * returns HAL_ERROR, and (historically) Error_Handler hung the MCU.
-   * Watchdog start moved into StartAppTask, just before its main loop. */
+
+  /* Reboot reset-cause detection (idea from fix/17). A reset caused by
+   * the IWDG means a prior fatal hang/lockup. Immediately assert the
+   * safe state — EBS fired + SDC open (confirmed polarity: LOW = fire,
+   * D4 LOW = SDC open; both are the fail-safe power-on level) — and tell
+   * the safety monitor to come up LATCHED in emergency rather than
+   * re-arming into normal operation. GPIO is already configured as output
+   * by MX_GPIO_Init() above. The reset flags persist across the reset, so
+   * this is observed even though the IWDG itself is started later (in the
+   * safety task). */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDG1RST) != RESET)
+  {
+    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET); /* fire EBS  */
+    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET); /* fire EBS  */
+    HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET); /* open SDC  */
+    safety_flag_watchdog_reset();
+  }
+  /* Clear all reset-cause flags so the next boot starts clean (otherwise
+   * the IWDG flag stays set and every reboot would look watchdog-caused). */
+  __HAL_RCC_CLEAR_RESET_FLAGS();
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -236,18 +240,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
       osSemaphoreRelease(imuSemHandle);
     }
   }
-  if (htim->Instance == TIM3)
-  {
-    // Watchdog timeout - immediately trigger emergency actions (independent of app_task)
-    hardware_io_set_as_close_sdc(false);        // Open SDC (disconnect power)
-    hardware_io_enable_ebs_actuator_1(false);   // Activate EBS actuator 1
-    hardware_io_enable_ebs_actuator_2(false);   // Activate EBS actuator 2
-
-    // Send ASSI emergency status CAN frame directly from ISR so external
-    // systems are immediately notified even if app_task is stalled.
-    // Use CanInterface helper (C wrapper) to send ASSI emergency compactly
-    can_interface_send_assi_emergency_from_isr();
-  }
   /* USER CODE END Callback 1 */
 }
 
@@ -281,11 +273,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
-{
-  if((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
-  {
-    can_interface_rx_isr_callback(hfdcan);
-  }
-}

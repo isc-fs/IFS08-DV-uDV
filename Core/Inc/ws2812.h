@@ -1,3 +1,13 @@
+/**
+ ******************************************************************************
+ * @file    ws2812.h
+ * @brief   ASSI LED commands sent over USART10 to an Arduino Nano.
+ *
+ * The STM32 no longer drives the WS2812 strip directly. It sends a one-byte
+ * command to an Arduino Nano over USART10; the Arduino renders the color on
+ * the physical strip. See ws2812.c for the wire protocol.
+ ******************************************************************************
+ */
 #ifndef WS2812_H
 #define WS2812_H
 
@@ -5,19 +15,14 @@
 extern "C" {
 #endif
 
-#include "main.h"
-#include <stdint.h>
+/** @brief Tell the Arduino to turn the ASSI LEDs off. */
+void leds_off(void);
 
-#define WS2812_NUM_LEDS  8
+/** @brief Tell the Arduino to set the ASSI LEDs blue. */
+void leds_blue(void);
 
-void ws2812_init(SPI_HandleTypeDef *hspi);
-void ws2812_set_led(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
-void ws2812_set_all(uint8_t r, uint8_t g, uint8_t b);
-void ws2812_show(void);
-void ws2812_clear(void);
-
-/* Convenience: look up mission index (0–9) and update all LEDs */
-void ws2812_set_mission_color(uint8_t mission_index);
+/** @brief Tell the Arduino to set the ASSI LEDs yellow. */
+void leds_yellow(void);
 
 #ifdef __cplusplus
 }

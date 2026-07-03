@@ -25,31 +25,31 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <math.h>
-#include <stdbool.h>
+#include "ros_task.h"
 
 #include "imu_service.h"
+#include "can_globals.h"
 #include "i2c.h"
 #include "cordic.h"
 #include "tim.h"
+#include "safety_monitor.h"
+#include "dwt_time.h"
 #include "imu_task.h"
-#include "ros_task.h"
-#include "can_task.h"
-#include "ami_task.h"
-#include "can_globals.h"
-#include "app_task.h"
+#include "usart.h"
+#include "assi_task.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-struct uxrCustomTransport;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define IMU_QUEUE_DEPTH 16
+#define IMU_QUEUE_DEPTH 16   /* depth of imuQueueHandle (IMU task -> ROS task) */
 
+/* ROS-task tuning macros moved to ros_task.c; dwt_micros() to dwt_time.c. */
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -73,13 +73,17 @@ const osThreadAttr_t canTask_attributes = {
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
-osThreadId_t amiTaskHandle;
-const osThreadAttr_t amiTask_attributes = {
-  .name = "amiTask",
+/* Safety supervisor: highest app priority so it still runs (and refreshes
+ * the IWDG / detects stalls) under load. Yields via osDelay each cycle. */
+osThreadId_t safetyTaskHandle;
+const osThreadAttr_t safetyTask_attributes = {
+  .name = "safetyTask",
   .stack_size = 512 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 
+/* Application state machine (AS state machine + EBS init sequence). Loops
+ * ~1 ms; monitored by the safety supervisor via SAFETY_TASK_APP. */
 osThreadId_t appTaskHandle;
 const osThreadAttr_t appTask_attributes = {
   .name = "appTask",
@@ -87,16 +91,17 @@ const osThreadAttr_t appTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
-osThreadId_t rosTaskHandle;
-const osThreadAttr_t rosTask_attributes = {
-  .name = "rosTask",
-  .stack_size = 4096 * 4,
-  .priority = (osPriority_t) osPriorityAboveNormal,
+osThreadId_t assiTaskHandle;
+const osThreadAttr_t assiTask_attributes = {
+  .name = "assiTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
 osMessageQueueId_t imuQueueHandle;
-osMessageQueueId_t canRxQueueHandle;  /* FDCAN3 (AMI + steering bus) */
-osMessageQueueId_t resRxQueueHandle;  /* FDCAN1 (RES CANopen bus)    */
+osMessageQueueId_t canRxQueueHandle;
+osMessageQueueId_t resRxQueueHandle;
+osMessageQueueId_t debugQueueHandle;
 osSemaphoreId_t imuSemHandle;
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -109,22 +114,10 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-bool cubemx_transport_open(struct uxrCustomTransport * transport);
-bool cubemx_transport_close(struct uxrCustomTransport * transport);
-size_t cubemx_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err);
-size_t cubemx_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err);
-
-void * microros_allocate(size_t size, void * state);
-void microros_deallocate(void * pointer, void * state);
-void * microros_reallocate(void * pointer, size_t size, void * state);
-void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element, void * state);
-
-
-void StartCanTask(void *argument);
 void StartImuTask(void *argument);
-void StartAmiTask(void *argument);
-void StartRosTask(void *argument);
-void StartAppTask(void *argument);
+void StartCanTask(void *argument);
+void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
+void StartAssiTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -157,9 +150,8 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_QUEUES */
   imuQueueHandle   = osMessageQueueNew(IMU_QUEUE_DEPTH, sizeof(imu_sample_t), NULL);
   canRxQueueHandle = osMessageQueueNew(32, sizeof(can_msg_t), NULL);
-  /* RES CANopen PDOs arrive every ~30 ms — 8 slots is enough headroom
-   * for canTask to keep up at its 5 ms poll cadence. */
   resRxQueueHandle = osMessageQueueNew(8, sizeof(can_msg_t), NULL);
+  debugQueueHandle = osMessageQueueNew(8, 128, NULL);
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -167,11 +159,11 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
   imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
   canTaskHandle = osThreadNew(StartCanTask, NULL, &canTask_attributes);
-  amiTaskHandle = osThreadNew(StartAmiTask, NULL, &amiTask_attributes);
-  rosTaskHandle = osThreadNew(StartRosTask, NULL, &rosTask_attributes);
+  safetyTaskHandle = osThreadNew(StartSafetyTask, NULL, &safetyTask_attributes);
+  appTaskHandle = osThreadNew(StartAppTask, NULL, &appTask_attributes);
+  assiTaskHandle = osThreadNew(StartAssiTask, NULL, &assiTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -192,17 +184,29 @@ void StartDefaultTask(void *argument)
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
+  /* USART10 (ASSI LED bridge to the Arduino) is initialized in main(). */
+  //assi_set_mode(AS_MODE_DRIVING);
 
-  // Idle task - let other tasks handle their work
-  for (;;)
-  {
-    osDelay(1000);
-  }
+  ros_task_run();   /* micro-ROS node; defined in ros_task.c; never returns */
   /* USER CODE END StartDefaultTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+  (void)xTask; (void)pcTaskName;
+  // Fatal: fire the EBS (D1/D2 are the EBS actuators; LOW = fire, the
+  // fail-safe level) and hang so the IWDG resets us into the latched
+  // safe state.
+  HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+  for (;;) {}
+}
+
+/* StartImuTask is defined in imu_task.c */
+/* StartCanTask is defined in can_task.cpp (extern "C") */
 
 /* USER CODE END Application */
 

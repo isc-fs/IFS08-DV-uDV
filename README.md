@@ -42,7 +42,8 @@ repo, with two differences:
   `git clone --recurse-submodules` is enough to build the firmware
   on any machine with the ARM toolchain — no Docker step needed.
 - Includes our custom ROS interface package(s) compiled into
-  libmicroros so `ros_interface.cpp` links cleanly.
+  libmicroros (the firmware currently uses std_srvs/std_msgs only,
+  so a stock rebuild also works — see `Core/Src/ros_task.c`).
 
 Updating libmicroros (only needed when changing interface schemas) is
 documented in [`firststeps.md`](firststeps.md#rebuilding-libmicroros).

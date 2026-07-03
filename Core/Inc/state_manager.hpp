@@ -23,12 +23,12 @@ enum class ASState {
 
 struct StateManagerSignals {
     bool asms_on = false;           // ASMS on signal (hardware io)
-    bool ts_active = false;         // Tractive System active (can)
+    bool ts_active = false;         // Tractive System active (local: ASMS ∧ TSMS ADC)
     bool sdc_res_open = false;      // SDC resistor open (can)
     bool ebs_activated = false;     // EBS activated (hardware io)
     bool abs_checks_ok = false;     // All brake system checks passed (hardware io)
     bool brakes_engaged = false;    // Brakes actively engaged (can)
-    bool mission_selected = false;  // Mission selected (can)
+    bool mission_selected = false;  // Mission selected and set ready (ros)
     bool r2d = false;               // Ready to Drive signal (can)
     bool vehicle_standstill = true; // Vehicle velocity near zero (can)
     bool mission_finished = false;  // Mission finished (ros)
@@ -46,6 +46,7 @@ public:
     void update();
 
     ASState getState() const { return state_; }
+    const StateManagerSignals& getSignals() const { return signals_; }
 
     // Reset to initial state
     void reset();

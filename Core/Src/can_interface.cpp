@@ -1,5 +1,5 @@
 #include "can_interface.hpp"
-#include "state_manager.hpp"
+#include "as_state.h"
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -34,8 +34,12 @@ static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan3;
 
-/* amiTask handle — defined in freertos.c */
-extern osThreadId_t amiTaskHandle;
+/* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
+ * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
+ * Cached on every sendAssiStatus() so the micro-ROS layer can mirror it
+ * on /assi/state — the ROS topic then carries the identical byte as the
+ * CAN frame, by construction (no second mapping to drift). */
+static std::atomic<uint8_t> g_assi_status_code{0x00u};
 
 namespace Can {
 
@@ -88,7 +92,7 @@ void initRes()
     }
 
     if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan1,
-            FDCAN_REJECT,           /* reject non-matching std */
+            FDCAN_REJECT,
             FDCAN_REJECT,
             FDCAN_REJECT_REMOTE,
             FDCAN_REJECT_REMOTE) != HAL_OK) {
@@ -102,6 +106,8 @@ void initRes()
     if (HAL_FDCAN_ActivateNotification(&hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
         Error_Handler();
     }
+
+    sendNmtSetOperational();
 }
 
 void sendControl(float accel, float steer)
@@ -155,57 +161,6 @@ void sendSteer(float steer)
     /* TX failure is recoverable — see sendAccel comment. */
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
 }
-void sendIMU(const bmi088_scaled_t &imu)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[8];
-
-    const int16_t ax_scaled = (int16_t)(imu.ax_g * 1000.0f);
-    const int16_t ay_scaled = (int16_t)(imu.ay_g * 1000.0f);
-    const int16_t az_scaled = (int16_t)(imu.az_g * 1000.0f);
-    const int16_t gx_scaled = (int16_t)(imu.gx_dps * 10.0f);
-
-    memcpy(&TxData[0], &ax_scaled, sizeof(int16_t));
-    memcpy(&TxData[2], &ay_scaled, sizeof(int16_t));
-    memcpy(&TxData[4], &az_scaled, sizeof(int16_t));
-    memcpy(&TxData[6], &gx_scaled, sizeof(int16_t));
-
-    TxHeader.Identifier = CAN_ID_IMU;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_8;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    /* TX failure is recoverable — see sendAccel comment. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
-}
-
-void sendAssiStatus(uint8_t status)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[1];
-
-    TxHeader.Identifier = CAN_ID_ASSI;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_1;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    TxData[0] = status;
-
-    /* TX failure is recoverable, AND this is called from the TIM3
-     * watchdog ISR — hanging here would brick the MCU.  See the
-     * watchdog boot-hang fix. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
-}
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 {
@@ -243,23 +198,30 @@ void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
     }
 }
 
-void rx_dispatch(const can_msg_t *msg)
+void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 {
+    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
-    case CAN_ID_MISSION_SELECT:
-        g_can_mission_id.store((int)msg->data[0]);
-        HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
-        if (amiTaskHandle != NULL) {
-            xTaskNotifyGive((TaskHandle_t)amiTaskHandle);
-        }
+    case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
+        g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
+        g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
+        g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
         break;
 
-    case CAN_ID_TS_ACTIVE:
+    case CAN_ID_MISSION_SELECT:
+        g_can_mission_id.store((int)msg->data[0]);
+        break;
+
+    /* --- Autonomy state-machine inputs (ported from fix/17) ---
+     * These populate the CAN atomics StateManager reads. Without them the
+     * state machine sees TS/brake/SDC/R2D permanently false and stays in
+     * AS Off. */
+    case CAN_ID_TS_ACTIVE:               /* 0x504 */
         g_can_ts_active.store(msg->data[0] != 0U);
         break;
 
-    case CAN_ID_BRAKE_PRESSURE:
+    case CAN_ID_BRAKE_PRESSURE:          /* 0x505 — float32 LE, bar */
         if (msg->dlc >= 4U) {
             float brake_pressure = 0.0f;
             memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
@@ -267,18 +229,15 @@ void rx_dispatch(const can_msg_t *msg)
         }
         break;
 
-    case CAN_ID_SDC_RES_OPEN:
+    case CAN_ID_SDC_RES_OPEN:            /* 0x506 */
         if (msg->dlc >= 1U) {
-            bool sdc_open = (msg->data[0] != 0U);
-            // Update CAN global so StateManager reads it
-            g_can_sdc_res_open.store(sdc_open);
+            g_can_sdc_res_open.store(msg->data[0] != 0U);
         }
         break;
 
-    case CAN_ID_R2D:
+    case CAN_ID_R2D:                     /* 0x509 — gated by listen_go */
         if (msg->dlc >= 1U) {
             bool r2d_received = (msg->data[0] != 0U);
-            // Only accept external R2D when app_task has enabled listening
             if (r2d_received && g_can_listen_go.load()) {
                 g_can_r2d.store(true);
             }
@@ -286,18 +245,42 @@ void rx_dispatch(const can_msg_t *msg)
         break;
 
     case CAN_ID_STEERING:
+        //snprintf(srv_msg, sizeof(srv_msg), "id direcion detectado");
+        HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
         /* LWS sensor packet on FDCAN3.  Byte layout (re-ported from v0.1):
          *   [0..1] angle_raw, int16 little-endian, 0.1 deg/bit
          *   [2]    speed_raw, uint8, 4 deg/s per bit
          *   [3]    status, bit0=OK / bit1=CAL / bit2=TRIM            */
         if (msg->dlc >= 4U) {
-            int16_t angle = (int16_t)((uint16_t)msg->data[0] |
-                                      ((uint16_t)msg->data[1] << 8));
-            g_steering_angle_raw.store(angle);
-            g_steering_speed_raw.store(msg->data[2]);
+            // 1. Parseo y validación del Ángulo (Little Endian)
+            uint16_t raw_u = ((uint16_t)msg->data[1] << 8) | (uint16_t)msg->data[0];
+            int16_t raw_angle = (int16_t)raw_u;
+            
+            /* Store RAW wire units (0.1 deg/bit) — consumers scale.
+             * Storing a scaled float truncated through the int16 atomic
+             * and every reader re-scaled it (10x low). */
+            if (raw_u != 0x7FFF) {
+                g_steering_angle_raw.store(raw_angle);
+            } else {
+                g_steering_angle_raw.store(0);
+            }
+
+            // 2. Parseo y validación de la Velocidad (con signo int8_t)
+            if (msg->data[2] != 0xFF) {
+                /* Raw wire units too (4 deg/s per bit) — *4 overflowed
+                 * the byte-wide atomic for |speed| > 63. */
+                g_steering_speed_raw.store((int8_t)msg->data[2]);
+            } else {
+                g_steering_speed_raw.store(0);
+            }
+
+            // 3. Estado (Si quieres seguir guardando el byte crudo)
             g_steering_status.store(msg->data[3]);
+            
+            // 4. Timestamp
             g_steering_last_rx_tick.store(osKernelGetTickCount());
         }
+        
         break;
 
     default:
@@ -305,26 +288,30 @@ void rx_dispatch(const can_msg_t *msg)
     }
 }
 
-void resRxDispatch(const can_msg_t *msg)
+void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
 {
     switch (msg->id)
     {
     case CAN_ID_RES_PDO_TX: {
-        /* RES cyclic PDO at 30 ms — 8-byte frame.  Layout matches
-         * dev's v0.1 res_rx_dispatch (PDO indices 2000/2006/2007). */
-        if (msg->dlc >= 8U) {
-            g_res_estop.store((msg->data[0] & 0x01U) != 0U);
-            g_res_go_signal.store((uint8_t)((msg->data[0] >> 1) & 0x03U));
-            g_res_radio_quality.store(msg->data[6]);
-            g_res_pre_alarm.store(((msg->data[7] >> 6) & 0x01U) != 0U);
-            g_res_last_rx_tick.store(osKernelGetTickCount());
-        }
+        if (msg->dlc < 1U) break;   /* dlc=0 is legal CAN — don't decode e-stop from garbage */
+        g_res_estop.store((msg->data[0] & 0x01U) == 0U);
+        g_res_go_signal.store((msg->data[0] & 0x04U) != 0U ? 1U : 0U);
+        if (msg->dlc >= 7U) g_res_radio_quality.store(msg->data[6]);
+        if (msg->dlc >= 8U) g_res_pre_alarm.store(((msg->data[7] >> 6) & 0x01U) != 0U);
+        g_res_last_rx_tick.store(osKernelGetTickCount());
+        //Para hacer testing si no fucniona ros
+        //HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin,g_res_go_signal.load() ? GPIO_PIN_SET : GPIO_PIN_RESET);
         break;
     }
 
     case CAN_ID_RES_BOOTUP:
-        /* RES sent its boot-up frame — push it to operational. */
-        sendNmtSetOperational();
+        /* 0x700+node carries boot-up (data[0]==0x00) AND heartbeats
+         * (0x04/0x05/0x7F...). Only boot-up warrants an NMT start —
+         * re-sending it on every heartbeat spams the bus. */
+        if (msg->dlc >= 1U && msg->data[0] == 0x00U)
+        {
+            sendNmtSetOperational();
+        }
         break;
 
     default:
@@ -393,10 +380,6 @@ void sendSteeringAngle(float angle_deg)
 
 void sendDataLogger()
 {
-    /* DS 2.2 cyclic CAN frames.  Most fields are still zero/placeholder
-     * pending the brakes-service work; what we know lands in here, the
-     * rest stays at 0 so the DL pipeline sees a heartbeat regardless. */
-
     /* 0x500 — DV driving dynamics 1 (8 bytes) */
     uint8_t d500[8] = {0};
     /* Steering_angle_actual: byte 2, signed 0.5 deg/bit.
@@ -428,8 +411,13 @@ void sendDataLogger()
 
     /* 0x502 — DV system status (5 bytes) */
     uint8_t d502[5] = {0};
-    /* AS_status low nibble: 1 = OFF (placeholder until state_manager wires) */
-    d502[0] = 1u;
+    /* AS_status low nibble (FS DV-logger encoding): 1=OFF 2=READY
+     * 3=DRIVING 4=EMERGENCY 5=FINISHED. Mapped from the live AS state
+     * machine (ros_get_as_state(): ASState OFF=0 READY=1 DRIVING=2
+     * EMERGENCY=3 FINISHED=4). CONFIRM against the team CAN DBC. */
+    static const uint8_t k_as_to_dl_nibble[5] = {1u, 2u, 3u, 4u, 5u};
+    uint8_t as = ros_get_as_state();
+    d502[0] = (as < 5u) ? k_as_to_dl_nibble[as] : 1u;
     /* AMI_state bits 5-7: derived from mission id (1..7 maps to slots 1..7) */
     int mid = g_can_mission_id.load();
     if (mid >= 0 && mid < 7) {
@@ -444,11 +432,47 @@ void sendDataLogger()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &hdr502, d502);
 }
 
+void sendAssiStatus(uint8_t status)
+{
+    /* ASSI state on FDCAN3 ID 0x100, 1-byte payload (FS-Rules T14.9:
+     * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
+     * The ASSI peripheral does the flashing/buzzer; the uDV only emits
+     * the state code. Non-blocking enqueue, safe from any context. */
+    /* Mirror the same byte to the micro-ROS /assi/state publisher. */
+    g_assi_status_code.store(status);
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_ASSI,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_1,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+    uint8_t payload = status;
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
+}
+
 } // namespace Can
 
 // C-compatible wrapper for ISR — routes both FDCAN1 (RES bus) and
 // FDCAN3 (AMI + steering bus) into the dispatcher.  isr_push_rx
 // itself decides which queue the frame ends up in based on hfdcan.
+/* HAL weak-function overrides — called by HAL_FDCAN_IRQHandler from stm32h7xx_it.c */
+extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
+{
+    if (RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE)
+        Can::isr_push_rx(hfdcan);
+}
+
+extern "C" void HAL_FDCAN_ErrorCallback(FDCAN_HandleTypeDef *hfdcan)
+{
+    /* Re-arm RX notifications silenced by HAL on overrun */
+    HAL_FDCAN_ActivateNotification(hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+}
+
 extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 {
     if (hfdcan->Instance == FDCAN1 || hfdcan->Instance == FDCAN3) {
@@ -456,8 +480,60 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
     }
 }
 
+/* C-callable ASSI EMERGENCY emitter for the safety monitor (and any ISR
+ * path). Sends the T14.9 EMERGENCY code (0x01) on 0x100 — non-blocking
+ * FIFO enqueue, so it is safe from the supervisor task or an ISR. */
 extern "C" void can_interface_send_assi_emergency_from_isr(void)
 {
-    Can::sendAssiStatus(StateManager::getAssiStatusCode(ASState::EMERGENCY));
+    Can::sendAssiStatus(0x01u);
+}
+
+/* C-callable accessors so freertos.c (C file) can read atomic CAN state */
+extern "C" float can_c_get_steer_angle_actual(void)
+{
+    return g_steer_angle_actual.load();
+}
+
+extern "C" float can_c_get_steer_angle_target(void)
+{
+    return g_steer_angle_target.load();
+}
+
+extern "C" float can_c_get_steer_angle_motor(void)
+{
+    return g_steer_angle_motor.load();
+}
+
+extern "C" float can_c_get_steering_angle_deg(void)
+{
+    return (float)g_steering_angle_raw.load() * 0.1f;
+}
+
+extern "C" int32_t can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms)
+{
+    uint32_t last = g_res_last_rx_tick.load();
+    if (last == 0U)                              return -2; /* nunca recibido */
+    if ((now_tick - last) > timeout_ms)          return -1; /* timeout */
+    if (g_res_estop.load())                      return  1; /* E-Stop activo */
+    if (g_res_go_signal.load())                      return  2; /* Go signal activo */
+    return 0;
+}
+
+extern "C" int32_t can_c_get_mission_index(void)
+{
+    return (int32_t)g_can_mission_id.load();
+}
+
+extern "C" uint8_t can_c_get_go_signal(void)
+{
+    return g_res_go_signal.load();
+}
+
+extern "C" uint8_t can_c_get_assi_status_code(void)
+{
+    /* Last AS state byte emitted on CAN 0x100 (FS-Rules T14.9). The
+     * micro-ROS /assi/state publisher mirrors this so the DV pipeline
+     * reads the identical code the ASSI peripheral does. */
+    return g_assi_status_code.load();
 }
 

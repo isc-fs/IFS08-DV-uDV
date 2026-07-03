@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <stdbool.h>
 
 extern "C" {
     #include "FreeRTOS.h"
@@ -14,16 +15,19 @@ extern "C" {
     #include "queue.h"
     #include "cmsis_os.h"
     #include "hardware_io.h"
-    #include "tim.h"  /* for htim3 + HAL_TIM_Base_Start_IT */
+    #include "safety_monitor.h"  /* IWDG safety supervisor: heartbeat/arm */
 }
 
 #include "state_manager.hpp"
+#include "as_transition.hpp"   /* pure as_next_state() — host-unit-tested */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
 #include "can_task.h"
 #include "ros_globals.h"
 #include "can_globals.h"
+#include "assi_task.h"
+#include "usart.h"
 
 /**
  * @brief Reset ROS globals to default state
@@ -35,6 +39,8 @@ static void reset_ros_globals(void)
     g_steer_cmd.store(0.0f);
     g_emergency_cmd.store(false);
     g_finished_cmd.store(false);
+    g_set_mission_in_progress.store(false);
+    g_set_mission_ready.store(false);
 }
 
 /**
@@ -44,8 +50,44 @@ static void reset_can_globals(void)
 {
     g_can_listen_go.store(false);
     g_can_mission_id.store(0);
-    g_can_r2d.store(false);
+    g_can_r2d.store(false);  /* (g_can_go was redundant with this) */
     g_imu_vehicle_standstill.store(true);
+}
+
+static void reset_state_telemetry(void)
+{
+    g_telemetry_as_state.store(static_cast<uint8_t>(ASState::OFF));
+    g_telemetry_ebs_init_state.store(static_cast<uint8_t>(EBSInitState::Start));
+    g_telemetry_asms_on.store(false);
+    g_telemetry_ts_active.store(false);
+    g_telemetry_sdc_res_open.store(false);
+    g_telemetry_brakes_engaged.store(false);
+    g_telemetry_r2d.store(false);
+    g_telemetry_vehicle_standstill.store(true);
+    g_telemetry_mission_selected.store(false);
+    g_telemetry_mission_finished.store(false);
+    g_telemetry_abs_checks_ok.store(false);
+    g_telemetry_ebs_activated.store(false);
+}
+
+static void sync_state_telemetry(const StateManager& state_mgr,
+                                 const EbsManager& ebs,
+                                 ASState as_state)
+{
+    const StateManagerSignals& signals = state_mgr.getSignals();
+
+    g_telemetry_as_state.store(static_cast<uint8_t>(as_state));
+    g_telemetry_ebs_init_state.store(static_cast<uint8_t>(ebs.getInitState()));
+    g_telemetry_asms_on.store(signals.asms_on);
+    g_telemetry_ts_active.store(signals.ts_active);
+    g_telemetry_sdc_res_open.store(signals.sdc_res_open);
+    g_telemetry_brakes_engaged.store(signals.brakes_engaged);
+    g_telemetry_r2d.store(signals.r2d);
+    g_telemetry_vehicle_standstill.store(signals.vehicle_standstill);
+    g_telemetry_mission_selected.store(signals.mission_selected);
+    g_telemetry_mission_finished.store(signals.mission_finished);
+    g_telemetry_abs_checks_ok.store(signals.abs_checks_ok);
+    g_telemetry_ebs_activated.store(signals.ebs_activated);
 }
 
 /**
@@ -54,6 +96,11 @@ static void reset_can_globals(void)
 static void reset_all(void)
 {
     // Cancel ongoing ROS mission if any
+    if (g_set_mission_in_progress.load())
+    {
+        send_cancel_set_mission_command();
+    }
+
     if (g_mission_going_cmd.load())
     {
         send_cancel_mission_command();
@@ -62,6 +109,7 @@ static void reset_all(void)
     // Reset global states
     reset_ros_globals();
     reset_can_globals();
+    reset_state_telemetry();
 
     // Reset EBS and StateManager
     EbsManager::getInstance().reset();
@@ -86,44 +134,76 @@ extern "C" void StartAppTask(void *argument)
     EbsManager& ebs = EbsManager::getInstance();
     StateManager& state_mgr = StateManager::getInstance();
 
-    EBSInitState ebs_state = EBSInitState::Start;
     ASState as_state = ASState::OFF;
-    ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
+    ASState last_as_state = ASState::OFF;  // Track last state
     uint32_t ready_start_time = 0;
+    int last_mission_id = -1;
+    bool set_mission_sent = false;
+    bool start_mission_sent = false;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
-    // Wait until ROS task creates its queue
-    while (g_ros_cmd_queue == NULL)
-    {
-        osDelay(10);
-    }
+    /* Let StartCanTask bring up FDCAN3 before we emit frames in earnest
+     * (the initial status above is best-effort, dropped if CAN isn't up).
+     * There is no ROS command queue on this branch: the action/command
+     * layer (ros_interface / dv_msgs) is intentionally NOT integrated
+     * yet, so the mission senders are stubs (see ros_task_commands). */
+    osDelay(100);
 
-    /* Arm the app-stall watchdog (TIM3, ~50 ms period).  Started here —
-     * not in main() — so that:
-     *   1) the petter (this task) is already running;
-     *   2) Can::init() has already started FDCAN3 in StartCanTask,
-     *      so the ISR's Can::sendAssiStatus on timeout can actually
-     *      enqueue a frame without failing.
-     * Reset the counter explicitly so the first ~50 ms after starting
-     * is a fresh window. */
-    __HAL_TIM_SET_COUNTER(&htim3, 0);
-    HAL_TIM_Base_Start_IT(&htim3);
+    /* The IWDG is owned by the safety supervisor task. Register this
+     * state-machine loop as a monitored liveness source so a stall here
+     * trips the watchdog emergency — this replaces the old TIM3 timer. */
+    safety_arm(SAFETY_TASK_APP);
 
     // Main control loop
     while (1)
     {
+        // State machine dispatcher REQUIREMENTS:
+
+        //1. cuando asms esta off siempre retornar a la AS_off
+        //2. Si asms on, ts on y RES ok (es decir res 0 mira la funcion can_c_get_res_status()). transicion a AS_ready
+        //3. Si RES E-stop en cualquier momento transicionar a AS_emergency
+        //4. Los frenos se sueltan cuando estan en HIGH. Es decir que solo se debe de activar los canales de EBS cuando esta en AS_driving. En el resto de estados los canales de EBS deben de estar desactivados. D1 y D2 low
+        //5. transicinar de AS_ready a AS_driving cuando se reciba el comando de start del RES
+        //6. transicionar a emergency si el RES esta bien y el TS pasa a esta off.
+        //7. configura para que la mision por defecto sea INSPECTION
+        //8. Por el momento no hay forma de transicinar a AS_finished.
+        //9. La unica forma de salir de AS_emergency es pasar por asms off.
+
         // Check for reset command (issued by external supervisor)
         if (g_reset_cmd.load())
         {
+            set_mission_sent = false;
+            start_mission_sent = false;
+            last_mission_id = -1;
             reset_all();
         }
 
         // Update state machine with all current signals
         state_mgr.update();
-        as_state = state_mgr.getState();
+        ASState previous_as_state = as_state;
         bool asms_on = hardware_io_read_asms_on();
+        bool ts_on = state_mgr.getSignals().ts_active;
+        int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
+        /* "go" also means the RES link is healthy (status 2 = received, go
+         * asserted, no e-stop), so a "go" held before arming still satisfies
+         * the READY condition instead of blocking it. */
+        bool res_ok = (res_status == 0) || (res_status == 2);
+        bool res_go = (res_status == 2);
+        bool res_estop = (res_status == 1);
+
+        // Decide the next AS state (pure, host-unit-tested — as_transition.hpp).
+        // (Supersedes the bench force-true overrides that were commented out
+        // in parallel on 6e25098 — they are removed entirely here.)
+        /* Read the manager directly — a loop-local copy would go stale on
+         * reset_all() (EbsManager.reset() puts the manager back to Start). */
+        bool ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
+        as_state = as_next_state(previous_as_state,
+                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok,
+                                          ebs_init_done});
+
+        sync_state_telemetry(state_mgr, ebs, as_state);
 
         // Send ASSI status if state changed
         if (as_state != last_as_state)
@@ -132,15 +212,14 @@ extern "C" void StartAppTask(void *argument)
             last_as_state = as_state;
         }
 
-        // Kick watchdog (required for safety; max loop time ~50ms before watchdog triggers)
-        if (ebs_state != EBSInitState::WaitLow)
-        {
-            hardware_io_watchdog_kick();
-        }
+        /* Liveness beat to the safety supervisor (it owns the IWDG and
+         * fires the emergency on a stall). Unconditional: the EBS-init
+         * WaitLow step has its own 5 s timeout in EbsManager, so gating
+         * the beat there (as the old TIM3 design did) would only
+         * false-trip our 100 ms monitor during normal init. */
+        safety_heartbeat(SAFETY_TASK_APP);
 
-        // State machine dispatcher
-        if (asms_on)
-        {
+        if (asms_on){
             // Autonomous mode enabled
 
             // Reset state tracking when transitioning out of READY/DRIVING
@@ -148,6 +227,31 @@ extern "C" void StartAppTask(void *argument)
             {
                 ready_start_time = 0;
                 g_can_listen_go.store(false);
+                start_mission_sent = false;
+            }
+
+            int current_mission_id = g_can_mission_id.load();
+            if (current_mission_id <= 0)
+            {
+                current_mission_id = 6;  // Default mission: Inspection
+            }
+
+            if (current_mission_id != last_mission_id)
+            {
+                last_mission_id = current_mission_id;
+                set_mission_sent = false;
+                start_mission_sent = false;
+                g_set_mission_in_progress.store(false);
+                g_set_mission_ready.store(false);
+            }
+
+            if (current_mission_id > 0 && !set_mission_sent &&
+                !g_set_mission_in_progress.load() && !g_set_mission_ready.load())
+            {
+                if (send_set_mission_command(current_mission_id))
+                {
+                    set_mission_sent = true;
+                }
             }
 
             // Send zero control when not driving (safety)
@@ -161,14 +265,21 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
+                    assi_set_mode(AS_MODE_OFF);
                     // Perform EBS initialization sequence steps
-                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
+                    if (ebs.getInitState() != EBSInitState::Done &&
+                        ebs.getInitState() != EBSInitState::Failed)
                     {
-                        ebs_state = ebs.initSequenceStep();
+                        ebs.initSequenceStep();
+                    }
+                    else
+                    {
+                        ebs.deactivateEBS();
                     }
                     break;
 
                 case ASState::READY:
+                    assi_set_mode(AS_MODE_READY);
                     // Wait 5 seconds in READY state before signaling "go" to CAN
                     if (ready_start_time == 0)
                     {
@@ -181,10 +292,15 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::DRIVING:
-                    // Mission should already be active, but ensure it starts
-                    if (!g_mission_going_cmd.load())
+                    assi_set_mode(AS_MODE_DRIVING);
+                    // Start the mission once setup is confirmed.
+                    // g_set_mission_ready.load() should already be true; we check it just in case.
+                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
                     {
-                        send_start_mission_command(g_can_mission_id.load());
+                        if (send_start_mission_command(current_mission_id))
+                        {
+                            start_mission_sent = true;
+                        }
                     }
                     else
                     {
@@ -210,10 +326,16 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::EMERGENCY:
+                    assi_set_mode(AS_MODE_EMERGENCY);
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
 
                     // Cancel any active mission
+                    if (g_set_mission_in_progress.load())
+                    {
+                        send_cancel_set_mission_command();
+                    }
+
                     if (g_mission_going_cmd.load())
                     {
                         send_cancel_mission_command();
@@ -222,20 +344,28 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::FINISHED:
                     // Mission complete - EBS already active, just ensure mission is cancelled
+                    if (g_set_mission_in_progress.load())
+                    {
+                        send_cancel_set_mission_command();
+                    }
+
                     if (g_mission_going_cmd.load())
                     {
                         send_cancel_mission_command();
                     }
                     break;
             }
-        }
-        else
-        {
+        }else{
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
+            ebs.deactivateEBS();
+            assi_set_mode(AS_MODE_OFF);
         }
 
-        // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
+
+
+        // Small delay to prevent CPU hogging (safety monitor expects our
+        // heartbeat within its 100 ms deadline)
         osDelay(1);
     }
 }

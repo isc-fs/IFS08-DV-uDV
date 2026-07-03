@@ -1,12 +1,5 @@
-/**
- * @file    imu_task.h
- * @brief   IMU task header - FreeRTOS thread for BMI088 sensor acquisition
- * @details Reads BMI088 IMU at 400Hz via TIM2 interrupt, packs samples to
- *          both ROS queue and CAN frames. Includes gyro bias calibration.
- */
-
-#ifndef INC_IMU_TASK_H_
-#define INC_IMU_TASK_H_
+#ifndef IMU_TASK_H
+#define IMU_TASK_H
 
 #include <stdint.h>
 
@@ -15,17 +8,23 @@ extern "C" {
 #endif
 
 /**
- * @brief  IMU task entry point
- * @param  argument: Not used
- * @retval None
+ * @brief FreeRTOS entry point for the IMU task.
+ *
+ * Created and scheduled by MX_FREERTOS_Init() in freertos.c; the body lives
+ * here so the CubeMX-generated file stays thin. Reads the BMI088 at 400 Hz
+ * (TIM2-paced), updates attitude, and pushes imu_sample_t to imuQueueHandle.
  */
 void StartImuTask(void *argument);
 
-/* Shared IMU debug status published over ROS diagnostics. */
+/**
+ * @brief Latest IMU init/step status (bmi088_status_t cast to int32_t).
+ *
+ * Written by the IMU task, read by the ROS task to publish on /imu/status.
+ */
 extern volatile int32_t imu_debug_status;
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* INC_IMU_TASK_H_ */
+#endif /* IMU_TASK_H */

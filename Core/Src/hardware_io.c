@@ -7,6 +7,7 @@
 #include "gpio.h"
 #include "adc.h"
 #include "main.h"
+#include "iwdg.h"
 
 /* ADC conversion buffer and calibration constants */
 static float adc_scale_factor = 1.0f;  // Can be calibrated based on ADC reference
@@ -71,7 +72,8 @@ void hardware_io_enable_ebs_actuator_2(bool enable)
 
 bool hardware_io_read_sdc_is_ready(void)
 {
-    // SDC ready is wired to A1 -> ADC3_INP3 -> ADC channel 3
+    // NOTE: A1 -> ADC3_INP3 (ch3) physically carries RES_1_IN on the PCB, not an
+    // "SDC ready" signal. Currently unused. See docs/STATE_MACHINE_INPUTS.md
     return hardware_io_read_adc_level(ADC_CHANNEL_3);
 }
 
@@ -81,15 +83,16 @@ bool hardware_io_read_asms_on(void)
     return hardware_io_read_adc_level(ADC_CHANNEL_2);
 }
 
-bool hardware_io_read_sdc_res_open(void)
+bool hardware_io_read_tsms_on(void)
 {
-    /* TODO: No local pin is assigned for sdc_res_open yet. */
-    return false;
+    // TSMS (Tractive System Master Switch) wired to A6 -> ADC3_INP11 -> ADC channel 11
+    return hardware_io_read_adc_level(ADC_CHANNEL_11);
 }
 
-bool hardware_io_read_go_res(void)
+bool hardware_io_read_sdc_res_open(void)
 {
-    // GO_RES wired to A2 -> ADC3_INP7 -> ADC channel 7
+    // NOTE: A2 -> ADC3_INP7 (ch7) physically carries GO_RES (the RES go signal) on
+    // the PCB, not "SDC_RES_OPEN". Currently unused. See docs/STATE_MACHINE_INPUTS.md
     return hardware_io_read_adc_level(ADC_CHANNEL_7);
 }
 
@@ -116,20 +119,23 @@ uint32_t hardware_io_now_ms(void)
     return HAL_GetTick();
 }
 
-// Timer handle (provided by CubeMX-generated tim.c)
-extern TIM_HandleTypeDef htim3;  // TIM3 configured as watchdog timer
-
 void hardware_io_watchdog_kick(void)
 {
-    // Reset the timer counter to start from ARR again
-    // This prevents the timer from expiring
-    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    /* The watchdog is the hardware IWDG (see iwdg.c / safety_monitor.c),
+     * NOT the old TIM3 software timer. Refresh the IWDG so app_task's
+     * loop counts as a liveness source. (The safety task is the primary
+     * refresher; this is harmless belt-and-suspenders.) */
+    iwdg_refresh();
 }
 
 bool hardware_io_is_ebs_active(void)
 {
     GPIO_PinState p1 = HAL_GPIO_ReadPin(D1_GPIO_Port, D1_Pin);
     GPIO_PinState p2 = HAL_GPIO_ReadPin(D2_GPIO_Port, D2_Pin);
-    /* EBS actuators are driven low to activate braking */
+    /* EBS polarity (confirmed): actuators are driven LOW to FIRE the brake,
+     * HIGH to release it. Fail-safe — LOW is the power-on/reset level
+     * (gpio.c inits D1/D2 LOW), so a reset or power loss lands braked;
+     * matches ebs_manager's activate(LOW)/deactivate(HIGH). The brake is
+     * "active" when EITHER channel reads LOW. */
     return (p1 == GPIO_PIN_RESET) || (p2 == GPIO_PIN_RESET);
 }
