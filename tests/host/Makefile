@@ -13,6 +13,10 @@
 #   test_state_machine    — AS state machine + EBS init sequence
 #                           (state_manager.cpp / ebs_manager.cpp, linked for
 #                           real against a controllable hardware_io stub)
+#   test_rules_compliance — FS-Rules timing-budget static_asserts
+#   test_as_transition    — pure AS transition (pipeline handshake + DV watchdog)
+#   test_attitude         — complementary-filter roll/pitch (attitude.c) [ex-dev]
+#   test_bmi088_convert   — BMI088 raw->scaled + bind validation (bmi088.c) [ex-dev]
 
 CORE_INC := ../../Core/Inc
 CORE_SRC := ../../Core/Src
@@ -36,7 +40,15 @@ SM_SRCS     := test_state_machine.cpp \
                $(CORE_SRC)/can_globals.cpp \
                $(CORE_SRC)/ros_globals.cpp
 
-BINS := test_safety_eval test_state_machine test_rules_compliance test_as_transition
+# Sensor-math suites (recovered from dev). The C code-under-test (attitude.c,
+# bmi088.c) is byte-identical to dev, so its off-target math stays covered.
+# mocks/ shadows stm32h7xx_hal.h / main.h / i2c_utils so the HAL-touching
+# sources link on the host. Plain -Wall (brought-over sources), not -Werror.
+MOCKS       := mocks
+SENS_CFLAGS := -std=c11 -I$(MOCKS) -I$(CORE_INC) -Wall -Wextra -g -O0
+
+BINS := test_safety_eval test_state_machine test_rules_compliance \
+        test_as_transition test_attitude test_bmi088_convert
 
 .PHONY: all test clean
 all: test
@@ -62,12 +74,25 @@ test_rules_compliance: test_rules_compliance.cpp safety_eval.o
 test_as_transition: test_as_transition.cpp
 	$(CXX) $(SM_CXXFLAGS) -o $@ test_as_transition.cpp
 
+# ---- suite 5: attitude math (complementary filter, roll/pitch) ----------
+# Links the real Core/Src/attitude.c against the HAL mock; needs libm.
+test_attitude: test_attitude.c $(CORE_SRC)/attitude.c mocks/hal_stubs.c mocks/i2c_utils_stubs.c
+	$(CC) $(SENS_CFLAGS) -o $@ test_attitude.c $(CORE_SRC)/attitude.c \
+	      mocks/hal_stubs.c mocks/i2c_utils_stubs.c -lm
+
+# ---- suite 6: BMI088 raw->scaled conversion + bind validation -----------
+test_bmi088_convert: test_bmi088_convert.c $(CORE_SRC)/bmi088.c mocks/hal_stubs.c mocks/i2c_utils_stubs.c
+	$(CC) $(SENS_CFLAGS) -o $@ test_bmi088_convert.c $(CORE_SRC)/bmi088.c \
+	      mocks/hal_stubs.c mocks/i2c_utils_stubs.c -lm
+
 test: $(BINS)
 	@echo "=== build_integrity ===";       sh ./check_build_integrity.sh
 	@echo "=== test_safety_eval ===";      ./test_safety_eval
 	@echo "=== test_state_machine ===";    ./test_state_machine
 	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
 	@echo "=== test_as_transition ===";    ./test_as_transition
+	@echo "=== test_attitude ===";         ./test_attitude
+	@echo "=== test_bmi088_convert ===";   ./test_bmi088_convert
 
 clean:
 	rm -rf $(BINS) *.o *.dSYM
