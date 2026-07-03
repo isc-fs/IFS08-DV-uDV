@@ -49,7 +49,7 @@ static void reset_ros_globals(void)
 static void reset_can_globals(void)
 {
     g_can_listen_go.store(false);
-    g_can_mission_id.store(0);
+    g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid mission */
     g_can_r2d.store(false);  /* (g_can_go was redundant with this) */
     g_imu_vehicle_standstill.store(true);
 }
@@ -231,7 +231,7 @@ extern "C" void StartAppTask(void *argument)
             }
 
             int current_mission_id = g_can_mission_id.load();
-            if (current_mission_id <= 0)
+            if (current_mission_id < 0)   /* -1 = none received; 0 is valid (0-based AMI index) */
             {
                 current_mission_id = 6;  // Default mission: Inspection
             }
@@ -245,7 +245,7 @@ extern "C" void StartAppTask(void *argument)
                 g_set_mission_ready.store(false);
             }
 
-            if (current_mission_id > 0 && !set_mission_sent &&
+            if (current_mission_id >= 0 && !set_mission_sent &&
                 !g_set_mission_in_progress.load() && !g_set_mission_ready.load())
             {
                 if (send_set_mission_command(current_mission_id))
