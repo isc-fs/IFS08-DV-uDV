@@ -3,10 +3,13 @@
  * @brief FreeRTOS safety supervisor — heartbeats, IWDG refresh, EBS
  *        emergency. Decision logic lives in the pure safety_eval.c.
  *
- * See safety_monitor.h for the two-tier design. EBS polarity here is the
- * fix/15 convention, confirmed against the car hardware:
- *   D1/D2 HIGH = fire EBS, LOW = normal.   (NOTE: dev's hardware_io used
- *   the opposite, active-low convention — do NOT copy it here.)
+ * See safety_monitor.h for the two-tier design. EBS polarity is active-low,
+ * owner-confirmed against the car hardware and consistent across the whole
+ * subsystem (ebs_manager, hardware_io, main, freertos, force_ebs):
+ *   D1/D2 LOW = fire EBS, HIGH = release.
+ * LOW is the power-on/reset level (gpio.c inits D1/D2 LOW), so the brake is
+ * fail-safe. safety_enter_safe_state() below drives D1/D2 to GPIO_PIN_RESET
+ * (LOW) to fire — do NOT invert it to match any older HIGH=fire note.
  */
 #include "safety_monitor.h"
 
