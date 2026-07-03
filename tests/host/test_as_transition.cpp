@@ -6,10 +6,11 @@
  *
  * This is the safety-relevant logic that changed when the uDV moved to the
  * topic-based pipeline contract: the /dv/status handshake gate on
- * Ready->Driving, the FINISHED / EMERGENCY reactions, and the "pipeline
- * heartbeat lost while driving" watchdog. The IWDG task-stall watchdog is
- * unchanged and covered by test_safety_eval; this suite guards the AS-state
- * logic that feeds it.
+ * Ready->Driving, the FINISHED / EMERGENCY reactions, the "pipeline
+ * heartbeat lost while driving" watchdog, and the EBS-init gate on arming
+ * (dev 9395936: no READY until the init sequence reports Done). The IWDG
+ * task-stall watchdog is unchanged and covered by test_safety_eval; this
+ * suite guards the AS-state logic that feeds it.
  *
  * Two layers:
  *   1. Named cases — readable truth-table spot checks.
@@ -66,20 +67,24 @@ enum ResKind { RES_NONE, RES_OK, RES_GO, RES_ESTOP };
 // /dv/status folded to what the AS logic consumes.
 enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_FRESH_EMERG };
 
-static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv)
+// ebs_done defaults to true so the pre-gate cases read unchanged; the
+// EBS-init gate cases (dev 9395936) pass false explicitly.
+static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
+                     bool ebs_done = true)
 {
     AsInputs in{};
-    in.asms_on      = asms;
-    in.ts_on        = ts;
-    in.res_estop    = (res == RES_ESTOP);
-    in.res_go       = (res == RES_GO);
+    in.asms_on       = asms;
+    in.ts_on         = ts;
+    in.res_estop     = (res == RES_ESTOP);
+    in.res_go        = (res == RES_GO);
     /* Mirrors the producer in app_task.cpp: "go" also means the RES link is
      * healthy (res_ok true for status 0 AND status 2 — the fix/19 port). */
-    in.res_ok       = (res == RES_OK) || (res == RES_GO);
-    in.dv_fresh     = (dv != DV_STALE);
-    in.dv_ready     = (dv == DV_FRESH_READY);
-    in.dv_finished  = (dv == DV_FRESH_FINISHED);
-    in.dv_emergency = (dv == DV_FRESH_EMERG);
+    in.res_ok        = (res == RES_OK) || (res == RES_GO);
+    in.ebs_init_done = ebs_done;
+    in.dv_fresh      = (dv != DV_STALE);
+    in.dv_ready      = (dv == DV_FRESH_READY);
+    in.dv_finished   = (dv == DV_FRESH_FINISHED);
+    in.dv_emergency  = (dv == DV_FRESH_EMERG);
     return in;
 }
 
@@ -91,8 +96,16 @@ static void test_named_cases(void)
                       ASState::EMERGENCY, ASState::FINISHED})
         CHECK_EQ(p, make(false, true, RES_OK, DV_FRESH_READY), ASState::OFF);
 
-    // Normal arm: ASMS + TS + RES ok, from OFF -> READY.
+    // Normal arm: ASMS + TS + RES ok (EBS init done), from OFF -> READY.
     CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_STALE), ASState::READY);
+
+    // --- EBS-init gate (dev 9395936): no READY until init reports Done ---
+    // (app_task only steps the EBS init FSM while OFF; arming early would
+    // strand it and ASBChecksOK could never pass. Failed init = stay OFF.)
+    CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_STALE, false), ASState::OFF);
+    CHECK_EQ(ASState::OFF, make(true, true, RES_GO, DV_FRESH_READY, false), ASState::OFF);
+    // E-stop precedence is NOT weakened by the gate.
+    CHECK_EQ(ASState::OFF, make(true, true, RES_ESTOP, DV_STALE, false), ASState::EMERGENCY);
 
     // Ready but pipeline NOT ready yet: go is IGNORED (the core new gate).
     CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_OTHER), ASState::READY);
@@ -149,9 +162,10 @@ static void test_invariants(void)
     for (ASState prev : prevs)
       for (int asms = 0; asms < 2; ++asms)
         for (int ts = 0; ts < 2; ++ts)
-          for (ResKind res : ress)
+          for (int ebs = 0; ebs < 2; ++ebs)
+            for (ResKind res : ress)
             for (DvKind dv : dvs) {
-                AsInputs in = make(asms != 0, ts != 0, res, dv);
+                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
@@ -188,6 +202,12 @@ static void test_invariants(void)
                 if (prev == ASState::DRIVING && !in.res_estop && in.ts_on &&
                     in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
                     CHECK_TRUE(out == ASState::DRIVING);
+                }
+
+                // INV8 EBS-init gate (dev 9395936): READY is only ENTERED
+                // with the EBS init sequence Done.
+                if (out == ASState::READY && prev != ASState::READY) {
+                    CHECK_TRUE(in.ebs_init_done);
                 }
             }
 }

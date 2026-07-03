@@ -28,6 +28,7 @@ struct AsInputs {
     bool res_estop;     /**< RES emergency-stop asserted                   */
     bool res_go;        /**< RES "go" asserted                             */
     bool res_ok;        /**< RES received, no e-stop / go                  */
+    bool ebs_init_done; /**< EBS init sequence reached EBSInitState::Done   */
     bool dv_fresh;      /**< /dv/status seen within DV_STATUS_STALE_MS      */
     bool dv_ready;      /**< fresh && /dv/status == DV_STATUS_READY         */
     bool dv_finished;   /**< fresh && /dv/status == DV_STATUS_FINISHED      */
@@ -75,7 +76,11 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
                                                       mission down mid-drive. */
     if (in.res_go && prev == ASState::READY && in.dv_ready)
         return ASState::DRIVING;                   /* go honoured only if DV READY */
-    if (in.res_ok && in.ts_on)
+    /* READY is gated on the EBS init sequence being complete (dev 9395936):
+     * app_task only advances the init FSM while in OFF, so arming before
+     * Done would strand it (ASBChecksOK never true). A Failed init keeps
+     * the car in OFF. */
+    if (in.res_ok && in.ts_on && in.ebs_init_done)
         return ASState::READY;
     return prev;                                    /* no change */
 }

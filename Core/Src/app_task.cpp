@@ -217,13 +217,17 @@ extern "C" void StartAppTask(void *argument)
         // Decide the next AS state via the pure, host-tested transition (see
         // as_transition.hpp). dv_* fold in freshness: the "go" gate needs a
         // fresh DV READY, and a stale /dv/status while driving trips Emergency.
+        // OFF->READY additionally requires the EBS init sequence Done (dev
+        // 9395936): the init FSM only advances while OFF, so arming earlier
+        // would strand it and ASBChecksOK could never pass.
         AsInputs as_in;
-        as_in.asms_on      = asms_on;
-        as_in.ts_on        = ts_on;
-        as_in.res_estop    = res_estop;
-        as_in.res_go       = res_go;
-        as_in.res_ok       = res_ok;
-        as_in.dv_fresh     = dv_fresh;
+        as_in.asms_on       = asms_on;
+        as_in.ts_on         = ts_on;
+        as_in.res_estop     = res_estop;
+        as_in.res_go        = res_go;
+        as_in.res_ok        = res_ok;
+        as_in.ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
+        as_in.dv_fresh      = dv_fresh;
         as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);
         as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
         as_in.dv_emergency = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
