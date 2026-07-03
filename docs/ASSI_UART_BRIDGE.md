@@ -46,9 +46,9 @@ void loop(){
 Wiring: STM32 **PG12 (USART10_TX) → Nano RX (D0)**, and **common ground**.
 
 ## Pin
-USART10 is on **PG11 (RX) / PG12 (TX)**, AF11 — matching the team's standard
-`.ioc`. Only TX is used. The `MX_USART10_UART_Init` / `HAL_UART_MspInit` in
-`Core/Src/usart.c` (and `uDV.ioc`) reflect this.
+USART10 is on **PG11 (RX) / PG12 (TX)**, **AF4** (`GPIO_AF4_USART10`, per the
+CubeMX-generated `HAL_UART_MspInit` in `Core/Src/usart.c` — bench-validated
+with the Nano). Only TX is used.
 
 ## Implementation notes
 - USART10 is **CubeMX-generated HAL** (`huart10`, 115200 8N1). `ws2812.c` sends

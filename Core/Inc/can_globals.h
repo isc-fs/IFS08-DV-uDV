@@ -49,12 +49,12 @@ extern std::atomic<bool> g_reset_cmd;
 /* Steering sensor (FDCAN3 ID 0x2B0).  Raw representation matches the LWS
  * sensor wire format so the CAN layer doesn't allocate floats in ISR.
  *   angle_raw  : 0.1 deg/bit, signed
- *   speed_raw  : 4 deg/s per bit, unsigned
+ *   speed_raw  : 4 deg/s per bit, signed (decode casts the wire byte)
  *   status     : bit0=OK, bit1=CAL, bit2=TRIM
  *   last_rx_tick : osKernelGetTickCount() at the last received frame
  */
 extern std::atomic<int16_t>  g_steering_angle_raw;
-extern std::atomic<uint8_t>  g_steering_speed_raw;
+extern std::atomic<int8_t>   g_steering_speed_raw;
 extern std::atomic<uint8_t>  g_steering_status;
 extern std::atomic<uint32_t> g_steering_last_rx_tick;
 

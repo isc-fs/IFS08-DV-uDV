@@ -48,8 +48,10 @@ extern "C" {
  * Once started the IWDG cannot be stopped (by hardware design); it must
  * be refreshed via iwdg_refresh() at least every timeout period or the
  * MCU resets. Call once, from the safety task, after the scheduler is
- * running. Also freezes the IWDG while the core is halted under a
- * debugger so single-stepping doesn't spuriously reset.
+ * running. NOTE: the IWDG keeps counting while the core is halted under
+ * a debugger — freezing it requires the FLASH option byte
+ * (IWDG1_SW/FZ_IWDG_STOP), which this init does not touch; expect
+ * resets when single-stepping unless the option byte is programmed.
  */
 void iwdg_init(void);
 

@@ -398,7 +398,8 @@ extern "C" void StartAppTask(void *argument)
             ebs.deactivateEBS();
         }
 
-        // Small delay to prevent CPU hogging (but watchdog timeout < 50ms)
+        // Small delay to prevent CPU hogging (safety monitor expects our
+        // heartbeat within its 100 ms deadline)
         osDelay(1);
     }
 }

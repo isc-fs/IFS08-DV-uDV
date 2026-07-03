@@ -17,7 +17,7 @@ std::atomic<float> g_steer_angle_motor{0.0f};
 
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};
-std::atomic<uint8_t>  g_steering_speed_raw{0};
+std::atomic<int8_t>   g_steering_speed_raw{0};
 std::atomic<uint8_t>  g_steering_status{0};
 std::atomic<uint32_t> g_steering_last_rx_tick{0};
 
