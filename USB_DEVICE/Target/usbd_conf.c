@@ -197,7 +197,12 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
   }
   else
   {
-    Error_Handler();
+    /* NOTE: this callback runs from USB ISR context — calling
+     * Error_Handler() here would __disable_irq() and hang the MCU on
+     * any unexpected host-reported speed during enumeration.  Fall
+     * through with `speed` at its USBD_SPEED_FULL default initializer
+     * so USB enumeration can recover.
+     * If CubeMX regenerates this file, re-apply this change. */
   }
     /* Set Speed. */
   USBD_LL_SetSpeed((USBD_HandleTypeDef*)hpcd->pData, speed);
