@@ -9,6 +9,7 @@
 
 /* CAN IDs — FDCAN3 (AMI + steering bus + autonomy control) */
 static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
+static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au; /* echo back to AMI */
 static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u;
 static constexpr uint32_t CAN_ID_BRAKE_PRESSURE    = 0x505u;
 static constexpr uint32_t CAN_ID_SDC_RES_OPEN      = 0x506u;
@@ -209,9 +210,28 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
         g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
         break;
 
-    case CAN_ID_MISSION_SELECT:
+    case CAN_ID_MISSION_SELECT: {
+        if (msg->dlc < 1U) break;   /* malformed: no store, no ACK — AMI retries */
         g_can_mission_id.store((int)msg->data[0]);
+        /* ACK the mission back to the AMI (0x50A, byte echoed verbatim).
+         * The AMI retries 0x503 every 500 ms until it sees this echo, so
+         * a lost frame in either direction just delays the handshake.
+         * rx_dispatch runs in canTask context — safe to enqueue TX here. */
+        FDCAN_TxHeaderTypeDef AckHeader = {
+            .Identifier          = CAN_ID_MISSION_ACK,
+            .IdType              = FDCAN_STANDARD_ID,
+            .TxFrameType         = FDCAN_DATA_FRAME,
+            .DataLength          = FDCAN_DLC_BYTES_1,
+            .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+            .BitRateSwitch       = FDCAN_BRS_OFF,
+            .FDFormat            = FDCAN_CLASSIC_CAN,
+            .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+            .MessageMarker       = 0,
+        };
+        uint8_t ack = msg->data[0];
+        (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &AckHeader, &ack);
         break;
+    }
 
     /* --- Autonomy state-machine inputs (ported from fix/17) ---
      * These populate the CAN atomics StateManager reads. Without them the
