@@ -60,6 +60,16 @@ cap for detecting a lost safety-critical message.
 
 ## ⚠️ Open items before an on-track run
 
+- **IMU topic name mismatch (`/imu` vs `/imu/data_raw`) — BLOCKS odometry
+  on car.** The firmware publishes the IMU on **`imu`** (→ `/imu`, empty
+  namespace), but the pipeline's car profile remaps `odometry_filter_node`'s
+  subscription to **`/imu/data_raw`** (`REMAP_IMU_CAR` in
+  `bringup/topic_contract.py`), and this repo's CLAUDE.md historically also
+  claimed `/imu/data_raw`. As-is the EKF receives NO IMU on the car. Fix on
+  ONE side only: either rename the firmware topic to `imu/data_raw`, or drop
+  the pipeline's car remap so odometry's in-code `/imu` matches. Verify on
+  the bench with `ros2 topic list` + `ros2 topic hz`. (Flagged during the
+  dev↔feat/16 comparison, 2026-07-03 — deliberately NOT changed yet.)
 - **`libmicroros.a` rebuild (`MAX_SERVICES`).** The firmware creates **two**
   service servers (`activate_steering`, `force_ebs`) but the committed lib
   was built with `RMW_UXRCE_MAX_SERVICES=1`, so `force_ebs` (the 2nd) may be

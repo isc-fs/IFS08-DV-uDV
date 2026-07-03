@@ -69,7 +69,7 @@ Inter-task communication uses FreeRTOS message queues:
 - **`imuSemHandle`**: TIM2 ISR → `imuTask` semaphore for 400 Hz deterministic sampling
 
 ### IMU Pipeline
-TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle` → `imuTask` reads BMI088 via I2C2 with software bitbang recovery ([Core/Src/i2c_utils.c](Core/Src/i2c_utils.c)) → computes roll/pitch via CORDIC hardware ([Core/Src/attitude.c](Core/Src/attitude.c), complementary filter) → pushes `imu_sample_t` with DWT cycle-counter timestamp → `defaultTask` publishes to `/imu/data_raw`.
+TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle` → `imuTask` reads BMI088 via I2C2 with software bitbang recovery ([Core/Src/i2c_utils.c](Core/Src/i2c_utils.c)) → computes roll/pitch via CORDIC hardware ([Core/Src/attitude.c](Core/Src/attitude.c), complementary filter) → pushes `imu_sample_t` with DWT cycle-counter timestamp → `defaultTask` publishes to `/imu` (⚠️ see IMU topic mismatch note below).
 
 Timestamps use DWT cycle counter (sub-microsecond) with NTP-like sync via `rmw_uros_sync_session`. Re-sync happens every ~10 s (4000 samples).
 
@@ -84,13 +84,26 @@ ROS 2 node `cubemx_node` exposes:
 
 | Topic | Type | QoS | Hz |
 |---|---|---|---|
-| `/imu/data_raw` | `sensor_msgs/Imu` | best-effort | 400 |
+| `/imu` ⚠️ | `sensor_msgs/Imu` | best-effort | 400 |
 | `/imu/status` | `std_msgs/Int32` | reliable | ~0.1 |
-| `/steering/data` | `std_msgs/Float32` | best-effort | ~10 |
+| `/steering_angle` (rad) | `std_msgs/Float32` | best-effort | ~10 |
+| `/motor_rpm` | `std_msgs/Float32` | best-effort | ~10 |
+| `/steering/feedback` | `std_msgs/Float32MultiArray` | best-effort | 20 |
 | `/res/status` | `std_msgs/Int32` | best-effort | ~10 |
+| `/res/go` | `std_msgs/Int32` | best-effort | ~10 |
 | `/ami/mission` | `std_msgs/Int32` | best-effort | ~10 |
+| `/assi/state` (heartbeat) | `std_msgs/UInt8` | best-effort | 10 (wall-clock, IMU-decoupled) |
+| `/assi/pub_gap_max_ms` | `std_msgs/Int32` | best-effort | 10 |
+| `/as_state` | `std_msgs/UInt8` | best-effort | ~10 |
 | `/debug` | `std_msgs/String` | reliable | ~10 |
+| `/dv/status` (sub) | `std_msgs/UInt8` | reliable | — |
+| `/ctrl/cmd` (sub) | `geometry_msgs/Twist` | best-effort | — |
 | `/cmd_test` (sub) | `std_msgs/Int32` | reliable | — |
+| `/activate_steering`, `/force_ebs` (srv) | `std_srvs/SetBool` | — | — |
+
+⚠️ **IMU topic mismatch**: the pipeline's car profile expects `/imu/data_raw`
+(`REMAP_IMU_CAR`); firmware publishes `/imu`. One side must change before an
+on-car run — see docs/PIPELINE_INTERFACE.md "Open items".
 
 Transport: USB CDC with HDLC framing via `micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c`. Memory: custom FreeRTOS-heap allocators in `microros_allocators.c`.
 
