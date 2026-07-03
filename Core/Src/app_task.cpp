@@ -148,6 +148,7 @@ extern "C" void StartAppTask(void *argument)
     uint32_t ready_start_time = 0;
     int last_mission_id = -1;
     bool set_mission_sent = false;
+    bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -187,6 +188,7 @@ extern "C" void StartAppTask(void *argument)
         if (g_reset_cmd.load())
         {
             set_mission_sent = false;
+            start_mission_sent = false;
             last_mission_id = -1;
             reset_all();
         }
@@ -278,6 +280,7 @@ extern "C" void StartAppTask(void *argument)
             {
                 ready_start_time = 0;
                 g_can_listen_go.store(false);
+                start_mission_sent = false;
             }
 
             int current_mission_id = g_can_mission_id.load();
@@ -290,6 +293,7 @@ extern "C" void StartAppTask(void *argument)
             {
                 last_mission_id = current_mission_id;
                 set_mission_sent = false;
+                start_mission_sent = false;
                 g_set_mission_in_progress.store(false);
                 g_set_mission_ready.store(false);
             }
@@ -339,6 +343,22 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
+                    // CAN start-mission FALLBACK (ported from dev): fire the
+                    // (currently stubbed) start-mission command once when the
+                    // legacy setup handshake reports ready. Coexists with the
+                    // primary dv/status handshake — the pipeline path needs
+                    // nothing from this, but if the ROS command layer is ever
+                    // rewired (see ros_task_commands.h) the legacy CAN
+                    // orchestration picks up where dev left it.
+                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load()
+                        && !start_mission_sent)
+                    {
+                        if (send_start_mission_command(current_mission_id))
+                        {
+                            start_mission_sent = true;
+                        }
+                    }
+
                     // Stream the pipeline's latest normalised /ctrl/cmd to the
                     // inverter / steering ECU (the ECU expects a constant
                     // stream, so we send every tick from the latched value).
