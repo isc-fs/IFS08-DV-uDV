@@ -58,7 +58,8 @@ void StateManager::updateSignals()
     signals_.r2d = g_can_r2d.load();
     signals_.vehicle_standstill = g_imu_vehicle_standstill.load();
     int mission_id = g_can_mission_id.load();
-    signals_.mission_selected = (mission_id > 0 && g_set_mission_ready.load());
+    /* >= 0: mission 0 is a valid 0-based AMI index; -1 = none received */
+    signals_.mission_selected = (mission_id >= 0 && g_set_mission_ready.load());
 
     // Read from ROS globals (via atomics)
     signals_.mission_finished = g_finished_cmd.load();

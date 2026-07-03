@@ -82,7 +82,7 @@ static void reset_world(void)
     g_can_ts_active.store(false);
     g_can_sdc_res_open.store(false);
     g_can_brake_pressure.store(0.0f);
-    g_can_mission_id.store(0);
+    g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid 0-based mission */
     g_can_r2d.store(false);
     g_imu_vehicle_standstill.store(true);
     g_set_mission_ready.store(false);
@@ -209,6 +209,24 @@ static void test_sm_starts_off(void)
     CHECK(sm.getState() == ASState::OFF);
 }
 
+static void test_sm_mission_zero_selected(void)
+{
+    /* Mission 0 is a valid 0-based AMI index (feat/18 wire contract) — it
+     * must count as "selected". Regression for the sentinel that used to
+     * be 0 and swallowed it. */
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    g_can_mission_id.store(0);
+    g_set_mission_ready.store(true);
+    sm.update();
+    CHECK(sm.getSignals().mission_selected == true);
+
+    /* And the reset sentinel (-1) must NOT count as selected. */
+    g_can_mission_id.store(-1);
+    sm.update();
+    CHECK(sm.getSignals().mission_selected == false);
+}
+
 static void test_sm_preconditions_without_ebs_done_is_off(void)
 {
     reset_world();
@@ -319,6 +337,7 @@ int main(void)
     test_ebs_checks();
 
     test_sm_starts_off();
+    test_sm_mission_zero_selected();
     test_sm_preconditions_without_ebs_done_is_off();
     test_sm_ready();
     test_sm_driving();
