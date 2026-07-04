@@ -67,7 +67,7 @@ Priority: **Critical** — must be done before any further development.
 
 - Confirm imuTask still publishes IMU data at ~400 Hz over micro-ROS
 - Confirm micro-ROS agent connects via USB CDC
-- Monitor `imu/data_raw` and `imu/status` topics — data should be unchanged
+- Monitor `imu` and `imu/status` topics — data should be unchanged
 - Check FreeRTOS heap usage (`xPortGetFreeHeapSize`) — ensure the two new tasks don't exhaust memory
 
 ### 1.4 SPI Timing Verification

@@ -71,7 +71,7 @@ Keep the board stationary for ~10 s (gyro bias calibration), then
 verify the IMU stream:
 
 ```bash
-ros2 topic hz /imu/data_raw
+ros2 topic hz /imu
 # expected: average rate ~400 Hz
 ```
 

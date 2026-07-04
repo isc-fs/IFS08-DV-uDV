@@ -69,7 +69,7 @@ Inter-task communication uses FreeRTOS message queues:
 - **`imuSemHandle`**: TIM2 ISR → `imuTask` semaphore for 400 Hz deterministic sampling
 
 ### IMU Pipeline
-TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle` → `imuTask` reads BMI088 via I2C2 with software bitbang recovery ([Core/Src/i2c_utils.c](Core/Src/i2c_utils.c)) → computes roll/pitch via CORDIC hardware ([Core/Src/attitude.c](Core/Src/attitude.c), complementary filter) → pushes `imu_sample_t` with DWT cycle-counter timestamp → `defaultTask` publishes to `/imu` (⚠️ see IMU topic mismatch note below).
+TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle` → `imuTask` reads BMI088 via I2C2 with software bitbang recovery ([Core/Src/i2c_utils.c](Core/Src/i2c_utils.c)) → computes roll/pitch via CORDIC hardware ([Core/Src/attitude.c](Core/Src/attitude.c), complementary filter) → pushes `imu_sample_t` with DWT cycle-counter timestamp → `defaultTask` publishes to `/imu` (canonical on both sides — see the IMU topic note below).
 
 Timestamps use DWT cycle counter (sub-microsecond) with NTP-like sync via `rmw_uros_sync_session`. Re-sync happens every ~10 s (4000 samples).
 
@@ -101,9 +101,10 @@ ROS 2 node `cubemx_node` exposes:
 | `/cmd_test` (sub) | `std_msgs/Int32` | reliable | — |
 | `/activate_steering`, `/force_ebs` (srv) | `std_srvs/SetBool` | — | — |
 
-⚠️ **IMU topic mismatch**: the pipeline's car profile expects `/imu/data_raw`
-(`REMAP_IMU_CAR`); firmware publishes `/imu`. One side must change before an
-on-car run — see docs/PIPELINE_INTERFACE.md "Open items".
+**IMU topic**: canonical `/imu` on both sides. The firmware publishes `/imu`
+and the pipeline's car profile subscribes odometry/slam to `/imu` directly
+(no remap). Standardised on `/imu` 2026-07-04 (the pipeline dropped its old
+`/imu/data_raw` car remap).
 
 Transport: USB CDC with HDLC framing via `micro_ros_stm32cubemx_utils/extra_sources/microros_transports/usb_cdc_transport.c`. Memory: custom FreeRTOS-heap allocators in `microros_allocators.c`.
 
