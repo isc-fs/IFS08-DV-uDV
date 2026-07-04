@@ -68,23 +68,26 @@ enum ResKind { RES_NONE, RES_OK, RES_GO, RES_ESTOP };
 enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_FRESH_EMERG };
 
 // ebs_done defaults to true so the pre-gate cases read unchanged; the
-// EBS-init gate cases (dev 9395936) pass false explicitly.
+// EBS-init gate cases (dev 9395936) pass false explicitly. steer_emerg
+// defaults to false (no steering fault) so the pre-existing cases read
+// unchanged; the steering-fault cases pass true explicitly.
 static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
-                     bool ebs_done = true)
+                     bool ebs_done = true, bool steer_emerg = false)
 {
     AsInputs in{};
-    in.asms_on       = asms;
-    in.ts_on         = ts;
-    in.res_estop     = (res == RES_ESTOP);
-    in.res_go        = (res == RES_GO);
+    in.asms_on         = asms;
+    in.ts_on           = ts;
+    in.res_estop       = (res == RES_ESTOP);
+    in.res_go          = (res == RES_GO);
     /* Mirrors the producer in app_task.cpp: "go" also means the RES link is
      * healthy (res_ok true for status 0 AND status 2 — the fix/19 port). */
-    in.res_ok        = (res == RES_OK) || (res == RES_GO);
-    in.ebs_init_done = ebs_done;
-    in.dv_fresh      = (dv != DV_STALE);
-    in.dv_ready      = (dv == DV_FRESH_READY);
-    in.dv_finished   = (dv == DV_FRESH_FINISHED);
-    in.dv_emergency  = (dv == DV_FRESH_EMERG);
+    in.res_ok          = (res == RES_OK) || (res == RES_GO);
+    in.steer_emergency = steer_emerg;
+    in.ebs_init_done   = ebs_done;
+    in.dv_fresh        = (dv != DV_STALE);
+    in.dv_ready        = (dv == DV_FRESH_READY);
+    in.dv_finished     = (dv == DV_FRESH_FINISHED);
+    in.dv_emergency    = (dv == DV_FRESH_EMERG);
     return in;
 }
 
@@ -136,6 +139,15 @@ static void test_named_cases(void)
     CHECK_EQ(ASState::OFF,   make(true, true, RES_ESTOP, DV_FRESH_READY), ASState::EMERGENCY);
     CHECK_EQ(ASState::READY, make(true, true, RES_ESTOP, DV_FRESH_READY), ASState::EMERGENCY);
 
+    // Steering grave-fault (ESTADO_MOTOR_EMERGENCIA) -> EMERGENCY, unconditional
+    // like an RES e-stop (a dead steering motor means the car can't steer).
+    // steer_emerg is the 6th make() arg (after ebs_done).
+    CHECK_EQ(ASState::OFF,     make(true, true,  RES_OK, DV_STALE,       true, true), ASState::EMERGENCY);
+    CHECK_EQ(ASState::READY,   make(true, true,  RES_OK, DV_FRESH_READY, true, true), ASState::EMERGENCY);
+    CHECK_EQ(ASState::DRIVING, make(true, true,  RES_GO, DV_FRESH_OTHER, true, true), ASState::EMERGENCY);
+    // ...but ASMS-off still wins over a steering fault (fail-safe order).
+    CHECK_EQ(ASState::READY,   make(false, true, RES_OK, DV_STALE,       true, true), ASState::OFF);
+
     // TS lost while armed -> EMERGENCY; TS lost while OFF is not (yet) emergency.
     CHECK_EQ(ASState::READY,   make(true, false, RES_OK, DV_FRESH_READY), ASState::EMERGENCY);
     CHECK_EQ(ASState::DRIVING, make(true, false, RES_GO, DV_FRESH_OTHER), ASState::EMERGENCY);
@@ -163,9 +175,10 @@ static void test_invariants(void)
       for (int asms = 0; asms < 2; ++asms)
         for (int ts = 0; ts < 2; ++ts)
           for (int ebs = 0; ebs < 2; ++ebs)
+           for (int se = 0; se < 2; ++se)
             for (ResKind res : ress)
             for (DvKind dv : dvs) {
-                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0);
+                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
@@ -196,11 +209,11 @@ static void test_invariants(void)
                 }
 
                 // INV7 DRIVING persistence: while Driving with a healthy world
-                // (no e-stop, TS on, DV fresh and not finished/emergency), the
-                // run continues REGARDLESS of the RES go level — a held or
-                // released GO never bounces the state.
-                if (prev == ASState::DRIVING && !in.res_estop && in.ts_on &&
-                    in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
+                // (no e-stop, no steering fault, TS on, DV fresh and not
+                // finished/emergency), the run continues REGARDLESS of the RES
+                // go level — a held or released GO never bounces the state.
+                if (prev == ASState::DRIVING && !in.res_estop && !in.steer_emergency &&
+                    in.ts_on && in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
                     CHECK_TRUE(out == ASState::DRIVING);
                 }
 
@@ -208,6 +221,13 @@ static void test_invariants(void)
                 // with the EBS init sequence Done.
                 if (out == ASState::READY && prev != ASState::READY) {
                     CHECK_TRUE(in.ebs_init_done);
+                }
+
+                // INV9 steering grave-fault: a non-latched steer_emergency
+                // forces Emergency, unconditional like an e-stop.
+                if (prev != ASState::EMERGENCY && prev != ASState::FINISHED &&
+                    in.steer_emergency) {
+                    CHECK_TRUE(out == ASState::EMERGENCY);
                 }
             }
 }

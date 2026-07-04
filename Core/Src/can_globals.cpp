@@ -14,6 +14,8 @@ std::atomic<bool> g_reset_cmd{false};
 std::atomic<float> g_steer_angle_actual{0.0f};
 std::atomic<float> g_steer_angle_target{0.0f};
 std::atomic<float> g_steer_angle_motor{0.0f};
+// Default OFF (not EMERGENCIA) so an absent 0x500 never fabricates an emergency.
+std::atomic<int8_t> g_steer_motor_state{ESTADO_MOTOR_OFF};
 
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};

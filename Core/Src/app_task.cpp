@@ -60,6 +60,7 @@ static void reset_can_globals(void)
     g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid mission */
     g_can_r2d.store(false);  /* (g_can_go was redundant with this) */
     g_imu_vehicle_standstill.store(true);
+    g_steer_motor_state.store(ESTADO_MOTOR_OFF);  /* clear a stale steering fault */
 }
 
 static void reset_state_telemetry(void)
@@ -207,6 +208,12 @@ extern "C" void StartAppTask(void *argument)
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
+        /* Steering stepper-driver grave fault (byte 5 of 0x500). EMERGENCIA is
+         * an absolute cut-off requiring a physical reset — a dead steering
+         * motor means the car can't steer, so treat it like an RES e-stop. */
+        bool steer_emergency =
+            (g_steer_motor_state.load() == ESTADO_MOTOR_EMERGENCIA);
+
         // --- Pipeline (DVPC) status, read level-triggered off /dv/status ---
         // The uDV owns the AS state machine; mission_control only answers
         // with this byte. It is also the DVPC liveness heartbeat: a stale
@@ -228,6 +235,7 @@ extern "C" void StartAppTask(void *argument)
         as_in.res_estop     = res_estop;
         as_in.res_go        = res_go;
         as_in.res_ok        = res_ok;
+        as_in.steer_emergency = steer_emergency;
         as_in.ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
         as_in.dv_fresh      = dv_fresh;
         as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);

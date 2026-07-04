@@ -28,6 +28,7 @@ struct AsInputs {
     bool res_estop;     /**< RES emergency-stop asserted                   */
     bool res_go;        /**< RES "go" asserted                             */
     bool res_ok;        /**< RES received, no e-stop / go                  */
+    bool steer_emergency; /**< steering reported ESTADO_MOTOR_EMERGENCIA (grave) */
     bool ebs_init_done; /**< EBS init sequence reached EBSInitState::Done   */
     bool dv_fresh;      /**< /dv/status seen within DV_STATUS_STALE_MS      */
     bool dv_ready;      /**< fresh && /dv/status == DV_STATUS_READY         */
@@ -40,11 +41,11 @@ struct AsInputs {
  *        signals. Pure; identical to the chain in app_task's loop.
  *
  * Fail-safe ordering: ASMS-off and a latched Emergency/Finished win first;
- * then any emergency trigger (RES e-stop, TS loss while armed, a
- * pipeline-raised emergency, or a lost pipeline heartbeat mid-run); then
- * the normal Finished / Driving / Ready progression. Returns `prev`
- * unchanged when nothing matches (e.g. steady Driving with the pipeline
- * Running), so the state only moves on an explicit trigger.
+ * then any emergency trigger (RES e-stop, a steering grave-fault, TS loss
+ * while armed, a pipeline-raised emergency, or a lost pipeline heartbeat
+ * mid-run); then the normal Finished / Driving / Ready progression. Returns
+ * `prev` unchanged when nothing matches (e.g. steady Driving with the
+ * pipeline Running), so the state only moves on an explicit trigger.
  */
 inline ASState as_next_state(ASState prev, const AsInputs& in)
 {
@@ -58,6 +59,7 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
     if (prev == ASState::FINISHED)
         return ASState::FINISHED;                  /* latches until ASMS off */
     if (in.res_estop
+        || in.steer_emergency  /* steering grave-fault: unconditional, like e-stop */
         || (!in.ts_on && (prev == ASState::DRIVING || prev == ASState::READY))
         || (in.dv_emergency && (prev == ASState::DRIVING || prev == ASState::READY))
         || dv_lost_driving)
