@@ -321,6 +321,7 @@ extern "C" void StartAppTask(void *argument)
 
                     switch (g_can_mission_id.load()){
                         case 0:  //Inspection
+                            Can::sendSteeringStart();
                             move_steer_sin();
                             //sen_motor_power(15); //15%
                             if(now-mission_time > 30000){
