@@ -15,6 +15,11 @@ std::atomic<float> g_steer_angle_actual{0.0f};
 std::atomic<float> g_steer_angle_target{0.0f};
 std::atomic<float> g_steer_angle_motor{0.0f};
 
+// Steering controller motor status (0x500 byte 5): 0=OFF, 1=ON, -1=EMERGENCIA.
+// Init to OFF; g_steer_fb_last_rx_tick lets consumers detect a silent board.
+std::atomic<int8_t>   g_steer_motor_status{0};
+std::atomic<uint32_t> g_steer_fb_last_rx_tick{0};
+
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};
 std::atomic<int8_t>   g_steering_speed_raw{0};

@@ -67,6 +67,13 @@ extern std::atomic<float>    g_steer_angle_actual;
 extern std::atomic<float>    g_steer_angle_target;
 extern std::atomic<float>    g_steer_angle_motor;
 
+/* Steering controller motor status (0x500 byte 5): 0=OFF, 1=ON, -1=EMERGENCIA
+ * (absolute cut, latched on the steering board, needs a physical reset).
+ * g_steer_fb_last_rx_tick = osKernelGetTickCount() of the last 0x500 frame,
+ * so a consumer can distinguish a live EMERGENCIA from a silent board. */
+extern std::atomic<int8_t>   g_steer_motor_status;
+extern std::atomic<uint32_t> g_steer_fb_last_rx_tick;
+
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
  */
@@ -91,6 +98,13 @@ float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);
 float    can_c_get_steer_angle_motor(void);
 uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
+
+/* Raw steering motor-status byte: 0=OFF, 1=ON, -1=EMERGENCIA. */
+int8_t   can_c_get_steer_motor_status(void);
+/* Freshness-aware steering status (mirrors can_c_get_res_status):
+ *   -2 = never received, -1 = timeout (silent board),
+ *    0 = OFF, 1 = ON, 2 = EMERGENCIA (latched cut on the steering board). */
+int32_t  can_c_get_steer_status(uint32_t now_tick, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

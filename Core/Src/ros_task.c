@@ -51,6 +51,7 @@
 #define SLOW_PUB_INTERVAL     40    // publish steering/RES/AMI every 40 IMU samples (~10 Hz)
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
+#define STEER_FB_TIMEOUT_MS   300   // steering 0x500 feedback timeout (expect every 50 ms)
 #define STATE_DUMP_INTERVAL   200   // /debug state heartbeat: every 200 IMU samples (~2 Hz at 400 Hz)
 
 /* RTOS queues created in freertos.c (MX_FREERTOS_Init). */
@@ -306,13 +307,15 @@ void ros_task_run(void)
   // data[0] = angle_actual (deg) — LWS physical angle
   // data[1] = angle_target (deg) — last commanded angle echoed by controller
   // data[2] = angle_motor  (deg) — stepper position calculated by steps
+  // data[3] = motor_status — freshness-aware: -2 never rx, -1 silent/timeout,
+  //           0 OFF, 1 ON, 2 EMERGENCIA (latched cut on the steering board)
   rcl_publisher_t steering_fb_pub;
   std_msgs__msg__Float32MultiArray steering_fb_msg;
-  static float steering_fb_data[3] = {0.0f, 0.0f, 0.0f};
+  static float steering_fb_data[4] = {0.0f, 0.0f, 0.0f, -2.0f};
   memset(&steering_fb_msg, 0, sizeof(steering_fb_msg));
   steering_fb_msg.data.data     = steering_fb_data;
-  steering_fb_msg.data.size     = 3;
-  steering_fb_msg.data.capacity = 3;
+  steering_fb_msg.data.size     = 4;
+  steering_fb_msg.data.capacity = 4;
   rclc_publisher_init_best_effort(
     &steering_fb_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
@@ -509,6 +512,8 @@ void ros_task_run(void)
         steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
         steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
         steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
+        steering_fb_data[3] = (float)can_c_get_steer_status(    // -2/-1/0/1/2
+                                osKernelGetTickCount(), STEER_FB_TIMEOUT_MS);
         (void)rcl_publish(&steering_fb_pub, &steering_fb_msg, NULL);
       }
 

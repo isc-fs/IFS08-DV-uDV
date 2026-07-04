@@ -205,9 +205,18 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     switch (msg->id)
     {
     case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
+        /* Reads bytes 2..5; drop a short/malformed frame so we don't
+         * reconstruct angles or the motor-status flag from stale bytes. */
+        if (msg->dlc < 6U) break;
         g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
         g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
         g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
+        /* byte 5: steering-controller motor status, signed
+         *   0 = OFF, 1 = ON, -1 (0xFF) = EMERGENCIA (absolute cut, latched,
+         *   requires a physical reset of the steering board). The controller
+         *   broadcasts this at ~10 Hz from its blink loop while latched. */
+        g_steer_motor_status.store((int8_t)msg->data[5]);
+        g_steer_fb_last_rx_tick.store(osKernelGetTickCount());
         break;
 
     case CAN_ID_MISSION_SELECT: {
@@ -522,6 +531,23 @@ extern "C" float can_c_get_steer_angle_target(void)
 extern "C" float can_c_get_steer_angle_motor(void)
 {
     return g_steer_angle_motor.load();
+}
+
+extern "C" int8_t can_c_get_steer_motor_status(void)
+{
+    return g_steer_motor_status.load();
+}
+
+/* Freshness-aware steering status, same shape as can_c_get_res_status:
+ *   -2 never received, -1 timeout (silent board), 0 OFF, 1 ON, 2 EMERGENCIA. */
+extern "C" int32_t can_c_get_steer_status(uint32_t now_tick, uint32_t timeout_ms)
+{
+    uint32_t last = g_steer_fb_last_rx_tick.load();
+    if (last == 0U)                     return -2;
+    if ((now_tick - last) > timeout_ms) return -1;
+    int8_t st = g_steer_motor_status.load();
+    if (st < 0)                         return  2; /* -1 EMERGENCIA -> 2 */
+    return st;                                     /* 0 OFF / 1 ON */
 }
 
 extern "C" float can_c_get_steering_angle_deg(void)
