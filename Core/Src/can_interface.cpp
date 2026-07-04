@@ -22,13 +22,18 @@ static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
 static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x010u;
 static constexpr uint32_t CAN_ID_STEER_CMD         = 0x020u;
+/* Steering controller → uDV feedback (RX, FDCAN3): DrivingDynamics1 @20 Hz.
+ * Numerically 0x500 (same as the FDCAN1 data-logger DYN1 TX frame), but a
+ * distinct frame on a different bus — keep its own name so the two never
+ * read as the same message. See CAN_ID_DL_DYN1 for the TX counterpart. */
+static constexpr uint32_t CAN_ID_STEER_FEEDBACK    = 0x500u;
 
 /* CAN IDs — FDCAN1 (RES CANopen + DataLogger TX) */
 static constexpr uint32_t RES_NODE_ID              = 0x11u;
 static constexpr uint32_t CAN_ID_NMT               = 0x000u;
 static constexpr uint32_t CAN_ID_RES_PDO_TX        = 0x180u + RES_NODE_ID; /* 0x191 */
 static constexpr uint32_t CAN_ID_RES_BOOTUP        = 0x700u + RES_NODE_ID; /* 0x711 */
-static constexpr uint32_t CAN_ID_DL_DYN1           = 0x500u;
+static constexpr uint32_t CAN_ID_DL_DYN1           = 0x500u; /* uDV → data logger TX (see CAN_ID_STEER_FEEDBACK for the 0x500 RX frame) */
 static constexpr uint32_t CAN_ID_DL_DYN2           = 0x501u;
 static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 
@@ -204,7 +209,7 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
-    case CAN_ID_DL_DYN1: /* 0x500 DV_DRIVING_DYNAMICS_1 — steering feedback,
+    case CAN_ID_STEER_FEEDBACK: /* 0x500 DV_DRIVING_DYNAMICS_1 — steering feedback,
                           * 20 Hz on the AMI+steering bus (steering's FDCAN1). */
         if (msg->dlc < 6U) break;   /* need bytes [2..5]; short frame = ignore */
         g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
@@ -362,22 +367,32 @@ void sendNmtSetOperational()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, nmt);
 }
 
-void sendSteeringMotor(uint8_t start)
+/* 0x010 motor control, 4-byte payload: byte[0] is motor_start (rest 0).
+ * The steering controller reads only data[0] (len>=1) and runs the motor
+ * ONLY when data[0] == MOTOR_CMD_ON (1); any other value is a clean stop
+ * (re-homes on the next 0x10=1). See IFS08-DV-STEERING@fix/2-can-timing-ram-
+ * safety: comunicacion_direccion.c `motor_start = data[0]` + main.c
+ * `if(motor_start != MOTOR_CMD_ON)`. So start=1, stop=0 (0 = the natural off,
+ * matching DIR_INACTIVO). */
+static void sendSteeringMotorCmd(uint8_t motor_start)
 {
+    uint8_t data[4] = { motor_start, 0u, 0u, 0u };
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_STEER_MOTOR,
         .IdType              = FDCAN_STANDARD_ID,
         .TxFrameType         = FDCAN_DATA_FRAME,
-        .DataLength          = FDCAN_DLC_BYTES_1,
+        .DataLength          = FDCAN_DLC_BYTES_4,
         .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
         .BitRateSwitch       = FDCAN_BRS_OFF,
         .FDFormat            = FDCAN_CLASSIC_CAN,
         .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
         .MessageMarker       = 0,
     };
-    uint8_t payload = start;
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, data);
 }
+
+void sendSteeringStart() { sendSteeringMotorCmd(1u); }
+void sendSteeringStop()  { sendSteeringMotorCmd(0u); }
 
 void sendSteeringAngle(float angle_deg)
 {

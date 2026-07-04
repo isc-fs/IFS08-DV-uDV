@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 extern "C" {
     #include "FreeRTOS.h"
@@ -29,6 +30,49 @@ extern "C" {
 
 extern "C" {
     #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
+}
+
+/* ------------------------------------------------------------------------
+ * Mission dispatch
+ *
+ * The AMI board sends the 0-based mission menu index on CAN 0x503 byte[0]
+ * (see IFS08-DV_AMI Core/Src/ami.c `missions[]`). Autonomous missions are
+ * driven by the DV pipeline over /ctrl/cmd; the standalone ones (Inspection,
+ * EBS test) run open-loop in this firmware with no pipeline.
+ * ------------------------------------------------------------------------ */
+enum AmiMission {
+    MISSION_MANUAL     = 0,
+    MISSION_ACCEL      = 1,
+    MISSION_SKIDPAD    = 2,
+    MISSION_AUTOCROSS  = 3,
+    MISSION_TRACKDRIVE = 4,
+    MISSION_EBS_TEST   = 5,
+    MISSION_INSPECTION = 6,
+    MISSION_SHUTDOWN   = 7,
+};
+
+/* Missions whose actuation comes from the DV pipeline (/ctrl/cmd). The rest
+ * are standalone: run open-loop here, GO is not gated on the pipeline, and a
+ * stale /dv/status does not trip them. */
+static inline bool mission_needs_pipeline(int m)
+{
+    return m == MISSION_ACCEL || m == MISSION_SKIDPAD ||
+           m == MISSION_AUTOCROSS || m == MISSION_TRACKDRIVE;
+}
+
+/* Inspection open-loop steering sweep: ±INSPECTION_STEER_AMP_DEG at
+ * INSPECTION_STEER_FREQ_HZ, one 0x020 angle command per INSPECTION_STEER_DT_MS.
+ * Phase derives from the mission-elapsed time so each run starts clean. */
+static constexpr float    TWO_PI                   = 6.283185307f;
+static constexpr float    INSPECTION_STEER_AMP_DEG = 90.0f;
+static constexpr float    INSPECTION_STEER_FREQ_HZ = 0.3f;
+static constexpr uint32_t INSPECTION_STEER_DT_MS   = 200u;
+static constexpr uint32_t INSPECTION_DURATION_MS   = 30000u;   /* 30 s demo */
+
+static inline float inspection_sweep_deg(uint32_t elapsed_ms)
+{
+    float t = (float)elapsed_ms / 1000.0f;
+    return INSPECTION_STEER_AMP_DEG * sinf(TWO_PI * INSPECTION_STEER_FREQ_HZ * t);
 }
 
 /**
@@ -151,6 +195,11 @@ extern "C" void StartAppTask(void *argument)
     bool set_mission_sent = false;
     bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
 
+    /* Standalone-mission (inspection / EBS test) run state. */
+    uint32_t mission_time = 0;         /* tick the current DRIVING run began   */
+    uint32_t last_steer_emit = 0;      /* rate-limit for the inspection sweep  */
+    bool     mission_complete = false; /* open-loop mission done -> FINISHED    */
+
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
@@ -178,11 +227,17 @@ extern "C" void StartAppTask(void *argument)
         //1. cuando asms esta off siempre retornar a la AS_off
         //2. Si asms on, ts on y RES ok (es decir res 0 mira la funcion can_c_get_res_status()). transicion a AS_ready
         //3. Si RES E-stop en cualquier momento transicionar a AS_emergency
-        //4. Los frenos se sueltan cuando estan en HIGH. Es decir que solo se debe de activar los canales de EBS cuando esta en AS_driving. En el resto de estados los canales de EBS deben de estar desactivados. D1 y D2 low
+        //4. EBS engaged (brakes on, D1/D2 LOW = fire) in EVERY state except
+        //   AS_driving; released (D1/D2 HIGH) only in AS_driving. The car is
+        //   immobilised whenever it is not autonomously driving. IMPLEMENTED
+        //   below: OFF (after init) / READY / FINISHED / EMERGENCY / manual ->
+        //   ebs.activateEBS(); DRIVING -> ebs.deactivateEBS().
         //5. transicinar de AS_ready a AS_driving cuando se reciba el comando de start del RES
         //6. transicionar a emergency si el RES esta bien y el TS pasa a esta off.
         //7. configura para que la mision por defecto sea INSPECTION
-        //8. Por el momento no hay forma de transicinar a AS_finished.
+        //8. AS_finished is reached when the mission ends: a pipeline mission on
+        //   /dv/status FINISHED, a standalone mission (inspection) on its own
+        //   timer (mission_complete). See as_transition.hpp.
         //9. La unica forma de salir de AS_emergency es pasar por asms off.
 
         // Check for reset command (issued by external supervisor)
@@ -223,6 +278,16 @@ extern "C" void StartAppTask(void *argument)
         bool     dv_fresh      = dv_seen &&
                                  ((now_ms - g_dv_status_stamp_ms.load()) < DV_STATUS_STALE_MS);
 
+        /* Selected mission (0-based AMI index on 0x503). Default to Inspection
+         * when none has been received. Read here — before the transition — so
+         * the state machine can gate the GO / finish rules on the mission type
+         * (standalone missions need no pipeline). */
+        int current_mission_id = g_can_mission_id.load();
+        if (current_mission_id < 0)
+        {
+            current_mission_id = MISSION_INSPECTION;
+        }
+
         // Decide the next AS state via the pure, host-tested transition (see
         // as_transition.hpp). dv_* fold in freshness: the "go" gate needs a
         // fresh DV READY, and a stale /dv/status while driving trips Emergency.
@@ -242,8 +307,27 @@ extern "C" void StartAppTask(void *argument)
         as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
         as_in.dv_emergency = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
                                           dv_status == DV_STATUS_FAILED);
+        as_in.mission_needs_pipeline = mission_needs_pipeline(current_mission_id);
+        as_in.mission_complete       = mission_complete;
 
         as_state = as_next_state(previous_as_state, as_in);
+
+        /* Steering-motor lifecycle + standalone-mission clock, driven off the
+         * AS-state edges:
+         *   READY -> DRIVING (GO): energise the steering and (re)start the
+         *   mission clock so the inspection sweep begins from phase 0.
+         *   -> FINISHED: de-energise the steering. */
+        if (as_state == ASState::DRIVING && previous_as_state != ASState::DRIVING)
+        {
+            Can::sendSteeringStart();
+            mission_time     = now_ms;
+            last_steer_emit  = 0;
+            mission_complete = false;
+        }
+        if (as_state == ASState::FINISHED && previous_as_state != ASState::FINISHED)
+        {
+            Can::sendSteeringStop();
+        }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
@@ -291,12 +375,7 @@ extern "C" void StartAppTask(void *argument)
                 start_mission_sent = false;
             }
 
-            int current_mission_id = g_can_mission_id.load();
-            if (current_mission_id < 0)   /* -1 = none received; 0 is valid (0-based AMI index) */
-            {
-                current_mission_id = 6;  // Default mission: Inspection
-            }
-
+            /* current_mission_id was resolved above (before the transition). */
             if (current_mission_id != last_mission_id)
             {
                 last_mission_id = current_mission_id;
@@ -326,18 +405,22 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
-                    // Perform EBS initialization sequence steps
+                    // Run the EBS init / ASB self-check; once it completes (or
+                    // fails) hold the brakes ENGAGED. EBS is engaged in every
+                    // AS state except DRIVING (req #4 / FS-Rules: the car is
+                    // immobilised whenever it is not autonomously driving).
                     if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
                     {
                         ebs_state = ebs.initSequenceStep();
                     }
                     else
                     {
-                        ebs.deactivateEBS();
+                        ebs.activateEBS();
                     }
                     break;
 
                 case ASState::READY:
+                    ebs.activateEBS();   // held engaged in READY (req #4)
                     // Wait 5 seconds in READY state before signaling "go" to CAN
                     if (ready_start_time == 0)
                     {
@@ -351,44 +434,77 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
-                    // CAN start-mission FALLBACK (ported from dev): fire the
-                    // (currently stubbed) start-mission command once when the
-                    // legacy setup handshake reports ready. Coexists with the
-                    // primary dv/status handshake — the pipeline path needs
-                    // nothing from this, but if the ROS command layer is ever
-                    // rewired (see ros_task_commands.h) the legacy CAN
-                    // orchestration picks up where dev left it.
-                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load()
-                        && !start_mission_sent)
+                    ebs.deactivateEBS();  // release: DRIVING is the ONLY state
+                                          // with the brakes off (req #4)
+
+                    if (mission_needs_pipeline(current_mission_id))
                     {
-                        if (send_start_mission_command(current_mission_id))
+                        // --- Autonomous mission: driven by the DV pipeline ---
+                        // CAN start-mission FALLBACK (ported from dev): fire the
+                        // (currently stubbed) start-mission command once when the
+                        // legacy setup handshake reports ready. Coexists with the
+                        // primary dv/status handshake — the pipeline path needs
+                        // nothing from this, but if the ROS command layer is ever
+                        // rewired (see ros_task_commands.h) the legacy CAN
+                        // orchestration picks up where dev left it.
+                        if (g_set_mission_ready.load() && !g_mission_going_cmd.load()
+                            && !start_mission_sent)
                         {
-                            start_mission_sent = true;
+                            if (send_start_mission_command(current_mission_id))
+                            {
+                                start_mission_sent = true;
+                            }
+                        }
+
+                        // Stream the pipeline's latest normalised /ctrl/cmd to the
+                        // inverter / steering ECU (the ECU expects a constant
+                        // stream, so we send every tick from the latched value).
+                        // Zero it if /ctrl/cmd goes stale, so a dropped link can
+                        // never latch the last throttle/steering. Emergency and
+                        // finished are handled by the transition chain above —
+                        // they move us out of DRIVING before this runs.
+                        // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
+                        // CONTROL_STEER frames, units, sign and full-lock scaling
+                        // against the vehicle CAN DBC. The values here are the
+                        // normalised [-1,1] contract, clamped on receive.
+                        bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
+                                         ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
+                        if (cmd_fresh)
+                        {
+                            Can::sendAccel(g_accel_cmd.load());
+                            Can::sendSteer(g_steer_cmd.load());
+                        }
+                        else
+                        {
+                            Can::sendAccel(0.0f);
+                            Can::sendSteer(0.0f);
                         }
                     }
-
-                    // Stream the pipeline's latest normalised /ctrl/cmd to the
-                    // inverter / steering ECU (the ECU expects a constant
-                    // stream, so we send every tick from the latched value).
-                    // Zero it if /ctrl/cmd goes stale, so a dropped link can
-                    // never latch the last throttle/steering. Emergency and
-                    // finished are handled by the transition chain above —
-                    // they move us out of DRIVING before this runs.
-                    // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
-                    // CONTROL_STEER frames, units, sign and full-lock scaling
-                    // against the vehicle CAN DBC. The values here are the
-                    // normalised [-1,1] contract, clamped on receive.
-                    bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
-                                     ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
-                    if (cmd_fresh)
+                    else if (current_mission_id == MISSION_INSPECTION)
                     {
-                        Can::sendAccel(g_accel_cmd.load());
-                        Can::sendSteer(g_steer_cmd.load());
+                        // --- Standalone Inspection: open-loop steering demo ---
+                        // Sweep the steering (0x020) to prove the steering
+                        // system end-to-end, then self-finish after
+                        // INSPECTION_DURATION_MS. The steering motor was started
+                        // (0x010) on the GO edge above.
+                        uint32_t elapsed = now_ms - mission_time;
+                        if (now_ms - last_steer_emit >= INSPECTION_STEER_DT_MS)
+                        {
+                            Can::sendSteeringAngle(inspection_sweep_deg(elapsed));
+                            last_steer_emit = now_ms;
+                        }
+                        if (elapsed >= INSPECTION_DURATION_MS)
+                        {
+                            // -> FINISHED on the next tick, through as_next_state.
+                            mission_complete = true;
+                        }
                     }
-                    else
+                    else if (current_mission_id == MISSION_EBS_TEST)
                     {
-                        Can::sendAccel(0.0f);
-                        Can::sendSteer(0.0f);
+                        // --- Standalone EBS test: hold the wheels straight ---
+                        // TODO(on-car): drive the motor to the rules test speed,
+                        // command the EBS trigger, and verify the deceleration.
+                        Can::sendSteeringAngle(0.0f);
                     }
                     break;
                 }
@@ -410,7 +526,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
-                    // Mission complete - EBS already active, just ensure mission is cancelled
+                    ebs.activateEBS();   // held engaged in FINISHED (req #4):
+                                         // car braked at standstill, mission done
+                    // Mission complete - ensure any mission is cancelled
                     if (g_set_mission_in_progress.load())
                     {
                         send_cancel_set_mission_command();
@@ -425,9 +543,11 @@ extern "C" void StartAppTask(void *argument)
         }
         else
         {
-            // Manual mode: verify safe conditions (empty pressure tanks)
+            // Manual mode (ASMS off): verify the actuator tanks are safe for
+            // manual handling, then hold the brakes ENGAGED — EBS is released
+            // only in DRIVING (req #4).
             ebs.SafeManual();
-            ebs.deactivateEBS();
+            ebs.activateEBS();
         }
 
         // Small delay to prevent CPU hogging (safety monitor expects our
