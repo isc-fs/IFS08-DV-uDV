@@ -34,6 +34,13 @@ struct AsInputs {
     bool dv_ready;      /**< fresh && /dv/status == DV_STATUS_READY         */
     bool dv_finished;   /**< fresh && /dv/status == DV_STATUS_FINISHED      */
     bool dv_emergency;  /**< fresh && /dv/status == EMERGENCY or FAILED     */
+    bool mission_needs_pipeline; /**< selected mission is driven by the DV pipeline
+                                    (accel / skidpad / autocross / trackdrive). When
+                                    false the mission is a standalone open-loop one
+                                    (inspection, EBS test): no /dv/status gate on GO,
+                                    and a stale pipeline never trips it. */
+    bool mission_complete; /**< a standalone mission self-reported done (e.g. the
+                                inspection sweep timer elapsed) -> DRIVING to FINISHED */
 };
 
 /**
@@ -49,8 +56,11 @@ struct AsInputs {
  */
 inline ASState as_next_state(ASState prev, const AsInputs& in)
 {
-    /* Pipeline heartbeat lost while we were driving (link / DVPC dead). */
-    const bool dv_lost_driving = (prev == ASState::DRIVING) && !in.dv_fresh;
+    /* Pipeline heartbeat lost while driving (link / DVPC dead) — only for a
+     * mission that actually depends on the pipeline. A standalone open-loop
+     * mission (inspection / EBS test) has no heartbeat to lose. */
+    const bool dv_lost_driving =
+        (prev == ASState::DRIVING) && in.mission_needs_pipeline && !in.dv_fresh;
 
     if (!in.asms_on)
         return ASState::OFF;                       /* ASMS off always wins  */
@@ -61,23 +71,33 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
     if (in.res_estop
         || in.steer_emergency  /* steering grave-fault: unconditional, like e-stop */
         || (!in.ts_on && (prev == ASState::DRIVING || prev == ASState::READY))
-        || (in.dv_emergency && (prev == ASState::DRIVING || prev == ASState::READY))
+        || (in.dv_emergency && in.mission_needs_pipeline
+                            && (prev == ASState::DRIVING || prev == ASState::READY))
         || dv_lost_driving)
         return ASState::EMERGENCY;
-    if (prev == ASState::DRIVING && in.dv_finished)
-        return ASState::FINISHED;                  /* pipeline reported done */
+    /* DRIVING -> FINISHED: a pipeline mission ends when mission_control reports
+     * FINISHED; a standalone mission ends when its own open-loop logic raises
+     * mission_complete (e.g. the inspection sweep timer elapsed). */
+    if (prev == ASState::DRIVING
+        && (in.mission_complete
+            || (in.mission_needs_pipeline && in.dv_finished)))
+        return ASState::FINISHED;
     if (prev == ASState::DRIVING)
         return ASState::DRIVING;                   /* DRIVING is sticky: GO is a
                                                       trigger, not a level — only
                                                       the exits above end a run
                                                       (estop / TS loss / DV emerg /
-                                                      DV lost / DV finished / ASMS
-                                                      off). Without this, a held GO
+                                                      DV lost / DV finished /
+                                                      mission_complete / ASMS off).
+                                                      Without this, a held GO
                                                       oscillates READY<->DRIVING and
                                                       a released GO tears the
                                                       mission down mid-drive. */
-    if (in.res_go && prev == ASState::READY && in.dv_ready)
-        return ASState::DRIVING;                   /* go honoured only if DV READY */
+    if (in.res_go && prev == ASState::READY
+        && (in.dv_ready || !in.mission_needs_pipeline))
+        return ASState::DRIVING;                   /* pipeline mission: go honoured
+                                                      only if DV READY; standalone:
+                                                      go alone (no pipeline). */
     /* READY is gated on the EBS init sequence being complete (dev 9395936):
      * app_task only advances the init FSM while in OFF, so arming before
      * Done would strand it (ASBChecksOK never true). A Failed init keeps

@@ -71,8 +71,12 @@ enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_F
 // EBS-init gate cases (dev 9395936) pass false explicitly. steer_emerg
 // defaults to false (no steering fault) so the pre-existing cases read
 // unchanged; the steering-fault cases pass true explicitly.
+// needs_pipeline defaults to TRUE so every pre-existing case keeps its
+// pipeline-gated semantics; the standalone-mission cases pass false.
+// mission_complete defaults to false; the self-finish cases pass true.
 static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
-                     bool ebs_done = true, bool steer_emerg = false)
+                     bool ebs_done = true, bool steer_emerg = false,
+                     bool needs_pipeline = true, bool mission_complete = false)
 {
     AsInputs in{};
     in.asms_on         = asms;
@@ -88,6 +92,8 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
     in.dv_ready        = (dv == DV_FRESH_READY);
     in.dv_finished     = (dv == DV_FRESH_FINISHED);
     in.dv_emergency    = (dv == DV_FRESH_EMERG);
+    in.mission_needs_pipeline = needs_pipeline;
+    in.mission_complete       = mission_complete;
     return in;
 }
 
@@ -160,6 +166,41 @@ static void test_named_cases(void)
     // Pipeline-only emergency while merely OFF (not armed) must NOT fabricate
     // an emergency out of nowhere — it only bites while READY/DRIVING.
     CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_FRESH_EMERG), ASState::READY);
+
+    // --- Standalone missions (inspection / EBS test): needs_pipeline=false ---
+    // The 7th make() arg is needs_pipeline; the 8th is mission_complete.
+    // GO from READY is honoured WITHOUT any DV READY (no pipeline to wait on).
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_STALE,      true, false, false),
+             ASState::DRIVING);
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_OTHER, true, false, false),
+             ASState::DRIVING);
+    // A stale /dv/status while driving standalone must NOT trip Emergency
+    // (there is no pipeline heartbeat) — the run continues.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_STALE, true, false, false),
+             ASState::DRIVING);
+    // A pipeline EMERGENCY byte must be IGNORED by a standalone mission.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_EMERG, true, false, false),
+             ASState::DRIVING);
+    // Standalone self-finish: mission_complete -> FINISHED.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_STALE, true, false, false, true),
+             ASState::FINISHED);
+
+    // mission_complete also ends a PIPELINE mission from DRIVING (defensive:
+    // whoever raises it wins over "keep driving").
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_OTHER, true, false, true, true),
+             ASState::FINISHED);
+    // ...but an e-stop still beats a self-finish (fail-safe order).
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_ESTOP, DV_STALE, true, false, false, true),
+             ASState::EMERGENCY);
+
+    // The safety triggers that are mission-independent still fire for a
+    // standalone mission: RES e-stop, steering grave-fault, TS loss.
+    CHECK_EQ(ASState::DRIVING, make(true, true,  RES_ESTOP, DV_STALE, true, false, false),
+             ASState::EMERGENCY);
+    CHECK_EQ(ASState::DRIVING, make(true, true,  RES_GO,    DV_STALE, true, true,  false),
+             ASState::EMERGENCY);
+    CHECK_EQ(ASState::DRIVING, make(true, false, RES_GO,    DV_STALE, true, false, false),
+             ASState::EMERGENCY);
 }
 
 // ---- 2. exhaustive invariant sweep ----------------------------------
@@ -176,19 +217,24 @@ static void test_invariants(void)
         for (int ts = 0; ts < 2; ++ts)
           for (int ebs = 0; ebs < 2; ++ebs)
            for (int se = 0; se < 2; ++se)
-            for (ResKind res : ress)
-            for (DvKind dv : dvs) {
-                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0);
+            for (int np = 0; np < 2; ++np)
+             for (int mc = 0; mc < 2; ++mc)
+              for (ResKind res : ress)
+              for (DvKind dv : dvs) {
+                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0,
+                                   np != 0, mc != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
                 if (!in.asms_on) { CHECK_TRUE(out == ASState::OFF); continue; }
 
                 // INV2 Driving gate: the ONLY way to *enter* Driving (from a
-                // non-Driving state) is prev==READY && RES go && a fresh DV
-                // READY. (Staying in Driving with no trigger is separate.)
+                // non-Driving state) is prev==READY && RES go && the mission's
+                // start condition — a fresh DV READY for a pipeline mission, or
+                // nothing extra for a standalone one.
                 if (out == ASState::DRIVING && prev != ASState::DRIVING) {
-                    CHECK_TRUE(prev == ASState::READY && in.res_go && in.dv_ready);
+                    CHECK_TRUE(prev == ASState::READY && in.res_go &&
+                               (in.dv_ready || !in.mission_needs_pipeline));
                 }
 
                 // INV3/INV4 latches: Emergency/Finished never spontaneously
@@ -203,17 +249,30 @@ static void test_invariants(void)
                 }
 
                 // INV6 lost-heartbeat watchdog: a stale /dv/status while
-                // Driving forces Emergency.
-                if (prev == ASState::DRIVING && !in.dv_fresh) {
+                // Driving forces Emergency — but ONLY for a pipeline mission.
+                // A standalone mission has no heartbeat to lose.
+                if (prev == ASState::DRIVING && in.mission_needs_pipeline &&
+                    !in.dv_fresh) {
                     CHECK_TRUE(out == ASState::EMERGENCY);
                 }
 
+                // INV6b standalone isolation: a standalone mission driving with
+                // a stale/emergency pipeline byte but otherwise healthy and not
+                // self-finished stays DRIVING — the pipeline can't touch it.
+                if (prev == ASState::DRIVING && !in.mission_needs_pipeline &&
+                    !in.res_estop && !in.steer_emergency && in.ts_on &&
+                    !in.mission_complete) {
+                    CHECK_TRUE(out == ASState::DRIVING);
+                }
+
                 // INV7 DRIVING persistence: while Driving with a healthy world
-                // (no e-stop, no steering fault, TS on, DV fresh and not
-                // finished/emergency), the run continues REGARDLESS of the RES
-                // go level — a held or released GO never bounces the state.
+                // (no e-stop, no steering fault, TS on, not self-finished, and
+                // for a pipeline mission a fresh DV that is not finished/emerg),
+                // the run continues REGARDLESS of the RES go level.
                 if (prev == ASState::DRIVING && !in.res_estop && !in.steer_emergency &&
-                    in.ts_on && in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
+                    in.ts_on && !in.mission_complete &&
+                    (!in.mission_needs_pipeline ||
+                     (in.dv_fresh && !in.dv_finished && !in.dv_emergency))) {
                     CHECK_TRUE(out == ASState::DRIVING);
                 }
 
@@ -228,6 +287,17 @@ static void test_invariants(void)
                 if (prev != ASState::EMERGENCY && prev != ASState::FINISHED &&
                     in.steer_emergency) {
                     CHECK_TRUE(out == ASState::EMERGENCY);
+                }
+
+                // INV10 self-finish: from DRIVING, mission_complete ends the
+                // run in FINISHED unless a higher-priority safe-state exit
+                // (ASMS off / e-stop / steering fault / TS loss / pipeline
+                // emerg or lost) fires first.
+                if (prev == ASState::DRIVING && in.mission_complete &&
+                    !in.res_estop && !in.steer_emergency && in.ts_on &&
+                    !(in.mission_needs_pipeline &&
+                      (!in.dv_fresh || in.dv_emergency))) {
+                    CHECK_TRUE(out == ASState::FINISHED);
                 }
             }
 }

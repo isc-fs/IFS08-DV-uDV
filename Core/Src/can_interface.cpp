@@ -362,22 +362,32 @@ void sendNmtSetOperational()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, nmt);
 }
 
-void sendSteeringMotor(uint8_t start)
+/* 0x010 motor control, 4-byte payload: byte[0] is motor_start (rest 0).
+ * The steering controller reads only data[0] (len>=1) and runs the motor
+ * ONLY when data[0] == MOTOR_CMD_ON (1); any other value is a clean stop
+ * (re-homes on the next 0x10=1). See IFS08-DV-STEERING@fix/2-can-timing-ram-
+ * safety: comunicacion_direccion.c `motor_start = data[0]` + main.c
+ * `if(motor_start != MOTOR_CMD_ON)`. So start=1, stop=0 (0 = the natural off,
+ * matching DIR_INACTIVO). */
+static void sendSteeringMotorCmd(uint8_t motor_start)
 {
+    uint8_t data[4] = { motor_start, 0u, 0u, 0u };
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_STEER_MOTOR,
         .IdType              = FDCAN_STANDARD_ID,
         .TxFrameType         = FDCAN_DATA_FRAME,
-        .DataLength          = FDCAN_DLC_BYTES_1,
+        .DataLength          = FDCAN_DLC_BYTES_4,
         .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
         .BitRateSwitch       = FDCAN_BRS_OFF,
         .FDFormat            = FDCAN_CLASSIC_CAN,
         .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
         .MessageMarker       = 0,
     };
-    uint8_t payload = start;
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, data);
 }
+
+void sendSteeringStart() { sendSteeringMotorCmd(1u); }
+void sendSteeringStop()  { sendSteeringMotorCmd(0u); }
 
 void sendSteeringAngle(float angle_deg)
 {
