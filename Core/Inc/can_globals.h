@@ -58,14 +58,28 @@ extern std::atomic<int8_t>   g_steering_speed_raw;
 extern std::atomic<uint8_t>  g_steering_status;
 extern std::atomic<uint32_t> g_steering_last_rx_tick;
 
-/* Steering controller feedback (FDCAN3 ID 0x500, 20 Hz).
- *   angle_actual : int8 × 0.5 °/bit → actual LWS angle in degrees
- *   angle_target : int8 × 0.5 °/bit → last angle commanded by uDV
- *   angle_motor  : int8 × 0.5 °/bit → stepper position calculated by steps
+/* Steering controller feedback (FDCAN3 ID 0x500 DV_DRIVING_DYNAMICS_1, 20 Hz;
+ * this is steering's "FDCAN1" — the same physical AMI+steering bus). Byte
+ * layout mirrors IFS08-DV-STEERING comunicacion_direccion.c:
+ *   [0..1] reserved (0)
+ *   [2] angle_actual : int8 × 0.5 °/bit → actual LWS angle in degrees
+ *   [3] angle_target : int8 × 0.5 °/bit → last angle commanded by uDV
+ *   [4] angle_motor  : int8 × 0.5 °/bit → stepper position calculated by steps
+ *   [5] motor_state  : int8 (ESTADO_MOTOR_*)  — OFF/ON/EMERGENCIA
+ *   [6..7] unused
  */
 extern std::atomic<float>    g_steer_angle_actual;
 extern std::atomic<float>    g_steer_angle_target;
 extern std::atomic<float>    g_steer_angle_motor;
+/* Steering stepper-driver state (byte 5 of 0x500). Mirrors the steering
+ * firmware's enum. EMERGENCIA is a grave fault ("corte absoluto, requiere
+ * reset físico") — the AS state machine treats it as an emergency trigger. */
+enum SteerMotorState : int8_t {
+    ESTADO_MOTOR_OFF        = 0,
+    ESTADO_MOTOR_ON         = 1,
+    ESTADO_MOTOR_EMERGENCIA = -1,
+};
+extern std::atomic<int8_t>   g_steer_motor_state;
 
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
@@ -90,6 +104,7 @@ uint8_t  can_c_get_go_signal(void);
 float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);
 float    can_c_get_steer_angle_motor(void);
+int8_t   can_c_get_steer_motor_state(void); /* ESTADO_MOTOR_* (byte 5 of 0x500) */
 uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
 
 #ifdef __cplusplus

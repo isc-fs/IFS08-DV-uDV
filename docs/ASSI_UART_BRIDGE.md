@@ -15,14 +15,19 @@ USART10 TX, **115200 8N1**, one ASCII command per state, newline-terminated:
 | `b\n`   | LEDs yellow |
 | `c\n`   | LEDs blue |
 
-Commands are re-sent every ASSI refresh (~2–5 Hz), so a dropped byte self-heals
-on the next refresh. Single-char keeps parsing trivial and is easy to eyeball in
-a serial monitor.
+(Bench-validated command set — this table matches `ws2812.c` and the Nano
+sketch actually deployed; keep all three in sync.)
+
+Commands are re-sent every ASSI task tick (150 ms), so a dropped byte
+self-heals on the next tick. Single-char keeps parsing trivial and is easy to
+eyeball in a serial monitor.
 
 ### Firmware API (`ws2812.h`)
 `leds_off()`, `leds_blue()`, `leds_yellow()` — called by `assi_task.c`, which
 maps the 5 ASSI modes onto them (OFF→off, READY→yellow, DRIVING→yellow flash,
-EMERGENCY→blue flash, FINISHED→blue).
+EMERGENCY→blue flash, FINISHED→blue). The STM32 owns the flash timing: the
+task toggles every 150 ms half-period → **3.3 Hz at exactly 50 % duty**
+(FS-Rules T14.9.1 requires 2–5 Hz, 50 %); the Nano only latches colours.
 
 ### Arduino Nano sketch (reference)
 ```cpp

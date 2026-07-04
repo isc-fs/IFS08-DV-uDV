@@ -23,7 +23,7 @@ Two tiers (`Core/Src/iwdg.c`, `Core/Src/safety_monitor.c`,
 - **`safetyTask` (software monitor)** — high priority, ~10 ms. Watches the
   heartbeats of `imuTask`, `canTask`, and `appTask` (the state machine).
   On a stall it latches the rules-defined **safe state**: fire EBS
-  (D1/D2 **HIGH**) + open the SDC (D4 **LOW**) + emit ASSI EMERGENCY, and
+  (D1/D2 **LOW**) + open the SDC (D4 **LOW**) + emit ASSI EMERGENCY, and
   keeps reporting. If the monitor itself can't run (total hang), the IWDG
   resets the MCU → EBS fires via the hardware fail-safe.
 - **Reboot reset-cause detection** (`main.c`) — if `RCC_FLAG_IWDG1RST` is
@@ -45,9 +45,12 @@ ported into `rx_dispatch`) and the ADC/GPIO hardware lines.
 
 **Reconciliations applied vs `fix/17`** (his branch was orphaned dead code
 that didn't build):
-- EBS **readback** polarity flipped to HIGH = active (`hardware_io.c`);
-  the write path was already HIGH = fire. Without this, EMERGENCY/FINISHED
-  were unreachable.
+- EBS polarity is **active-low, LOW = fire** throughout (owner-confirmed
+  against the car): `hardware_io.c` `is_ebs_active()` reads a channel as
+  active when it is LOW, and the write path (`ebs_manager`, `safety_monitor`,
+  `main`, `freertos`, `force_ebs`) fires by driving D1/D2 LOW. LOW is the
+  power-on/reset level, so the brake is fail-safe. (Supersedes the earlier
+  fix/15 HIGH=fire assumption.)
 - Watchdog unified onto the IWDG: `app_task` no longer drives the dead
   TIM3 timer (`htim3` was never configured); it beats `SAFETY_TASK_APP`.
 - R2D reconnected: the FSM reads `g_can_r2d` (Alberto read a non-existent
@@ -91,11 +94,13 @@ declarations in `freertos.c` into hard errors (the team's older toolchain
 treats them as warnings). **Build the full `.elf` with the team toolchain
 before flashing.**
 
-### O3 — EBS / SDC pin polarity needs EE sign-off 🟠 (safety)
-- EBS: D1/D2 **HIGH = fire** (fix/15 convention, used throughout). Confirmed
-  against the car earlier, but re-confirm on the bench.
+### O3 — SDC pin polarity needs EE sign-off 🟠 (safety)
+- EBS: D1/D2 **LOW = fire** / HIGH = release (owner-confirmed, active-low,
+  used throughout the code; LOW is the fail-safe power-on/reset level). This
+  is settled — do not re-hedge to HIGH=fire.
 - SDC: D4 **LOW = open** / HIGH = closed (matches dev's `hardware_io` and
-  the power-on reset level). **Confirm D4 is the SDC-close line.**
+  the power-on reset level). **Confirm D4 is the SDC-close line** — this is
+  the remaining EE bench item.
 
 ### O4 — Per-vehicle constants are placeholders 🟠
 - `g_brake_pressure_threshold` (`state_manager.cpp`, 1.0) — brakes-engaged

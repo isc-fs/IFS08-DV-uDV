@@ -204,10 +204,15 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
-    case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
+    case CAN_ID_DL_DYN1: /* 0x500 DV_DRIVING_DYNAMICS_1 — steering feedback,
+                          * 20 Hz on the AMI+steering bus (steering's FDCAN1). */
+        if (msg->dlc < 6U) break;   /* need bytes [2..5]; short frame = ignore */
         g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
         g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
         g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
+        /* Byte 5: stepper-driver state (ESTADO_MOTOR_*). EMERGENCIA (-1) is a
+         * grave fault — app_task folds it into the AS emergency trigger. */
+        g_steer_motor_state.store((int8_t)msg->data[5]);
         break;
 
     case CAN_ID_MISSION_SELECT: {
@@ -522,6 +527,11 @@ extern "C" float can_c_get_steer_angle_target(void)
 extern "C" float can_c_get_steer_angle_motor(void)
 {
     return g_steer_angle_motor.load();
+}
+
+extern "C" int8_t can_c_get_steer_motor_state(void)
+{
+    return g_steer_motor_state.load();
 }
 
 extern "C" float can_c_get_steering_angle_deg(void)

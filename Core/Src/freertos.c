@@ -35,9 +35,6 @@
 #include "safety_monitor.h"
 #include "dwt_time.h"
 #include "imu_task.h"
-#include "usart.h"
-#include "assi_task.h"
-#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,6 +88,9 @@ const osThreadAttr_t appTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+/* ASSI status-LED renderer (assi_task.c): maps the AS mode set by app_task
+ * onto UART commands to the Arduino LED bridge (see docs/ASSI_UART_BRIDGE.md).
+ * Pure indication, no control role — lowest app priority. */
 osThreadId_t assiTaskHandle;
 const osThreadAttr_t assiTask_attributes = {
   .name = "assiTask",
@@ -108,7 +108,7 @@ osSemaphoreId_t imuSemHandle;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 3000 * 4,
+  .stack_size = 4096 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -117,7 +117,7 @@ const osThreadAttr_t defaultTask_attributes = {
 void StartImuTask(void *argument);
 void StartCanTask(void *argument);
 void StartAppTask(void *argument);   /* state machine, in app_task.cpp */
-void StartAssiTask(void *argument);
+void StartAssiTask(void *argument);  /* ASSI LED renderer, in assi_task.c */
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -179,14 +179,14 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
+
+/* ROS service/subscription callbacks moved to ros_task.c */
+
 void StartDefaultTask(void *argument)
 {
   /* init code for USB_DEVICE */
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN StartDefaultTask */
-  /* USART10 (ASSI LED bridge to the Arduino) is initialized in main(). */
-  //assi_set_mode(AS_MODE_DRIVING);
-
   ros_task_run();   /* micro-ROS node; defined in ros_task.c; never returns */
   /* USER CODE END StartDefaultTask */
 }
@@ -209,4 +209,3 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 /* StartCanTask is defined in can_task.cpp (extern "C") */
 
 /* USER CODE END Application */
-

@@ -33,6 +33,7 @@
 #include <std_msgs/msg/float32.h>
 #include <std_msgs/msg/float32_multi_array.h>
 #include <std_msgs/msg/string.h>
+#include <geometry_msgs/msg/twist.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -43,6 +44,7 @@
 #include "as_state.h"         /* ros_get_as_state (raw ASState) */
 #include "dwt_time.h"         /* dwt_micros */
 #include "imu_task.h"         /* imu_debug_status */
+#include "dv_interface.h"     /* stock-typed pipeline interface: dv/status + ctrl/cmd */
 
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
@@ -52,6 +54,13 @@
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
 #define STATE_DUMP_INTERVAL   200   // /debug state heartbeat: every 200 IMU samples (~2 Hz at 400 Hz)
+// /assi/state liveness heartbeat: published on a fixed wall-clock cadence,
+// DECOUPLED from the IMU sample rate (finding #3), so a stalled/slow IMU
+// can't stall the signal the DV pipeline watches. The main loop waits on the
+// IMU queue for at most IMU_QUEUE_WAIT_MS, so it still wakes to publish the
+// heartbeat even with no IMU samples arriving.
+#define ASSI_PUB_INTERVAL_MS  100u  // /assi/state heartbeat period (~10 Hz)
+#define IMU_QUEUE_WAIT_MS     50u   // max block on the IMU queue per loop
 
 /* RTOS queues created in freertos.c (MX_FREERTOS_Init). */
 extern osMessageQueueId_t imuQueueHandle;
@@ -135,6 +144,31 @@ void force_ebs_callback(const void * req, void * res)
 
   // Respondemos al cliente de ROS 2 que todo ha salido bien
   response->success = true;
+}
+
+/* --------------------------------------------------------------------------
+ * Stock-typed pipeline interface subscribers (see dv_interface.h).
+ * -------------------------------------------------------------------------- */
+
+/* /ctrl/cmd (geometry_msgs/Twist): the DVPC's normalised drive command.
+ * linear.x = throttle [-1,1], angular.z = steering [-1,1]. Stored (clamped)
+ * for AppTask, which actuates it only while AS Driving. The publisher is
+ * BEST_EFFORT, so this subscription MUST be best-effort too or DDS
+ * request-vs-offered matching silently drops every command. */
+static void ctrl_cmd_callback(const void *msgin)
+{
+  const geometry_msgs__msg__Twist *m = (const geometry_msgs__msg__Twist *)msgin;
+  ros_set_ctrl_cmd_norm((float)m->linear.x, (float)m->angular.z,
+                        osKernelGetTickCount());
+}
+
+/* /dv/status (std_msgs/UInt8): the DVPC lifecycle byte — the prepare/run
+ * handshake + the DVPC liveness heartbeat. AppTask gates AS Ready->Driving
+ * on DV_STATUS_READY and reacts to FINISHED / EMERGENCY / FAILED / staleness. */
+static void dv_status_callback(const void *msgin)
+{
+  const std_msgs__msg__UInt8 *m = (const std_msgs__msg__UInt8 *)msgin;
+  ros_set_dv_status(m->data, osKernelGetTickCount());
 }
 
 /* Map raw ASState (see as_state.h: OFF=0 READY=1 DRIVING=2 EMERGENCY=3
@@ -269,6 +303,12 @@ void ros_task_run(void)
   // --- Publishers ---
 
   // IMU publisher (best-effort QoS for maximum throughput)
+  // ⚠️ TODO(topic-name): this publishes on /imu, but the DV pipeline's CAR
+  // profile remaps odometry's subscription to /imu/data_raw
+  // (REMAP_IMU_CAR in bringup/topic_contract.py) — so on-car the EKF gets
+  // NO IMU until ONE side is fixed (rename here OR drop the pipeline
+  // remap). See docs/PIPELINE_INTERFACE.md "Open items". Deliberately not
+  // changed during the dev↔feat/16 merge (2026-07-03).
   rcl_publisher_t imu_pub;
   rclc_publisher_init_best_effort(
     &imu_pub, &node,
@@ -368,6 +408,19 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
     "assi/state");
 
+  // /assi/pub_gap_max_ms (Int32): running max gap (ms) between successive
+  // /assi/state publishes. Instrumentation for finding #4 — lets the DV
+  // pipeline's staleness window (DV_STATUS_STALE_MS / _ASSI_STALE_S) be
+  // validated on-target under load: watch this climb and confirm it stays
+  // well under the 400 ms window. Best-effort like the other telemetry.
+  rcl_publisher_t assi_gap_pub;
+  std_msgs__msg__Int32 assi_gap_msg;
+  assi_gap_msg.data = 0;
+  rclc_publisher_init_best_effort(
+    &assi_gap_pub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
+    "assi/pub_gap_max_ms");
+
   // Raw AS-state publisher (~10 Hz) — the AS state machine state itself
   // (ASState: OFF=0 READY=1 DRIVING=2 EMERGENCY=3 FINISHED=4), distinct
   // from the ASSI-indicator code on /assi/state. General-purpose AS-state
@@ -389,6 +442,26 @@ void ros_task_run(void)
     &cmd_test_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cmd_test");
+
+  // /dv/status subscriber — pipeline lifecycle byte. RELIABLE (default)
+  // matches the pipeline's latched RELIABLE+TRANSIENT_LOCAL publisher and
+  // guarantees we never miss a status transition.
+  rcl_subscription_t dv_status_sub;
+  std_msgs__msg__UInt8 dv_status_msg;
+  rclc_subscription_init_default(
+    &dv_status_sub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
+    DV_TOPIC_DV_STATUS);
+
+  // /ctrl/cmd subscriber — normalised drive command. MUST be BEST_EFFORT:
+  // the pipeline publishes it best-effort, and a reliable reader would fail
+  // DDS QoS matching and receive nothing (car sits still, no error).
+  rcl_subscription_t ctrl_cmd_sub;
+  geometry_msgs__msg__Twist ctrl_cmd_msg;
+  rclc_subscription_init_best_effort(
+    &ctrl_cmd_sub, &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
+    DV_TOPIC_CTRL_CMD);
 
   // --- SERVICIOS ---
   rcl_service_t Activate_stearing;
@@ -412,13 +485,22 @@ void ros_task_run(void)
   );
 
   // --- Executor ---
-  // Executor for subscriber callbacks
+  // One handle per subscription + service: cmd_test, dv/status, ctrl/cmd,
+  // activate_steering, force_ebs = 5.
   rclc_executor_t executor;
-  rclc_executor_init(&executor, &support.context, 3, &allocator);
+  rclc_executor_init(&executor, &support.context, 5, &allocator);
 
   rclc_executor_add_subscription(
     &executor, &cmd_test_sub, &cmd_test_msg,
     &cmd_test_callback, ON_NEW_DATA);
+
+  rclc_executor_add_subscription(
+    &executor, &dv_status_sub, &dv_status_msg,
+    &dv_status_callback, ON_NEW_DATA);
+
+  rclc_executor_add_subscription(
+    &executor, &ctrl_cmd_sub, &ctrl_cmd_msg,
+    &ctrl_cmd_callback, ON_NEW_DATA);
 
   rclc_executor_add_service(
     &executor, &Activate_stearing, &act_steer_srv_req, &act_steer_srv_res,
@@ -447,6 +529,13 @@ void ros_task_run(void)
   uint16_t slow_pub_counter    = 0;
   uint16_t steering_fb_counter = 0;
 
+  /* /assi/state heartbeat pacing + inter-publish gap instrumentation.
+     last_assi_pub_ms == 0 also serves as the "no publish yet" sentinel so the
+     first interval (tick count since boot) is not recorded as a gap. */
+  uint32_t last_assi_pub_ms = 0;
+  uint32_t assi_gap_max_ms  = 0;
+  bool     have_last_assi   = false;
+
   /* State-machine snapshot tracking for the /debug dump. Seed with the current
      values so we don't emit a spurious "change" on the first sample; the first
      heartbeat publishes the initial snapshot. */
@@ -459,7 +548,40 @@ void ros_task_run(void)
   for (;;)
   {
     imu_sample_t sample;
-    if (osMessageQueueGet(imuQueueHandle, &sample, NULL, osWaitForever) == osOK)
+    osStatus_t imu_status =
+        osMessageQueueGet(imuQueueHandle, &sample, NULL, IMU_QUEUE_WAIT_MS);
+
+    // --- /assi/state liveness heartbeat (decoupled from IMU cadence) ---
+    // Paced on a fixed wall clock and evaluated every loop iteration, whether
+    // or not an IMU sample arrived, so a stalled or slow IMU can no longer
+    // stall the heartbeat the DV pipeline watches for liveness (finding #3).
+    uint32_t assi_now_ms = osKernelGetTickCount();
+    if ((uint32_t)(assi_now_ms - last_assi_pub_ms) >= ASSI_PUB_INTERVAL_MS)
+    {
+      if (have_last_assi)
+      {
+        uint32_t gap = assi_now_ms - last_assi_pub_ms;   // inter-publish gap (ms)
+        if (gap > assi_gap_max_ms) assi_gap_max_ms = gap;
+      }
+      have_last_assi   = true;
+      last_assi_pub_ms = assi_now_ms;
+
+      // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
+      assi_msg.data = can_c_get_assi_status_code();
+      (void)rcl_publish(&assi_pub, &assi_msg, NULL);
+
+      // #4 instrumentation: running max gap between /assi/state publishes, so
+      // the pipeline's staleness window can be validated on-target under load.
+      assi_gap_msg.data = (int32_t)assi_gap_max_ms;
+      (void)rcl_publish(&assi_gap_pub, &assi_gap_msg, NULL);
+
+      // Keep servicing inbound DDS (dv/status, ctrl/cmd, force_ebs) even when
+      // the IMU has stalled, so the whole interface stays live — not just the
+      // outbound heartbeat.
+      rclc_executor_spin_some(&executor, 0);
+    }
+
+    if (imu_status == osOK)
     {
       // Timestamp
       int64_t stamp_ns = epoch_offset_ns + (int64_t)sample.timestamp_us * 1000LL;
@@ -543,9 +665,9 @@ void ros_task_run(void)
         go_msg.data = (int32_t)can_c_get_go_signal();
         (void)rcl_publish(&go_pub, &go_msg, NULL);
 
-        // AS state (FS-Rules T14.9 byte) — mirrors the CAN 0x100 ASSI frame
-        assi_msg.data = can_c_get_assi_status_code();
-        (void)rcl_publish(&assi_pub, &assi_msg, NULL);
+        // NOTE: /assi/state (the pipeline liveness heartbeat) is published
+        // above on its own wall-clock cadence, decoupled from this IMU-paced
+        // block — see the heartbeat section at the top of the loop.
 
         // Raw AS state-machine state (ASState enum, not the ASSI code)
         as_state_msg.data = ros_get_as_state();

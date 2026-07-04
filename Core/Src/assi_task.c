@@ -33,6 +33,13 @@ assi_mode_t assi_get_mode(void)
     return m;
 }
 
+/* Flash timing (FS-Rules T14.9.1: 2-5 Hz at 50 % duty). One loop pass per
+ * half-period: 150 ms on + 150 ms off => 3.3 Hz, mid-band for jitter margin.
+ * The SAME constant is used for both phases (and for the steady states'
+ * refresh), so the duty cycle is 50 % by construction — if you change the
+ * rate, change only this constant, never one phase's delay alone. */
+#define ASSI_HALF_PERIOD_MS  150u
+
 void StartAssiTask(void *argument)
 {
     (void)argument;
@@ -47,41 +54,40 @@ void StartAssiTask(void *argument)
         {
             case AS_MODE_OFF:
                 leds_off();
-                osDelay(250);
                 break;
 
             case AS_MODE_READY:
                 /* Yellow continuous */
                 leds_yellow();
-                osDelay(250);
                 break;
 
             case AS_MODE_DRIVING:
-                /* Yellow flashing */
+                /* Yellow flashing, 3.3 Hz / 50 % duty */
                 flash_state = !flash_state;
                 if (flash_state) leds_yellow();
                 else             leds_off();
-                osDelay(250);
                 break;
 
             case AS_MODE_EMERGENCY:
-                /* Blue flashing (faster) */
+                /* Blue flashing, 3.3 Hz / 50 % duty */
                 flash_state = !flash_state;
                 if (flash_state) leds_blue();
                 else             leds_off();
-                osDelay(250);
                 break;
 
             case AS_MODE_FINISHED:
                 /* Blue continuous */
                 leds_blue();
-                osDelay(250);
                 break;
 
             default:
                 leds_off();
-                osDelay(250);
                 break;
         }
+
+        /* Single delay shared by every state: steady modes just re-send
+         * their colour (a dropped UART byte self-heals), flashing modes
+         * advance one half-period. */
+        osDelay(ASSI_HALF_PERIOD_MS);
     }
 }

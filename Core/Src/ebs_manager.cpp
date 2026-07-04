@@ -129,16 +129,18 @@ bool EbsManager::SafeManual()
            (a2_p < EMPTY_ACTUATOR_STORAGE_THRESHOLD);
 }
 
+// EBS polarity (confirmed): LOW = fire the brake, HIGH = release. LOW is
+// the power-on/reset level, so the brake is fail-safe on reset/power loss.
 void EbsManager::activateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(false);
-    hardware_io_enable_ebs_actuator_2(false);
+    hardware_io_enable_ebs_actuator_1(false);   // fire (LOW)
+    hardware_io_enable_ebs_actuator_2(false);   // fire (LOW)
 }
 
 void EbsManager::deactivateEBS()
 {
-    hardware_io_enable_ebs_actuator_1(true);
-    hardware_io_enable_ebs_actuator_2(true);
+    hardware_io_enable_ebs_actuator_1(true);    // release (HIGH)
+    hardware_io_enable_ebs_actuator_2(true);    // release (HIGH)
 }
 
 void EbsManager::reset()

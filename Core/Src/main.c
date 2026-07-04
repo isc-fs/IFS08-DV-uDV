@@ -23,8 +23,8 @@
 #include "cordic.h"
 #include "fdcan.h"
 #include "i2c.h"
-#include "tim.h"
 #include "usart.h"
+#include "tim.h"
 #include "usb_device.h"
 #include "gpio.h"
 

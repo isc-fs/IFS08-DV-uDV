@@ -1,5 +1,6 @@
 #include "ros_globals.h"
 #include "as_state.h"
+#include "dv_interface.h"
 
 // Definitions of atomic feedback from PC, owned by RosTask
 std::atomic<float> g_accel_cmd{0.0f};
@@ -9,6 +10,11 @@ std::atomic<bool>  g_emergency_cmd{false};
 std::atomic<bool>  g_mission_going_cmd{false};
 std::atomic<bool>  g_set_mission_in_progress{false};
 std::atomic<bool>  g_set_mission_ready{false};
+
+// Stock-typed pipeline interface state (see dv_interface.h).
+std::atomic<uint8_t>  g_dv_status{DV_STATUS_IDLE};
+std::atomic<uint32_t> g_dv_status_stamp_ms{0};
+std::atomic<uint32_t> g_ctrl_cmd_stamp_ms{0};
 
 // State telemetry snapshot, owned by AppTask and published by RosTask
 std::atomic<uint8_t> g_telemetry_as_state{0};
@@ -61,4 +67,33 @@ extern "C" uint16_t ros_get_state_signals(void)
 extern "C" uint8_t ros_get_ebs_init_state(void)
 {
     return g_telemetry_ebs_init_state.load();
+}
+
+// --- Stock-typed pipeline interface bridge (see dv_interface.h) ---
+// C-callable so the C micro-ROS callbacks in ros_task.c can drive the
+// C++ command atomics without ever seeing std::atomic<>.
+
+extern "C" void ros_set_ctrl_cmd_norm(float throttle_norm, float steering_norm,
+                                      uint32_t now_ms)
+{
+    // Never trust the wire: clamp to the normalised [-1, 1] contract range.
+    if (throttle_norm >  1.0f) throttle_norm =  1.0f;
+    else if (throttle_norm < -1.0f) throttle_norm = -1.0f;
+    if (steering_norm >  1.0f) steering_norm =  1.0f;
+    else if (steering_norm < -1.0f) steering_norm = -1.0f;
+
+    g_accel_cmd.store(throttle_norm);
+    g_steer_cmd.store(steering_norm);
+    g_ctrl_cmd_stamp_ms.store(now_ms);
+}
+
+extern "C" void ros_set_dv_status(uint8_t status, uint32_t now_ms)
+{
+    g_dv_status.store(status);
+    g_dv_status_stamp_ms.store(now_ms);
+}
+
+extern "C" uint8_t ros_get_dv_status(void)
+{
+    return g_dv_status.load();
 }

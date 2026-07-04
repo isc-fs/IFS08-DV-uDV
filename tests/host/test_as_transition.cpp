@@ -1,19 +1,27 @@
 /**
  * @file test_as_transition.cpp
  * @brief Host unit tests for the pure AS transition decision
- *        (Core/Inc/as_transition.hpp) on the fix/19-uart-assi branch.
+ *        (Core/Inc/as_transition.hpp) added for the stock-typed DV-pipeline
+ *        interface.
  *
- * Guards the safety-relevant AS-state logic extracted from app_task's loop:
- * the ASMS-off / Emergency precedence, the RES e-stop and TS-loss emergency
- * triggers, the EBS-init gate on arming (no READY until the init sequence
- * reports Done), and — the bug this suite was written for — DRIVING being
- * STICKY so a momentary RES "go" can't oscillate READY<->DRIVING or tear a
- * run down when released. (This branch has no /dv/status handshake; that
- * variant is tested on the pipeline-interface branch.)
+ * This is the safety-relevant logic that changed when the uDV moved to the
+ * topic-based pipeline contract: the /dv/status handshake gate on
+ * Ready->Driving, the FINISHED / EMERGENCY reactions, the "pipeline
+ * heartbeat lost while driving" watchdog, and the EBS-init gate on arming
+ * (dev 9395936: no READY until the init sequence reports Done). The IWDG
+ * task-stall watchdog is unchanged and covered by test_safety_eval; this
+ * suite guards the AS-state logic that feeds it.
+ *
+ * Two layers:
+ *   1. Named cases — readable truth-table spot checks.
+ *   2. An exhaustive sweep over the *realizable* input space asserting the
+ *      fail-safe invariants (ASMS-off wins, Driving only via the full gate,
+ *      Emergency/Finished latch, e-stop and lost-heartbeat force Emergency).
  *
  * Build + run:  make test_as_transition
  */
 #include <cstdio>
+#include <initializer_list>
 
 #include "as_transition.hpp"   // AsInputs, as_next_state, ASState
 
@@ -53,131 +61,186 @@ static const char *name(ASState s)
         }                                                                     \
     } while (0)
 
-// RES is a single status: exactly one of estop/go/ok (or none received).
+// ---- input builders (only realizable combinations) ------------------
+// RES is a single status: exactly one of estop/go/ok (or none of them).
 enum ResKind { RES_NONE, RES_OK, RES_GO, RES_ESTOP };
+// /dv/status folded to what the AS logic consumes.
+enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_FRESH_EMERG };
 
-// Mirror the producer in app_task.cpp: res_ok is true for a received "ok"
-// AND for "go" (go implies a healthy link), false for e-stop / none.
 // ebs_done defaults to true so the pre-gate cases read unchanged; the
-// EBS-init gate cases pass false explicitly.
-static AsInputs make(bool asms, bool ts, ResKind res, bool ebs_done = true)
+// EBS-init gate cases (dev 9395936) pass false explicitly. steer_emerg
+// defaults to false (no steering fault) so the pre-existing cases read
+// unchanged; the steering-fault cases pass true explicitly.
+static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
+                     bool ebs_done = true, bool steer_emerg = false)
 {
     AsInputs in{};
-    in.asms_on       = asms;
-    in.ts_on         = ts;
-    in.res_estop     = (res == RES_ESTOP);
-    in.res_go        = (res == RES_GO);
-    in.res_ok        = (res == RES_OK) || (res == RES_GO);
-    in.ebs_init_done = ebs_done;
+    in.asms_on         = asms;
+    in.ts_on           = ts;
+    in.res_estop       = (res == RES_ESTOP);
+    in.res_go          = (res == RES_GO);
+    /* Mirrors the producer in app_task.cpp: "go" also means the RES link is
+     * healthy (res_ok true for status 0 AND status 2 — the fix/19 port). */
+    in.res_ok          = (res == RES_OK) || (res == RES_GO);
+    in.steer_emergency = steer_emerg;
+    in.ebs_init_done   = ebs_done;
+    in.dv_fresh        = (dv != DV_STALE);
+    in.dv_ready        = (dv == DV_FRESH_READY);
+    in.dv_finished     = (dv == DV_FRESH_FINISHED);
+    in.dv_emergency    = (dv == DV_FRESH_EMERG);
     return in;
 }
 
-static void named_cases()
+// ---- 1. named truth-table cases -------------------------------------
+static void test_named_cases(void)
 {
-    // ASMS off always wins, from any state.
-    CHECK_EQ(ASState::OFF,       make(false, true,  RES_OK),  ASState::OFF);
-    CHECK_EQ(ASState::DRIVING,   make(false, true,  RES_GO),  ASState::OFF);
-    CHECK_EQ(ASState::EMERGENCY, make(false, true,  RES_OK),  ASState::OFF);
+    // ASMS off always -> OFF, from every prev.
+    for (ASState p : {ASState::OFF, ASState::READY, ASState::DRIVING,
+                      ASState::EMERGENCY, ASState::FINISHED})
+        CHECK_EQ(p, make(false, true, RES_OK, DV_FRESH_READY), ASState::OFF);
 
-    // Arming: ASMS + TS + RES ok (EBS init done) -> READY.
-    CHECK_EQ(ASState::OFF,   make(true, true,  RES_OK), ASState::READY);
-    // No TS yet -> stay OFF (can't arm).
-    CHECK_EQ(ASState::OFF,   make(true, false, RES_OK), ASState::OFF);
+    // Normal arm: ASMS + TS + RES ok (EBS init done), from OFF -> READY.
+    CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_STALE), ASState::READY);
 
-    // --- EBS-init gate: no READY until the init sequence reports Done ---
+    // --- EBS-init gate (dev 9395936): no READY until init reports Done ---
     // (app_task only steps the EBS init FSM while OFF; arming early would
     // strand it and ASBChecksOK could never pass. Failed init = stay OFF.)
-    CHECK_EQ(ASState::OFF,   make(true, true, RES_OK, false), ASState::OFF);
-    CHECK_EQ(ASState::OFF,   make(true, true, RES_GO, false), ASState::OFF);
+    CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_STALE, false), ASState::OFF);
+    CHECK_EQ(ASState::OFF, make(true, true, RES_GO, DV_FRESH_READY, false), ASState::OFF);
     // E-stop precedence is NOT weakened by the gate.
-    CHECK_EQ(ASState::OFF,   make(true, true, RES_ESTOP, false), ASState::EMERGENCY);
+    CHECK_EQ(ASState::OFF, make(true, true, RES_ESTOP, DV_STALE, false), ASState::EMERGENCY);
 
-    // READY + RES go -> DRIVING.
-    CHECK_EQ(ASState::READY, make(true, true,  RES_GO), ASState::DRIVING);
+    // Ready but pipeline NOT ready yet: go is IGNORED (the core new gate).
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_OTHER), ASState::READY);
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_STALE),       ASState::READY);
+    // Ready + go + pipeline READY -> DRIVING.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY), ASState::DRIVING);
 
-    // --- the oscillation bug this suite exists for ---
-    // DRIVING + go still held -> stay DRIVING (no READY<->DRIVING bounce).
-    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO), ASState::DRIVING);
-    // DRIVING + go RELEASED (RES back to plain ok) -> stay DRIVING. go is a
-    // momentary trigger, not a level; releasing it must not end the run.
-    CHECK_EQ(ASState::DRIVING, make(true, true, RES_OK), ASState::DRIVING);
+    // Driving, pipeline still Running (fresh, not ready/finished/emerg),
+    // RES still go -> stay DRIVING (no READY<->DRIVING oscillation with a
+    // held GO, even though go now implies res_ok).
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_OTHER), ASState::DRIVING);
+    // Driving, GO RELEASED (RES back to plain ok) -> STAY DRIVING. GO is a
+    // trigger, not a level: releasing it must not tear the mission down.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_OK, DV_FRESH_OTHER), ASState::DRIVING);
+    // GO held while still OFF (pressed before arming): with go implying
+    // res_ok (fix/19 port), the car can still reach READY...
+    CHECK_EQ(ASState::OFF, make(true, true, RES_GO, DV_STALE), ASState::READY);
+    // ...and the very next tick READY+go+DV_READY takes it to DRIVING.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY), ASState::DRIVING);
+    // Driving, pipeline reports FINISHED -> FINISHED.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_FINISHED), ASState::FINISHED);
+    // Driving, pipeline reports EMERGENCY -> EMERGENCY.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_FRESH_EMERG), ASState::EMERGENCY);
+    // Driving, pipeline heartbeat LOST (stale) -> EMERGENCY (the watchdog).
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_STALE), ASState::EMERGENCY);
 
-    // GO held BEFORE arming (pressed early): go implies res_ok, so the car
-    // can still reach READY, then DRIVING on the next tick.
-    CHECK_EQ(ASState::OFF,   make(true, true, RES_GO), ASState::READY);
-    CHECK_EQ(ASState::READY, make(true, true, RES_GO), ASState::DRIVING);
+    // RES e-stop -> EMERGENCY (even from OFF/READY).
+    CHECK_EQ(ASState::OFF,   make(true, true, RES_ESTOP, DV_FRESH_READY), ASState::EMERGENCY);
+    CHECK_EQ(ASState::READY, make(true, true, RES_ESTOP, DV_FRESH_READY), ASState::EMERGENCY);
 
-    // Emergency triggers.
-    CHECK_EQ(ASState::READY,   make(true, true,  RES_ESTOP), ASState::EMERGENCY);
-    CHECK_EQ(ASState::DRIVING, make(true, true,  RES_ESTOP), ASState::EMERGENCY);
-    CHECK_EQ(ASState::DRIVING, make(true, false, RES_OK),    ASState::EMERGENCY); // TS lost
-    CHECK_EQ(ASState::READY,   make(true, false, RES_OK),    ASState::EMERGENCY); // TS lost
+    // Steering grave-fault (ESTADO_MOTOR_EMERGENCIA) -> EMERGENCY, unconditional
+    // like an RES e-stop (a dead steering motor means the car can't steer).
+    // steer_emerg is the 6th make() arg (after ebs_done).
+    CHECK_EQ(ASState::OFF,     make(true, true,  RES_OK, DV_STALE,       true, true), ASState::EMERGENCY);
+    CHECK_EQ(ASState::READY,   make(true, true,  RES_OK, DV_FRESH_READY, true, true), ASState::EMERGENCY);
+    CHECK_EQ(ASState::DRIVING, make(true, true,  RES_GO, DV_FRESH_OTHER, true, true), ASState::EMERGENCY);
+    // ...but ASMS-off still wins over a steering fault (fail-safe order).
+    CHECK_EQ(ASState::READY,   make(false, true, RES_OK, DV_STALE,       true, true), ASState::OFF);
 
-    // Emergency latches until ASMS off (its only exit).
-    CHECK_EQ(ASState::EMERGENCY, make(true, true,  RES_OK),  ASState::EMERGENCY);
-    CHECK_EQ(ASState::EMERGENCY, make(true, true,  RES_GO),  ASState::EMERGENCY);
-    CHECK_EQ(ASState::EMERGENCY, make(false, true, RES_OK),  ASState::OFF);
+    // TS lost while armed -> EMERGENCY; TS lost while OFF is not (yet) emergency.
+    CHECK_EQ(ASState::READY,   make(true, false, RES_OK, DV_FRESH_READY), ASState::EMERGENCY);
+    CHECK_EQ(ASState::DRIVING, make(true, false, RES_GO, DV_FRESH_OTHER), ASState::EMERGENCY);
+    CHECK_EQ(ASState::OFF,     make(true, false, RES_OK, DV_STALE),       ASState::OFF);
+
+    // Emergency + Finished latch until ASMS off.
+    CHECK_EQ(ASState::EMERGENCY, make(true, true, RES_OK, DV_FRESH_READY), ASState::EMERGENCY);
+    CHECK_EQ(ASState::FINISHED,  make(true, true, RES_OK, DV_FRESH_READY), ASState::FINISHED);
+
+    // Pipeline-only emergency while merely OFF (not armed) must NOT fabricate
+    // an emergency out of nowhere — it only bites while READY/DRIVING.
+    CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_FRESH_EMERG), ASState::READY);
 }
 
-static void exhaustive_invariants()
+// ---- 2. exhaustive invariant sweep ----------------------------------
+static void test_invariants(void)
 {
-    const ASState prevs[] = { ASState::OFF, ASState::READY,
-                              ASState::DRIVING, ASState::EMERGENCY };
-    const ResKind ress[]  = { RES_NONE, RES_OK, RES_GO, RES_ESTOP };
+    const ASState prevs[] = {ASState::OFF, ASState::READY, ASState::DRIVING,
+                             ASState::EMERGENCY, ASState::FINISHED};
+    const ResKind ress[]  = {RES_NONE, RES_OK, RES_GO, RES_ESTOP};
+    const DvKind  dvs[]   = {DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY,
+                             DV_FRESH_FINISHED, DV_FRESH_EMERG};
 
     for (ASState prev : prevs)
       for (int asms = 0; asms < 2; ++asms)
         for (int ts = 0; ts < 2; ++ts)
           for (int ebs = 0; ebs < 2; ++ebs)
+           for (int se = 0; se < 2; ++se)
             for (ResKind res : ress)
-            {
-              AsInputs in = make(asms, ts, res, ebs);
-              ASState out = as_next_state(prev, in);
+            for (DvKind dv : dvs) {
+                AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0);
+                ASState out = as_next_state(prev, in);
 
-              // INV1: ASMS off -> OFF, unconditionally.
-              if (!in.asms_on) { CHECK_TRUE(out == ASState::OFF); continue; }
+                // INV1 fail-safe: ASMS off => OFF, no exceptions.
+                if (!in.asms_on) { CHECK_TRUE(out == ASState::OFF); continue; }
 
-              // INV2: Emergency latches while ASMS stays on.
-              if (prev == ASState::EMERGENCY) {
-                  CHECK_TRUE(out == ASState::EMERGENCY);
-                  continue;
-              }
+                // INV2 Driving gate: the ONLY way to *enter* Driving (from a
+                // non-Driving state) is prev==READY && RES go && a fresh DV
+                // READY. (Staying in Driving with no trigger is separate.)
+                if (out == ASState::DRIVING && prev != ASState::DRIVING) {
+                    CHECK_TRUE(prev == ASState::READY && in.res_go && in.dv_ready);
+                }
 
-              // INV3: RES e-stop (ASMS on, not already latched) -> Emergency.
-              if (in.res_estop) { CHECK_TRUE(out == ASState::EMERGENCY); continue; }
+                // INV3/INV4 latches: Emergency/Finished never spontaneously
+                // leave (while ASMS stays on).
+                if (prev == ASState::EMERGENCY) CHECK_TRUE(out == ASState::EMERGENCY);
+                if (prev == ASState::FINISHED)  CHECK_TRUE(out == ASState::FINISHED);
 
-              // INV4: TS lost while armed -> Emergency.
-              if (!in.ts_on &&
-                  (prev == ASState::DRIVING || prev == ASState::READY)) {
-                  CHECK_TRUE(out == ASState::EMERGENCY);
-                  continue;
-              }
+                // INV5 e-stop: an armed, non-latched e-stop forces Emergency.
+                if (prev != ASState::EMERGENCY && prev != ASState::FINISHED &&
+                    in.res_estop) {
+                    CHECK_TRUE(out == ASState::EMERGENCY);
+                }
 
-              // INV5: DRIVING is sticky — a healthy world keeps the run going
-              // regardless of the RES "go" level (no oscillation, no teardown).
-              if (prev == ASState::DRIVING && in.ts_on) {
-                  CHECK_TRUE(out == ASState::DRIVING);
-                  continue;
-              }
+                // INV6 lost-heartbeat watchdog: a stale /dv/status while
+                // Driving forces Emergency.
+                if (prev == ASState::DRIVING && !in.dv_fresh) {
+                    CHECK_TRUE(out == ASState::EMERGENCY);
+                }
 
-              // INV6: Driving is only ENTERED from READY with an asserted go.
-              if (out == ASState::DRIVING && prev != ASState::DRIVING) {
-                  CHECK_TRUE(prev == ASState::READY && in.res_go);
-              }
+                // INV7 DRIVING persistence: while Driving with a healthy world
+                // (no e-stop, no steering fault, TS on, DV fresh and not
+                // finished/emergency), the run continues REGARDLESS of the RES
+                // go level — a held or released GO never bounces the state.
+                if (prev == ASState::DRIVING && !in.res_estop && !in.steer_emergency &&
+                    in.ts_on && in.dv_fresh && !in.dv_finished && !in.dv_emergency) {
+                    CHECK_TRUE(out == ASState::DRIVING);
+                }
 
-              // INV7: READY is only ENTERED with the EBS init sequence Done.
-              if (out == ASState::READY && prev != ASState::READY) {
-                  CHECK_TRUE(in.ebs_init_done);
-              }
+                // INV8 EBS-init gate (dev 9395936): READY is only ENTERED
+                // with the EBS init sequence Done.
+                if (out == ASState::READY && prev != ASState::READY) {
+                    CHECK_TRUE(in.ebs_init_done);
+                }
+
+                // INV9 steering grave-fault: a non-latched steer_emergency
+                // forces Emergency, unconditional like an e-stop.
+                if (prev != ASState::EMERGENCY && prev != ASState::FINISHED &&
+                    in.steer_emergency) {
+                    CHECK_TRUE(out == ASState::EMERGENCY);
+                }
             }
 }
 
-int main()
+int main(void)
 {
-    named_cases();
-    exhaustive_invariants();
+    test_named_cases();
+    test_invariants();
 
-    std::printf("as_transition: %d checks, %d failures\n", g_checks, g_failures);
-    if (g_failures == 0) std::printf("All tests green.\n");
-    return g_failures == 0 ? 0 : 1;
+    std::printf("\nas_transition: %d checks, %d failures\n", g_checks, g_failures);
+    if (g_failures == 0) {
+        std::printf("All tests green.\n");
+        return 0;
+    }
+    return 1;
 }

@@ -8,6 +8,7 @@
  *     'a' + '\n'  ->  LEDs off
  *     'b' + '\n'  ->  LEDs yellow
  *     'c' + '\n'  ->  LEDs blue
+ *   (bench-validated command set — keep in sync with the Nano sketch)
  *
  * The Arduino reads a line and drives the physical WS2812 strip. Commands are
  * (re)sent every ASSI refresh (~2-5 Hz), so a dropped byte self-heals on the

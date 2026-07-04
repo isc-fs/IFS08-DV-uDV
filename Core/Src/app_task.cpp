@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <stdbool.h>
 
 extern "C" {
     #include "FreeRTOS.h"
@@ -16,18 +15,21 @@ extern "C" {
     #include "cmsis_os.h"
     #include "hardware_io.h"
     #include "safety_monitor.h"  /* IWDG safety supervisor: heartbeat/arm */
+    #include "assi_task.h"       /* ASSI mode API (UART/Arduino LED bridge) */
 }
 
 #include "state_manager.hpp"
-#include "as_transition.hpp"   /* pure as_next_state() — host-unit-tested */
+#include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
 #include "can_task.h"
 #include "ros_globals.h"
 #include "can_globals.h"
-#include "assi_task.h"
-#include "usart.h"
+
+extern "C" {
+    #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
+}
 
 /**
  * @brief Reset ROS globals to default state
@@ -41,6 +43,12 @@ static void reset_ros_globals(void)
     g_finished_cmd.store(false);
     g_set_mission_in_progress.store(false);
     g_set_mission_ready.store(false);
+
+    // Pipeline interface: forget the last dv/status + command so a reset
+    // can't leave a stale "READY"/throttle latched across runs.
+    g_dv_status.store(DV_STATUS_IDLE);
+    g_dv_status_stamp_ms.store(0);
+    g_ctrl_cmd_stamp_ms.store(0);
 }
 
 /**
@@ -52,6 +60,7 @@ static void reset_can_globals(void)
     g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid mission */
     g_can_r2d.store(false);  /* (g_can_go was redundant with this) */
     g_imu_vehicle_standstill.store(true);
+    g_steer_motor_state.store(ESTADO_MOTOR_OFF);  /* clear a stale steering fault */
 }
 
 static void reset_state_telemetry(void)
@@ -134,18 +143,19 @@ extern "C" void StartAppTask(void *argument)
     EbsManager& ebs = EbsManager::getInstance();
     StateManager& state_mgr = StateManager::getInstance();
 
+    EBSInitState ebs_state = EBSInitState::Start;
     ASState as_state = ASState::OFF;
-    ASState last_as_state = ASState::OFF;  // Track last state
+    ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
     uint32_t ready_start_time = 0;
     int last_mission_id = -1;
     bool set_mission_sent = false;
-    bool start_mission_sent = false;
+    bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
     /* Let StartCanTask bring up FDCAN3 before we emit frames in earnest
-     * (the initial status above is best-effort, dropped if CAN isn't up).
+     * (the initial ASSI above is best-effort, dropped if CAN isn't up).
      * There is no ROS command queue on this branch: the action/command
      * layer (ros_interface / dv_msgs) is intentionally NOT integrated
      * yet, so the mission senders are stubs (see ros_task_commands). */
@@ -155,6 +165,10 @@ extern "C" void StartAppTask(void *argument)
      * state-machine loop as a monitored liveness source so a stall here
      * trips the watchdog emergency — this replaces the old TIM3 timer. */
     safety_arm(SAFETY_TASK_APP);
+
+    /* ASSI LEDs are rendered by assi_task.c (UART -> Arduino bridge); this
+     * task only publishes the AS mode via assi_set_mode() below. The task
+     * boots in AS_MODE_OFF, the correct AS Off indication (T14.9.1). */
 
     // Main control loop
     while (1)
@@ -185,23 +199,51 @@ extern "C" void StartAppTask(void *argument)
         ASState previous_as_state = as_state;
         bool asms_on = hardware_io_read_asms_on();
         bool ts_on = state_mgr.getSignals().ts_active;
-        int32_t res_status = can_c_get_res_status(osKernelGetTickCount(), 150U);
+        uint32_t now_ms = osKernelGetTickCount();
+        int32_t res_status = can_c_get_res_status(now_ms, 150U);
         /* "go" also means the RES link is healthy (status 2 = received, go
-         * asserted, no e-stop), so a "go" held before arming still satisfies
-         * the READY condition instead of blocking it. */
+         * asserted, no e-stop) — otherwise a GO held before arming would
+         * block the READY condition forever (ported from fix/19). */
         bool res_ok = (res_status == 0) || (res_status == 2);
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
-        // Decide the next AS state (pure, host-unit-tested — as_transition.hpp).
-        // (Supersedes the bench force-true overrides that were commented out
-        // in parallel on 6e25098 — they are removed entirely here.)
-        /* Read the manager directly — a loop-local copy would go stale on
-         * reset_all() (EbsManager.reset() puts the manager back to Start). */
-        bool ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
-        as_state = as_next_state(previous_as_state,
-                                 AsInputs{asms_on, ts_on, res_estop, res_go, res_ok,
-                                          ebs_init_done});
+        /* Steering stepper-driver grave fault (byte 5 of 0x500). EMERGENCIA is
+         * an absolute cut-off requiring a physical reset — a dead steering
+         * motor means the car can't steer, so treat it like an RES e-stop. */
+        bool steer_emergency =
+            (g_steer_motor_state.load() == ESTADO_MOTOR_EMERGENCIA);
+
+        // --- Pipeline (DVPC) status, read level-triggered off /dv/status ---
+        // The uDV owns the AS state machine; mission_control only answers
+        // with this byte. It is also the DVPC liveness heartbeat: a stale
+        // /dv/status while driving means the pipeline died -> safe state.
+        uint8_t  dv_status     = g_dv_status.load();
+        bool     dv_seen       = (g_dv_status_stamp_ms.load() != 0u);
+        bool     dv_fresh      = dv_seen &&
+                                 ((now_ms - g_dv_status_stamp_ms.load()) < DV_STATUS_STALE_MS);
+
+        // Decide the next AS state via the pure, host-tested transition (see
+        // as_transition.hpp). dv_* fold in freshness: the "go" gate needs a
+        // fresh DV READY, and a stale /dv/status while driving trips Emergency.
+        // OFF->READY additionally requires the EBS init sequence Done (dev
+        // 9395936): the init FSM only advances while OFF, so arming earlier
+        // would strand it and ASBChecksOK could never pass.
+        AsInputs as_in;
+        as_in.asms_on       = asms_on;
+        as_in.ts_on         = ts_on;
+        as_in.res_estop     = res_estop;
+        as_in.res_go        = res_go;
+        as_in.res_ok        = res_ok;
+        as_in.steer_emergency = steer_emergency;
+        as_in.ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
+        as_in.dv_fresh      = dv_fresh;
+        as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);
+        as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
+        as_in.dv_emergency = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
+                                          dv_status == DV_STATUS_FAILED);
+
+        as_state = as_next_state(previous_as_state, as_in);
 
         sync_state_telemetry(state_mgr, ebs, as_state);
 
@@ -212,6 +254,24 @@ extern "C" void StartAppTask(void *argument)
             last_as_state = as_state;
         }
 
+        // Publish the AS state to the ASSI renderer task (assi_task.c), which
+        // owns colours + flash timing over the UART/Arduino bridge (FS-Rules
+        // T14.9.1). Unconditional — outside the asms_on gate — so the LEDs
+        // always track the real state (e.g. go dark when ASMS drops to OFF,
+        // blue steady in FINISHED).
+        {
+            assi_mode_t assi_mode = AS_MODE_OFF;
+            switch (as_state)
+            {
+                case ASState::OFF:       assi_mode = AS_MODE_OFF;       break;
+                case ASState::READY:     assi_mode = AS_MODE_READY;     break;
+                case ASState::DRIVING:   assi_mode = AS_MODE_DRIVING;   break;
+                case ASState::EMERGENCY: assi_mode = AS_MODE_EMERGENCY; break;
+                case ASState::FINISHED:  assi_mode = AS_MODE_FINISHED;  break;
+            }
+            assi_set_mode(assi_mode);
+        }
+
         /* Liveness beat to the safety supervisor (it owns the IWDG and
          * fires the emergency on a stall). Unconditional: the EBS-init
          * WaitLow step has its own 5 s timeout in EbsManager, so gating
@@ -219,7 +279,8 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
-        if (asms_on){
+        if (asms_on)
+        {
             // Autonomous mode enabled
 
             // Reset state tracking when transitioning out of READY/DRIVING
@@ -265,12 +326,10 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
-                    assi_set_mode(AS_MODE_OFF);
                     // Perform EBS initialization sequence steps
-                    if (ebs.getInitState() != EBSInitState::Done &&
-                        ebs.getInitState() != EBSInitState::Failed)
+                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
                     {
-                        ebs.initSequenceStep();
+                        ebs_state = ebs.initSequenceStep();
                     }
                     else
                     {
@@ -279,7 +338,6 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::READY:
-                    assi_set_mode(AS_MODE_READY);
                     // Wait 5 seconds in READY state before signaling "go" to CAN
                     if (ready_start_time == 0)
                     {
@@ -292,41 +350,50 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::DRIVING:
-                    assi_set_mode(AS_MODE_DRIVING);
-                    // Start the mission once setup is confirmed.
-                    // g_set_mission_ready.load() should already be true; we check it just in case.
-                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load() && !start_mission_sent)
+                {
+                    // CAN start-mission FALLBACK (ported from dev): fire the
+                    // (currently stubbed) start-mission command once when the
+                    // legacy setup handshake reports ready. Coexists with the
+                    // primary dv/status handshake — the pipeline path needs
+                    // nothing from this, but if the ROS command layer is ever
+                    // rewired (see ros_task_commands.h) the legacy CAN
+                    // orchestration picks up where dev left it.
+                    if (g_set_mission_ready.load() && !g_mission_going_cmd.load()
+                        && !start_mission_sent)
                     {
                         if (send_start_mission_command(current_mission_id))
                         {
                             start_mission_sent = true;
                         }
                     }
+
+                    // Stream the pipeline's latest normalised /ctrl/cmd to the
+                    // inverter / steering ECU (the ECU expects a constant
+                    // stream, so we send every tick from the latched value).
+                    // Zero it if /ctrl/cmd goes stale, so a dropped link can
+                    // never latch the last throttle/steering. Emergency and
+                    // finished are handled by the transition chain above —
+                    // they move us out of DRIVING before this runs.
+                    // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
+                    // CONTROL_STEER frames, units, sign and full-lock scaling
+                    // against the vehicle CAN DBC. The values here are the
+                    // normalised [-1,1] contract, clamped on receive.
+                    bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
+                                     ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
+                    if (cmd_fresh)
+                    {
+                        Can::sendAccel(g_accel_cmd.load());
+                        Can::sendSteer(g_steer_cmd.load());
+                    }
                     else
                     {
-                        // Mission is running - check for emergency/finish conditions
-                        if (g_emergency_cmd.load() || g_finished_cmd.load())
-                        {
-                            // Trigger emergency brake
-                            ebs.activateEBS();
-
-                            // Cancel mission if still active
-                            if (g_mission_going_cmd.load())
-                            {
-                                send_cancel_mission_command();
-                            }
-                        }
-                        else
-                        {
-                            // Send control commands continuously (ECU expects constant stream)
-                            Can::sendAccel(g_accel_cmd.load());
-                            Can::sendSteer(g_steer_cmd.load());
-                        }
+                        Can::sendAccel(0.0f);
+                        Can::sendSteer(0.0f);
                     }
                     break;
+                }
 
                 case ASState::EMERGENCY:
-                    assi_set_mode(AS_MODE_EMERGENCY);
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
 
@@ -355,14 +422,13 @@ extern "C" void StartAppTask(void *argument)
                     }
                     break;
             }
-        }else{
+        }
+        else
+        {
             // Manual mode: verify safe conditions (empty pressure tanks)
             ebs.SafeManual();
             ebs.deactivateEBS();
-            assi_set_mode(AS_MODE_OFF);
         }
-
-
 
         // Small delay to prevent CPU hogging (safety monitor expects our
         // heartbeat within its 100 ms deadline)
