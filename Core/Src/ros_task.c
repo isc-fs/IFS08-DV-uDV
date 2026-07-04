@@ -302,13 +302,11 @@ void ros_task_run(void)
 
   // --- Publishers ---
 
-  // IMU publisher (best-effort QoS for maximum throughput)
-  // ⚠️ TODO(topic-name): this publishes on /imu, but the DV pipeline's CAR
-  // profile remaps odometry's subscription to /imu/data_raw
-  // (REMAP_IMU_CAR in bringup/topic_contract.py) — so on-car the EKF gets
-  // NO IMU until ONE side is fixed (rename here OR drop the pipeline
-  // remap). See docs/PIPELINE_INTERFACE.md "Open items". Deliberately not
-  // changed during the dev↔feat/16 merge (2026-07-03).
+  // IMU publisher (best-effort QoS for maximum throughput).
+  // Publishes on /imu — the canonical IMU topic on BOTH sides. The DV
+  // pipeline's car profile subscribes odometry/slam to /imu directly (no
+  // remap), so this matches. Settled 2026-07-04: standardised on /imu
+  // (the pipeline dropped its old /imu/data_raw car remap).
   rcl_publisher_t imu_pub;
   rclc_publisher_init_best_effort(
     &imu_pub, &node,

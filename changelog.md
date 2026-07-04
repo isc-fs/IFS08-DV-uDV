@@ -14,7 +14,7 @@
 ### Data Flow
 
 ```
-[TIM2 ISR 400Hz] --sem--> [imuTask] --queue(16)--> [defaultTask] --> /imu/data_raw
+[TIM2 ISR 400Hz] --sem--> [imuTask] --queue(16)--> [defaultTask] --> /imu
                            BMI088 I2C               micro-ROS pub    sensor_msgs/Imu
 
 [FDCAN3 ISR] --queue(32)--> [canTask] --g_mission_index + notify--> [amiTask]
@@ -82,14 +82,14 @@ On macOS the device path is `/dev/cu.usbmodem*`.
 
 | Topic | Type | QoS | Rate | Description |
 |---|---|---|---|---|
-| `/imu/data_raw` | `sensor_msgs/msg/Imu` | Best effort | 400 Hz | BMI088 accelerometer and gyroscope data |
+| `/imu` | `sensor_msgs/msg/Imu` | Best effort | 400 Hz | BMI088 accelerometer and gyroscope data |
 | `/imu/status` | `std_msgs/msg/Int32` | Reliable | ~1 Hz | IMU driver status code |
 
 ### IMU Data
 
 ```bash
-ros2 topic echo /imu/data_raw --qos-profile sensor_data
-ros2 topic hz /imu/data_raw
+ros2 topic echo /imu --qos-profile sensor_data
+ros2 topic hz /imu
 ```
 
 - `linear_acceleration`: m/s^2 (converted from BMI088 g output)

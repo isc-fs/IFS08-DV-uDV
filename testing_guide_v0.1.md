@@ -44,7 +44,7 @@ ros2 topic list
 ```
 
 Expected topics:
-- `/imu/data_raw` (sensor_msgs/Imu, 400 Hz)
+- `/imu` (sensor_msgs/Imu, 400 Hz)
 - `/imu/status` (std_msgs/Int32, ~0.1 Hz)
 - `/steering/data` (std_msgs/Float32, ~10 Hz)
 - `/res/status` (std_msgs/Int32, ~10 Hz)
@@ -63,8 +63,8 @@ LED PD14 should toggle with each message received.
 ### Monitor data
 
 ```bash
-ros2 topic echo /imu/data_raw --qos-profile sensor_data
-ros2 topic hz /imu/data_raw          # expect ~395-400 Hz
+ros2 topic echo /imu --qos-profile sensor_data
+ros2 topic hz /imu          # expect ~395-400 Hz
 ros2 topic echo /steering/data
 ros2 topic echo /res/status           # -1 if RES not connected
 ros2 topic echo /ami/mission          # 255 if no mission selected
