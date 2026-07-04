@@ -1,166 +1,129 @@
-# First Steps: micro-ROS Agent Setup
+# First Steps
 
-This guide walks through setting up the micro-ROS agent on the target computer to communicate with the STM32H733 over USB CDC.
+End-to-end clone → flash → verify, in under five minutes on a clean
+machine.
 
 ## Prerequisites
 
-- Ubuntu 22.04 (Jammy) or compatible Linux distribution
-- ROS 2 Humble installed and sourced
-- USB cable connected to the STM32 board
+- **ARM GCC toolchain** (`arm-none-eabi-gcc`), tested with the
+  [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads)
+  14.3.Rel1
+- **ROS 2 Humble** on the host PC that will run the micro-ROS agent
+- A unix-like shell on Linux or macOS (Windows works too via WSL or
+  MSYS2/MinGW — the Makefile auto-detects)
 
-## 1. Create the micro-ROS Agent Workspace
+> Note: you do **not** need Docker for a normal clone-and-build flow.
+> The submodule lives on the org-owned fork
+> [`isc-fs/micro_ros_stm32cubemx_utils`](https://github.com/isc-fs/micro_ros_stm32cubemx_utils)
+> on the `humble-isc` branch, which ships the prebuilt `libmicroros.a`
+> + headers ready to link.  Docker is only needed if you change the
+> custom ROS interface package and need to rebuild libmicroros — see
+> [Rebuilding libmicroros](#rebuilding-libmicroros) below.
+
+## 1. Clone
 
 ```bash
-mkdir -p microros_agent_ws/src
-cd microros_agent_ws/src
-git clone -b humble https://github.com/micro-ROS/micro-ROS-Agent.git micro_ros_agent
-git clone -b humble https://github.com/micro-ROS/micro_ros_msgs.git micro_ros_msgs
-cd ..
+git clone --recurse-submodules -b dev git@github.com:isc-fs/IFS08-DV-uDV.git
+cd IFS08-DV-uDV
 ```
 
-## 2. Build the Agent
+`--recurse-submodules` is mandatory.  Without it the
+`micro_ros_stm32cubemx_utils/` directory will be empty and the build
+will fail with `fatal error: rcl/rcl.h: No such file or directory`.
+If you forgot, run `git submodule update --init --recursive`.
+
+## 2. Build the firmware
 
 ```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
+make -j
 ```
 
-## 3. Connect the STM32 Board
-
-Plug in the STM32 via USB. Verify the CDC device appears:
+If `arm-none-eabi-gcc` is on your `PATH`, that's all.  If it lives in a
+non-standard location:
 
 ```bash
-ls /dev/ttyACM*
+make GCC_PATH=/path/to/arm-none-eabi/bin -j
 ```
 
-You should see something like `/dev/ttyACM0`. If the device doesn't appear, check that the board is flashed with the micro-ROS firmware and USB is properly configured.
+Outputs land in `build/binaries/`:
 
-### Permissions
+- `uDV.elf` — debug-friendly format (use with `gdb`, `arm-none-eabi-size`)
+- `uDV.bin` — raw binary for ST-Link / DFU
+- `uDV.hex` — Intel HEX for STM32CubeProgrammer
 
-If you get permission errors, add your user to the `dialout` group:
+> **HIL bench note:** per the team's flashing convention, use
+> STM32CubeProgrammer for ST-Link flashing.  Do **not** use MingoCAN
+> ST-Link BL flashing — it produces a corrupt bootloader.
+
+## 3. Flash and run
+
+Flash `build/binaries/uDV.bin` (ST-Link) or `uDV.hex`
+(STM32CubeProgrammer / DFU) to the STM32H733XG, then start the
+micro-ROS agent on the host PC:
 
 ```bash
-sudo usermod -aG dialout $USER
-```
-
-Log out and back in for the change to take effect.
-
-## 4. Run the Agent
-
-```bash
-source install/setup.bash
 ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyACM0
 ```
 
-Replace `/dev/ttyACM0` with the actual device path from step 3.
+On macOS the device path is `/dev/cu.usbmodem*` instead.
 
-On successful connection you should see output similar to:
-
-```
-[...] info | TermiosAgentLinux.cpp | init                  | running...          | fd: 3
-[...] info | Root.cpp             | create_client         | create              | client_key: 0x...
-[...] info | SessionManager.hpp   | establish_session     | session established | client_key: 0x...
-[...] info | ProxyClient.cpp      | create_participant    | participant created | client_key: 0x...
-[...] info | ProxyClient.cpp      | create_topic          | topic created       | ...
-[...] info | ProxyClient.cpp      | create_publisher      | publisher created   | ...
-[...] info | ProxyClient.cpp      | create_datawriter     | datawriter created  | ...
-```
-
-## 5. Verify Communication
-
-In a new terminal, check the topics are available and data is flowing:
-
-```bash
-source /opt/ros/humble/setup.bash
-ros2 topic list
-```
-
-### Available Topics
-
-| Topic | Type | Rate | Description |
-|---|---|---|---|
-| `/imu/data_raw` | `sensor_msgs/msg/Imu` | 400 Hz | BMI088 accelerometer and gyroscope data |
-| `/imu/status` | `std_msgs/msg/Int32` | ~1 Hz | IMU driver status code (0 = OK, see below) |
-
-### Check IMU data
-
-```bash
-ros2 topic echo /imu/data_raw
-```
-
-You should see `linear_acceleration` (m/s^2) and `angular_velocity` (rad/s) values updating at 400 Hz. The `orientation` field is not populated (covariance[0] = -1).
-
-The IMU publisher uses **best-effort QoS** for maximum throughput. To subscribe, match the QoS:
-
-```bash
-ros2 topic echo /imu/data_raw --qos-profile sensor_data
-```
+Keep the board stationary for ~10 s (gyro bias calibration), then
+verify the IMU stream:
 
 ```bash
 ros2 topic hz /imu/data_raw
+# expected: average rate ~400 Hz
 ```
 
-Should report ~400 Hz with minimal jitter (sampling is driven by a hardware timer interrupt via TIM2 + semaphore).
+If you don't see the topic, see
+[Troubleshooting](#troubleshooting) below.
 
-### Timestamps
+## Rebuilding libmicroros
 
-Messages carry epoch-synchronized timestamps with sub-microsecond precision:
-- Clock synchronized with the agent via NTP-like `rmw_uros_sync_session` protocol
-- Timestamps captured at the exact TIM2 interrupt moment using the DWT cycle counter (528 MHz)
-- Re-synced every ~10 seconds to correct crystal drift
-- Deterministic 2.5ms intervals between samples for SLAM pre-integration
+You only need this if you add or modify a custom ROS interface
+package.  The prebuilt artifact baked into the submodule on
+`humble-isc` already includes whatever schema is currently being
+used; for most clone-and-flash work you can skip this section.
 
-### Startup Sequence
-
-After flashing and connecting, the board goes through:
-1. **USB CDC enumeration** (~2 seconds)
-2. **micro-ROS agent connection** (~1 second)
-3. **Clock synchronization** (retries until success)
-4. **Gyro bias calibration** (~6 seconds, board must be stationary)
-5. **Publishing begins** at 400 Hz
-
-Total startup time: ~10 seconds. Keep the board still during this period.
-
-### Covariance Values
-
-The IMU message includes covariance matrices populated from the BMI088 datasheet:
-- Accelerometer: 8.25e-4 (m/s^2)^2 per axis (175 ug/sqrt(Hz) noise density)
-- Gyroscope: 1.37e-5 (rad/s)^2 per axis (0.014 deg/s/sqrt(Hz) noise density)
-- Orientation: covariance[0] = -1 (not available)
-
-### Check IMU status
-
-```bash
-ros2 topic echo /imu/status
-```
-
-| Value | Meaning |
-|---|---|
-| `0` | `BMI088_OK` — sensor reads working normally |
-| `-1` | `BMI088_ERR_PARAM` — initialization parameter error |
-| `-2` | `BMI088_ERR_I2C` — I2C bus communication failure |
-| `-3` | `BMI088_ERR_ID` — unexpected chip ID (not a BMI088) |
-| `-99` | imuTask has not started (likely insufficient FreeRTOS heap) |
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| No `/dev/ttyACM*` device | USB not enumerating | Check USB cable, verify firmware is flashed |
-| Agent runs but no session created | Framing mismatch or timing | Reset the STM32 board after starting the agent |
-| Agent shows `create_client` then disconnects | Stack overflow or transport error | Verify FreeRTOS task stack >= 3000 words (12 KB) |
-| Permission denied on `/dev/ttyACM0` | User not in dialout group | Run `sudo usermod -aG dialout $USER` and re-login |
-
-## Rebuilding the micro-ROS Static Library
-
-If you need to regenerate the micro-ROS static library (e.g., after changing ROS message types), run from the project root:
+To rebuild from a local package source (the folder needs to live
+under `micro_ros_stm32cubemx_utils/microros_static_library/library_generation/extra_packages/`):
 
 ```bash
 docker pull microros/micro_ros_static_library_builder:humble
-docker run --rm -i -v $(pwd):/project \
+echo "y" | docker run --rm -i -v $(pwd):/project \
   --env MICROROS_LIBRARY_FOLDER=micro_ros_stm32cubemx_utils/microros_static_library \
   microros/micro_ros_static_library_builder:humble
 ```
 
-This reads compiler flags from the `Makefile` (`print_cflags` target) and cross-compiles the micro-ROS libraries for the Cortex-M7. The output is placed in `micro_ros_stm32cubemx_utils/microros_static_library/libmicroros/`.
+After the rebuild succeeds, the new `libmicroros.a` and `microros_include/`
+overwrite the prebuilt ones in the submodule.  Commit those changes
+inside the submodule, push to `humble-isc` on
+[`isc-fs/micro_ros_stm32cubemx_utils`](https://github.com/isc-fs/micro_ros_stm32cubemx_utils),
+and bump the parent's submodule pin.
+
+## Troubleshooting
+
+- **`fatal error: rcl/rcl.h: No such file or directory`**
+  — you cloned without `--recurse-submodules`.  Run
+  `git submodule update --init --recursive`.
+
+- **`/bin/sh: -c: line 1: syntax error: unexpected end of file`**
+  on the first `mkdir` line of the Makefile
+  — your branch is missing the portable mkdir fix.  Rebase onto the
+  latest `dev`.
+
+- **Linker errors about `usleep` / `_gettimeofday` undefined**
+  — your submodule pin is behind `humble-isc`.  Run
+  `git submodule update --remote micro_ros_stm32cubemx_utils` and
+  commit the bump.
+
+- **No ROS topics published despite agent connecting**
+  — the gyro calibration runs for the first 6 s of operation; the
+  IMU task only starts publishing afterwards.  Wait, or check
+  `/imu/status` for the BMI088 init code (-99 = pre-init, 0 = OK).
+
+## Related docs
+
+- [`changelog.md`](changelog.md) — full architecture documentation
+- [`testing_guide_v0.1.md`](testing_guide_v0.1.md) — v0.1 release
+  validation procedure
