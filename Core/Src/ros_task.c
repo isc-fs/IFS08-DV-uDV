@@ -74,7 +74,7 @@ void * microros_zero_allocate(size_t number_of_elements, size_t size_of_element,
 static void cmd_test_callback(const void *msgin)
 {
   (void)msgin;
-  HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
+  //HAL_GPIO_TogglePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin);
 }
 
 // --- Service callback for /activate_steering ---

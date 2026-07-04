@@ -214,6 +214,7 @@ extern "C" void StartAppTask(void *argument)
             as_state = ASState::FINISHED; // Sticky
         } else if (res_go && as_state == ASState::READY) {
             as_state = ASState::DRIVING;
+            Can::sendSteeringStart();
             mission_time = osKernelGetTickCount(); // Efecto secundario mantenido
         } else if (res_ok && ts_on) {
             as_state = ASState::READY;
@@ -283,6 +284,10 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
+                    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+                    //Can::sendSteeringStart();
+                    //Can::sendSteeringStop();
+                    //move_steer_sin();
                     assi_set_mode(AS_MODE_OFF);
                     ebs.activateEBS();
                     // Perform EBS initialization sequence steps
@@ -320,6 +325,7 @@ extern "C" void StartAppTask(void *argument)
                             //sen_motor_power(15); //15%
                             if(now-mission_time > 30000){
                                 as_state = ASState::FINISHED;
+                                Can::sendSteeringStop();
                             }
                             break;
                         case 1:  //EBS test

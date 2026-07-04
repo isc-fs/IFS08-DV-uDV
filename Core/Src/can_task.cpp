@@ -40,7 +40,7 @@ extern "C" void StartCanTask(void *argument)
     Can::init();
     Can::initRes();
 
-    Can::sendSteeringMotor(1);  // Motor start — sent once before angle loop
+    //Can::sendSteeringMotor(1);  // Motor start — sent once before angle loop
 
     /* Both buses up: the safety monitor now watches this loop. */
     safety_arm(SAFETY_TASK_CAN);

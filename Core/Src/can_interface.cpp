@@ -21,6 +21,7 @@ static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
 static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x010u;
 static constexpr uint32_t CAN_ID_STEER_CMD         = 0x020u;
+#define CAN_ID_MOTOR_CTRL   0x10
 
 /* CAN IDs — FDCAN1 (RES CANopen + DataLogger TX) */
 static constexpr uint32_t RES_NODE_ID              = 0x11u;
@@ -200,7 +201,7 @@ void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 
 void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 {
-    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+    //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
     case CAN_ID_DL_DYN1: /* 0x500 — steering feedback at 20 Hz via FDCAN3 */
@@ -246,7 +247,7 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 
     case CAN_ID_STEERING:
         //snprintf(srv_msg, sizeof(srv_msg), "id direcion detectado");
-        HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+        //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
         /* LWS sensor packet on FDCAN3.  Byte layout (re-ported from v0.1):
          *   [0..1] angle_raw, int16 little-endian, 0.1 deg/bit
          *   [2]    speed_raw, uint8, 4 deg/s per bit
@@ -326,21 +327,40 @@ void sendNmtSetOperational()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, nmt);
 }
 
-void sendSteeringMotor(uint8_t start)
-{
+void sendSteeringStart(){
+    uint8_t data[4]={1};
+
     FDCAN_TxHeaderTypeDef TxHeader = {
-        .Identifier          = CAN_ID_STEER_MOTOR,
+        .Identifier          = CAN_ID_MOTOR_CTRL,
         .IdType              = FDCAN_STANDARD_ID,
         .TxFrameType         = FDCAN_DATA_FRAME,
-        .DataLength          = FDCAN_DLC_BYTES_1,
+        .DataLength          = FDCAN_DLC_BYTES_4,
         .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
         .BitRateSwitch       = FDCAN_BRS_OFF,
         .FDFormat            = FDCAN_CLASSIC_CAN,
         .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
         .MessageMarker       = 0,
     };
-    uint8_t payload = start;
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
+
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, data);
+}
+
+void sendSteeringStop(){
+    uint8_t data[4]={2};
+
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_MOTOR_CTRL,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_4,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, data);
 }
 
 void sendSteeringAngle(float angle_deg)

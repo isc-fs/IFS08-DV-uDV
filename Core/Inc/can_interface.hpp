@@ -29,8 +29,9 @@ void sendNmtSetOperational();
  *  sendSteeringMotor: 0x010 — 1=start, 0=stop, 1-byte payload
  *  sendSteeringAngle: 0x020 — int32 LE in 0.01-deg units, 4-byte payload
  */
-void sendSteeringMotor(uint8_t start);
 void sendSteeringAngle(float angle_deg);
+void sendSteeringStart();
+void sendSteeringStop();
 
 /* DataLogger TX (FDCAN1) per FS-DV spec DS 2.2 — emits 0x500/0x501/0x502.
  * Intended to be called periodically (~10 Hz) from can_task. */
