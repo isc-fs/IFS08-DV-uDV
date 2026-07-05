@@ -1,6 +1,7 @@
 #pragma once
 
 #include "can_globals.h"
+#include "bmi088.h"   /* bmi088_scaled_t (sendIMU) */
 #include <cstdint>
 #include "fdcan.h"
 #include "cmsis_os2.h"
@@ -15,17 +16,18 @@ void initRes();
 /* FDCAN2 bring-up (ACU bus: ECU/VCU + AMS — the ECU<->uDV contract) */
 void initEcu();
 
-void sendControl(float accel, float steer);
 /* 0x507 torque command to the ECU: input is the pipeline's normalised
  * throttle [-1..1], sent as int32 LE integer percent 0..100 (negative
  * clamps to 0). Expected cyclic at 20 ms; a stale stream reads as 0
  * torque on the ECU (never APPS). */
 void sendAccel(float accel);
-void sendSteer(float steer);
 /* 0x510 DV ready-to-drive request to the ECU (byte0 != 0). The ECU
  * honours it only while its brake sensor confirms hard braking and
  * confirms on 0x511 (rx -> g_can_r2d). */
 void sendR2dRequest(uint8_t request);
+/* 0x512 IMU broadcast to the ECU (ACU bus): ax/ay/az int16 LE milli-g +
+ * gx int16 LE 0.1 dps. Called at 50 Hz from imu_task via can_c_send_imu. */
+void sendIMU(const bmi088_scaled_t &imu);
 void sendAssiStatus(uint8_t status);
 
 /* RES CANopen — send NMT "set operational" to RES node 0x11 on FDCAN1.

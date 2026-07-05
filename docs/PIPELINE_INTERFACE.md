@@ -76,9 +76,12 @@ cap for detecting a lost safety-critical message.
   (see CLAUDE.md → "Rebuild micro-ROS static library") and reflash. The two
   new *subscriptions* fit the existing limit (5) and need no rebuild.
 - **Actuation scaling `[G2/G3, SAFETY]`.** `ctrl/cmd` is normalised and
-  clamped on receive, then sent via `Can::sendAccel/sendSteer` as-is. Confirm
-  the CONTROL_ACCEL / CONTROL_STEER CAN frames, units, sign and full-lock
-  scaling against the vehicle DBC; clamp steering under STEERING's 70° cutoff.
+  clamped on receive. Throttle: `Can::sendAccel` → ECU `0x507` (int32 LE
+  percent, confirmed against the ECU `.def`). Steering: routed to the
+  steering controller on `0x020` as `norm × STEER_FULL_LOCK_DEG` (65°,
+  under STEERING's 70° cutoff; the old consumer-less `0x508` is gone).
+  Still to commission (#71): real full-lock angle, steering ratio, and the
+  sign convention (ROS `+z` = CCW/left) on the car.
 - **AMI index map `[G5]`.** `ami/mission` forwards the raw CAN `0x503` byte.
   Confirm the AMI board's index encoding matches the pipeline's
   `DEFAULT_AMI_TO_MISSION_ID` (4 = Track drive). (AMI board is a separate repo.)
