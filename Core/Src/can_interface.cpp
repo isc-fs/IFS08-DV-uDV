@@ -17,6 +17,7 @@ static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u;
 static constexpr uint32_t CAN_ID_R2D               = 0x509u;
 static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
 static constexpr uint32_t CAN_ID_IMU               = 0x001u;
+static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
 static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x010u;
@@ -212,6 +213,24 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 
     case CAN_ID_MISSION_SELECT:
         g_can_mission_id.store((int)msg->data[0]);
+
+        {
+            //ACK response
+            FDCAN_TxHeaderTypeDef AckHeader = {
+                .Identifier          = CAN_ID_MISSION_ACK,
+                .IdType              = FDCAN_STANDARD_ID,
+                .TxFrameType         = FDCAN_DATA_FRAME,
+                .DataLength          = FDCAN_DLC_BYTES_1,
+                .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+                .BitRateSwitch       = FDCAN_BRS_OFF,
+                .FDFormat            = FDCAN_CLASSIC_CAN,
+                .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+                .MessageMarker       = 0,
+            };
+            uint8_t ack = msg->data[0];
+            (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &AckHeader, &ack);
+        }
+
         break;
 
     /* --- Autonomy state-machine inputs (ported from fix/17) ---

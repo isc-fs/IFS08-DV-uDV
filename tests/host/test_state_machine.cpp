@@ -80,7 +80,7 @@ static void reset_world(void)
     g_can_ts_active.store(false);
     g_can_sdc_res_open.store(false);
     g_can_brake_pressure.store(0.0f);
-    g_can_mission_id.store(0);
+    g_can_mission_id.store(6);
     g_can_r2d.store(false);
     g_imu_vehicle_standstill.store(true);
     g_set_mission_ready.store(false);
@@ -111,7 +111,7 @@ static void set_drive_preconditions(void)
 {
     s_asms_on = true;
     s_tsms_on = true;                              // TS = ASMS(A3) && TSMS(A6)
-    g_can_mission_id.store(5);
+    g_can_mission_id.store(6);
     g_set_mission_ready.store(true);
 }
 

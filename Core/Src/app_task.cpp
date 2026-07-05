@@ -49,7 +49,7 @@ static void reset_ros_globals(void)
 static void reset_can_globals(void)
 {
     g_can_listen_go.store(false);
-    g_can_mission_id.store(0);
+    g_can_mission_id.store(6);
     g_can_r2d.store(false);  /* (g_can_go was redundant with this) */
     g_imu_vehicle_standstill.store(true);
 }
@@ -249,13 +249,7 @@ extern "C" void StartAppTask(void *argument)
                 start_mission_sent = false;
             }
 
-            int current_mission_id = g_can_mission_id.load();
-            if (current_mission_id <= 0)
-            {
-                current_mission_id = 6;  // Default mission: Inspection
-            }
-
-            if (current_mission_id != last_mission_id)
+            /*if (current_mission_id != last_mission_id)
             {
                 last_mission_id = current_mission_id;
                 set_mission_sent = false;
@@ -271,7 +265,7 @@ extern "C" void StartAppTask(void *argument)
                 {
                     set_mission_sent = true;
                 }
-            }
+            }*/
 
             // Send zero control when not driving (safety)
             if (as_state != ASState::DRIVING)
@@ -320,7 +314,7 @@ extern "C" void StartAppTask(void *argument)
                     ebs.deactivateEBS();
 
                     switch (g_can_mission_id.load()){
-                        case 0:  //Inspection
+                        case 6:  //Inspection
                             Can::sendSteeringStart();
                             move_steer_sin();
                             //sen_motor_power(15); //15%
