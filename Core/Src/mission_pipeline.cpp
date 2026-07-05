@@ -19,9 +19,11 @@
  *     as_next_state before on_tick runs, so a dropped heartbeat is handled
  *     upstream; zeroing on cmd staleness here is the second layer.
  *
- * TODO(G2/G3, on-car): confirm the CONTROL_ACCEL / CONTROL_STEER frames, units,
- * sign and full-lock scaling against the vehicle CAN DBC (see app_task Can::send
- * path). The values here are the normalised [-1, 1] contract, clamped on receive.
+ * Accel (0x507) is CONFIRMED against the ECU .def (int32 LE percent — the
+ * conversion lives in Can::sendAccel; app_task paces this TX to the ECU's 20 ms
+ * torque cycle). TODO(G3, on-car): 0x508 steer has no ECU consumer on the
+ * current map (steering is commanded via 0x020) — confirm who reads it or retire
+ * it. The values here are the normalised [-1, 1] contract, clamped on receive.
  */
 #include "mission.h"
 

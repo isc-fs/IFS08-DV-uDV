@@ -176,15 +176,19 @@ new TU, the two manifests, and the tests.
   saturates the steering firmware's ±60° clamp. The first tick of a run always
   commands (independent of the tick-counter value).
 - **Pipeline** (1-4, incl. **trackdrive**) — relays the pipeline's latest
-  normalised `/ctrl/cmd` every tick; zeros both channels when `/ctrl/cmd` goes
-  stale so a dropped link never latches the last command.
+  normalised `/ctrl/cmd`; zeros both channels when `/ctrl/cmd` goes stale so a
+  dropped link never latches the last command. The mission's `on_tick` runs every
+  loop tick, but `app_task` paces the actual torque TX (0x507 to the ECU) to the
+  ECU's 20 ms cyclic contract (`TORQUE_TX_PERIOD_MS`); while DRIVING a pipeline
+  mission, `app_task` also drives the DV ready-to-drive handshake (0x510 → 0x511)
+  until the ECU confirms.
 - **EBS test** (5) — **stub**: holds the wheels straight. The real test (drive to
   speed, trigger the EBS, verify deceleration) is an on-car TODO.
 
 ### Open items (on-car)
 
-- Trackdrive actuation scaling / sign: the `CONTROL_ACCEL` (0x507) throttle sink
-  and the `[-1, 1] → deg` full-lock steering scale are unconfirmed against the
-  vehicle CAN DBC (issue #70). The values sent are the normalised `[-1, 1]`
-  contract, clamped on the receiving ECU.
+- Trackdrive actuation: the `0x507` torque contract is confirmed against the ECU
+  `.def` (int32 percent, paced 20 ms); the `0x508` normalised-steer frame has no
+  ECU consumer on the current map (steering is commanded via `0x020`) — confirm
+  who reads it or retire it (G3). The `[-1, 1]` values are clamped on receive.
 - EBS-test mission body is a hold-straight stub.
