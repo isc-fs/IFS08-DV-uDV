@@ -29,9 +29,13 @@ static constexpr uint32_t CAN_ID_R2D_REQUEST       = 0x510u; /* uDV->ECU: byte0 
                                                                 DV ready-to-drive (after GO) */
 static constexpr uint32_t CAN_ID_R2D_CONFIRM       = 0x511u; /* ECU->uDV: byte0 != 0 confirms
                                                                 DV R2D latched (acyclic) */
-static constexpr uint32_t CAN_ID_IMU               = 0x001u; /* uDV->ECU: ax/ay/az int16 mg +
+static constexpr uint32_t CAN_ID_IMU               = 0x512u; /* uDV->ECU: ax/ay/az int16 mg +
                                                                 gx int16 0.1 dps, 50 Hz.
-                                                                Restored dev-era broadcast;
+                                                                0x5xx on purpose: telemetry
+                                                                must never win arbitration
+                                                                over the safety frames (the
+                                                                dev-era 0x001 outranked
+                                                                everything on the bus).
                                                                 ECU-side .def still needed. */
 /* |mechanical rpm| below this counts as vehicle standstill (0x506 decode). */
 static constexpr int32_t  RPM_STANDSTILL           = 10;
@@ -239,7 +243,7 @@ void sendR2dRequest(uint8_t request)
 
 void sendIMU(const bmi088_scaled_t &imu)
 {
-    /* 0x001 uDV->ECU IMU broadcast on the ACU bus, 50 Hz (imu_task
+    /* 0x512 uDV->ECU IMU broadcast on the ACU bus, 50 Hz (imu_task
      * downsamples the 400 Hz stream). Dev-era wire layout restored:
      *   [0..1] ax, [2..3] ay, [4..5] az   int16 LE, milli-g
      *   [6..7] gx                          int16 LE, 0.1 dps

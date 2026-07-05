@@ -25,7 +25,7 @@ void sendAccel(float accel);
  * honours it only while its brake sensor confirms hard braking and
  * confirms on 0x511 (rx -> g_can_r2d). */
 void sendR2dRequest(uint8_t request);
-/* 0x001 IMU broadcast to the ECU (ACU bus): ax/ay/az int16 LE milli-g +
+/* 0x512 IMU broadcast to the ECU (ACU bus): ax/ay/az int16 LE milli-g +
  * gx int16 LE 0.1 dps. Called at 50 Hz from imu_task via can_c_send_imu. */
 void sendIMU(const bmi088_scaled_t &imu);
 void sendAssiStatus(uint8_t status);

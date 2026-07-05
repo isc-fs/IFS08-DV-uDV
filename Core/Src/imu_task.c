@@ -86,7 +86,7 @@ void StartImuTask(void *argument)
       sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
 
-      /* IMU broadcast to the ECU (CAN 0x001 on the ACU bus), downsampled
+      /* IMU broadcast to the ECU (CAN 0x512 on the ACU bus), downsampled
        * 400 -> 50 Hz (every 8th sample). Lives here — not in ros_task —
        * so the ECU keeps its IMU feed with no DVPC/agent connected. */
       static uint8_t imu_can_div = 0;

@@ -110,7 +110,7 @@ float    can_c_get_steering_angle_deg(void);
 int32_t  can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms);
 int32_t  can_c_get_mission_index(void);
 int32_t  can_c_get_motor_rpm(void);
-/* 50 Hz IMU broadcast to the ECU (0x001, ACU bus) — called from imu_task. */
+/* 50 Hz IMU broadcast to the ECU (0x512, ACU bus) — called from imu_task. */
 void     can_c_send_imu(const bmi088_scaled_t *imu);
 uint8_t  can_c_get_go_signal(void);
 float    can_c_get_steer_angle_actual(void);
