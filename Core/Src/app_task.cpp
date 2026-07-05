@@ -78,6 +78,13 @@ static constexpr uint32_t INSPECTION_DURATION_MS   = 30000u;   /* 30 s demo */
  * every torque/steer TX to it (the control loop itself runs ~1 kHz and
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
+/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
+ * controller takes an absolute angle on 0x020 (0.01 deg units). Full-lock
+ * span for the conversion, kept UNDER the steering controller's 70 deg
+ * cutoff (PIPELINE_INTERFACE.md G3) with margin.
+ * TODO(commission, #71): measure the real full-lock angle + steering ratio
+ * and the sign convention (ROS +z = CCW/left) on the car. */
+static constexpr float    STEER_FULL_LOCK_DEG      = 65.0f;
 /* DV ready-to-drive request (0x510) retry period until the ECU confirms
  * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
 static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
@@ -443,11 +450,12 @@ extern "C" void StartAppTask(void *argument)
                 last_torque_tx_ms = now_ms;
             }
 
-            // Send zero control when not driving (safety)
+            /* Zero torque when not driving (safety). No steering command
+             * outside DRIVING: the steering motor is stopped (0x010), and a
+             * 0x020 frame would command the wheel to CENTER, not "hold". */
             if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
-                Can::sendSteer(0.0f);
             }
 
             /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a
@@ -524,18 +532,16 @@ extern "C" void StartAppTask(void *argument)
                             }
                         }
 
-                        // Stream the pipeline's latest normalised /ctrl/cmd to the
-                        // inverter / steering ECU (the ECU expects a constant
-                        // stream, so we send every tick from the latched value).
-                        // Zero it if /ctrl/cmd goes stale, so a dropped link can
-                        // never latch the last throttle/steering. Emergency and
-                        // finished are handled by the transition chain above —
-                        // they move us out of DRIVING before this runs.
-                        // Accel: 0x507 contract CONFIRMED against the ECU .def
-                        // (int32 LE percent — conversion in Can::sendAccel).
-                        // TODO(G3, on-car): 0x508 steer has no ECU consumer on
-                        // the current map — confirm who reads it (steering is
-                        // commanded via 0x020) or retire it.
+                        // Stream the pipeline's latest normalised /ctrl/cmd:
+                        //   throttle -> ECU 0x507 (int32 percent, Can::sendAccel)
+                        //   steering -> steering controller 0x020 (absolute
+                        //               angle = norm * STEER_FULL_LOCK_DEG;
+                        //               replaces the consumer-less 0x508)
+                        // On a stale /ctrl/cmd: torque 0, and NO steering
+                        // command — a 0x020 zero would snap the wheel to
+                        // center mid-corner; the controller holds its target
+                        // and the >400 ms staleness rule trips EMERGENCY via
+                        // the transition chain anyway.
                         bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
                                          ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
                         if (torque_tx_due)
@@ -543,12 +549,12 @@ extern "C" void StartAppTask(void *argument)
                             if (cmd_fresh)
                             {
                                 Can::sendAccel(g_accel_cmd.load());
-                                Can::sendSteer(g_steer_cmd.load());
+                                Can::sendSteeringAngle(
+                                    g_steer_cmd.load() * STEER_FULL_LOCK_DEG);
                             }
                             else
                             {
                                 Can::sendAccel(0.0f);
-                                Can::sendSteer(0.0f);
                             }
                         }
                     }

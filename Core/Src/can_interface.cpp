@@ -10,12 +10,10 @@
 /* CAN IDs — FDCAN3 (AMI + steering bus, local DV peripherals) */
 static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
 static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au; /* echo back to AMI */
-static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u; /* legacy — no known consumer */
 /* ASSI status byte on the local FDCAN3 bus. The ECU->AMS VCU_heartbeat also
  * uses 0x100 but lives on the ACU bus (uDV FDCAN2) — different wire, no
  * clash; do NOT emit this id on FDCAN2. */
 static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
-static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 
 /* CAN IDs — FDCAN2 (ACU bus: ECU/VCU + AMS). The ECU<->uDV contract,
  * matching IFS08-CE-ECU Core/Inc/can/messages/*.def (ECU side is
@@ -31,6 +29,10 @@ static constexpr uint32_t CAN_ID_R2D_REQUEST       = 0x510u; /* uDV->ECU: byte0 
                                                                 DV ready-to-drive (after GO) */
 static constexpr uint32_t CAN_ID_R2D_CONFIRM       = 0x511u; /* ECU->uDV: byte0 != 0 confirms
                                                                 DV R2D latched (acyclic) */
+static constexpr uint32_t CAN_ID_IMU               = 0x001u; /* uDV->ECU: ax/ay/az int16 mg +
+                                                                gx int16 0.1 dps, 50 Hz.
+                                                                Restored dev-era broadcast;
+                                                                ECU-side .def still needed. */
 /* |mechanical rpm| below this counts as vehicle standstill (0x506 decode). */
 static constexpr int32_t  RPM_STANDSTILL           = 10;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
@@ -179,13 +181,6 @@ void initEcu()
     }
 }
 
-void sendControl(float accel, float steer)
-{
-    // Backwards-compatible helper: send two separate frames for accel and steer
-    sendAccel(accel);
-    sendSteer(steer);
-}
-
 void sendAccel(float accel)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
@@ -242,25 +237,40 @@ void sendR2dRequest(uint8_t request)
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, &request);
 }
 
-void sendSteer(float steer)
+void sendIMU(const bmi088_scaled_t &imu)
 {
+    /* 0x001 uDV->ECU IMU broadcast on the ACU bus, 50 Hz (imu_task
+     * downsamples the 400 Hz stream). Dev-era wire layout restored:
+     *   [0..1] ax, [2..3] ay, [4..5] az   int16 LE, milli-g
+     *   [6..7] gx                          int16 LE, 0.1 dps
+     * Sent from imu_task (NOT ros_task) so the ECU keeps its IMU feed
+     * with no DVPC/agent connected. Axis choice (gx) is the historical
+     * contract — confirm against the board mounting at commissioning. */
     FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[4];
+    uint8_t TxData[8];
 
-    TxHeader.Identifier = CAN_ID_CONTROL_STEER;
+    TxHeader.Identifier = CAN_ID_IMU;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_4;
+    TxHeader.DataLength = FDCAN_DLC_BYTES_8;
     TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
     TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
     TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
     TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     TxHeader.MessageMarker = 0;
 
-    memcpy(&TxData[0], &steer, sizeof(float));
+    const int16_t ax_scaled = (int16_t)(imu.ax_g * 1000.0f);
+    const int16_t ay_scaled = (int16_t)(imu.ay_g * 1000.0f);
+    const int16_t az_scaled = (int16_t)(imu.az_g * 1000.0f);
+    const int16_t gx_scaled = (int16_t)(imu.gx_dps * 10.0f);
+
+    memcpy(&TxData[0], &ax_scaled, sizeof(int16_t));
+    memcpy(&TxData[2], &ay_scaled, sizeof(int16_t));
+    memcpy(&TxData[4], &az_scaled, sizeof(int16_t));
+    memcpy(&TxData[6], &gx_scaled, sizeof(int16_t));
 
     /* TX failure is recoverable — see sendAccel comment. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData);
 }
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
@@ -679,6 +689,12 @@ extern "C" int32_t can_c_get_motor_rpm(void)
     /* Mechanical shaft rpm from the ECU (0x506, 10 ms). The ECU already
      * divides the inverter's electrical rpm by the pole-pair count. */
     return g_can_motor_rpm.load();
+}
+
+extern "C" void can_c_send_imu(const bmi088_scaled_t *imu)
+{
+    /* C shim for imu_task (C file) — see Can::sendIMU. */
+    Can::sendIMU(*imu);
 }
 
 extern "C" uint8_t can_c_get_assi_status_code(void)

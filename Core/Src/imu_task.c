@@ -17,6 +17,7 @@
 #include "tim.h"               /* htim2 */
 #include "safety_monitor.h"    /* safety_arm / safety_heartbeat / SAFETY_TASK_IMU */
 #include "dwt_time.h"          /* dwt_micros */
+#include "can_globals.h"       /* can_c_send_imu (50 Hz ECU broadcast) */
 
 /* RTOS objects created in freertos.c (MX_FREERTOS_Init). */
 extern osMessageQueueId_t imuQueueHandle;
@@ -84,6 +85,16 @@ void StartImuTask(void *argument)
     {
       sample.timestamp_us = ts_us;
       osMessageQueuePut(imuQueueHandle, &sample, 0, 0);
+
+      /* IMU broadcast to the ECU (CAN 0x001 on the ACU bus), downsampled
+       * 400 -> 50 Hz (every 8th sample). Lives here — not in ros_task —
+       * so the ECU keeps its IMU feed with no DVPC/agent connected. */
+      static uint8_t imu_can_div = 0;
+      if (++imu_can_div >= 8U)
+      {
+        imu_can_div = 0;
+        can_c_send_imu(&sample.imu);
+      }
     }
 
     /* Liveness beat: one per 400 Hz wake, whether or not the sample
