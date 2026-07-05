@@ -12,10 +12,6 @@ extern "C" {
     #include "hardware_io.h"
 }
 
-// Visible threshold for considering brakes engaged (CAN pressure, units as per CAN message)
-// TODO: tune this value to the real system requirement
-float g_brake_pressure_threshold = 1.0f;
-
 StateManager::StateManager()
     : ebs_(EbsManager::getInstance())
 {
@@ -46,10 +42,11 @@ void StateManager::updateSignals()
                                    es == EBSInitState::CheckActuator2);
     signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
     signals_.abs_checks_ok = ebs_.ASBChecksOK();
-    // brakes_engaged comes via CAN 0x505: hydraulic brake-line pressure read by
-    // another ECU (not sensed on the uDV; A4/A5 are EBS air-tank pressures).
+    // brakes_engaged comes via CAN 0x505 (VCU_brake_over_limit): the ECU's
+    // binary verdict that its brake sensor reads above the hard-braking
+    // limit (BrakeDvHardRaw, ECU-owned — no uDV-side threshold to tune).
     // See docs/STATE_MACHINE_INPUTS.md
-    signals_.brakes_engaged = (g_can_brake_pressure.load() >= g_brake_pressure_threshold);
+    signals_.brakes_engaged = g_can_brake_over_limit.load();
 
     // TODO(inputs): R2D != GO. GO comes from the RES (CAN / hardwired A2=GO_RES);
     // R2D is given *to* the ECU. The OFF->DRIVING gate on r2d needs rework — the

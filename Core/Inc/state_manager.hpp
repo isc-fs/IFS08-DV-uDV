@@ -9,10 +9,6 @@
 #include "ebs_manager.hpp"
 #include <cstdint>
 
-// Visible control for brake-engaged pressure threshold (CAN-provided).
-// TODO: adjust this threshold to the correct value for your vehicle.
-extern float g_brake_pressure_threshold;
-
 enum class ASState {
     OFF,        // Autonomous system off
     READY,      // Ready to drive (brakes engaged)

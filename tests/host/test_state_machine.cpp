@@ -90,7 +90,7 @@ static void reset_world(void)
 
     g_can_ts_active.store(false);
     g_can_sdc_res_open.store(false);
-    g_can_brake_pressure.store(0.0f);
+    g_can_brake_over_limit.store(false);
     g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid 0-based mission */
     g_can_r2d.store(false);
     g_imu_vehicle_standstill.store(true);
@@ -110,7 +110,7 @@ static void drive_ebs_to_done(EbsManager& ebs)
     ebs.initSequenceStep();                        // CheckPressure -> WaitTS (closes SDC)
     s_asms_on = true; s_tsms_on = true;            // TS = ASMS(A3) && TSMS(A6)
     ebs.initSequenceStep();                        // WaitTS -> CheckActuator1 (A1 on)
-    g_can_brake_pressure.store(2.0f);
+    g_can_brake_over_limit.store(true);
     ebs.initSequenceStep();                        // CheckActuator1 -> WaitInter (A1 off)
     s_now_ms += 6000;
     ebs.initSequenceStep();                        // WaitInter -> CheckActuator2 (A2 on)
@@ -155,7 +155,7 @@ static void test_ebs_happy_path(void)
     s_asms_on = true; s_tsms_on = true;          // TS = ASMS(A3) && TSMS(A6)
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
     CHECK(s_ebs_pin1 == false);                  // A1 fired (LOW)
-    g_can_brake_pressure.store(2.0f);
+    g_can_brake_over_limit.store(true);
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitInterActuatorCheck);
     CHECK(s_ebs_pin1 == true);                   // A1 released (HIGH)
     s_now_ms += 6000;
@@ -195,9 +195,9 @@ static void test_ebs_checks(void)
     s_pressure1 = 1.0f; s_pressure2 = 2.0f; CHECK(ebs.checkStoragePressures() == false);
     s_pressure1 = 1.1f; s_pressure2 = 1.1f; CHECK(ebs.checkStoragePressures() == true);
     s_pressure1 = 2.0f; s_pressure2 = 0.9f; CHECK(ebs.checkStoragePressures() == false);
-    /* checkBrakeLinePressure: > 1.0 bar. */
-    g_can_brake_pressure.store(1.0f); CHECK(ebs.checkBrakeLinePressure() == false);
-    g_can_brake_pressure.store(1.5f); CHECK(ebs.checkBrakeLinePressure() == true);
+    /* checkBrakeLinePressure: mirrors the ECU 0x505 over-limit verdict. */
+    g_can_brake_over_limit.store(false); CHECK(ebs.checkBrakeLinePressure() == false);
+    g_can_brake_over_limit.store(true);  CHECK(ebs.checkBrakeLinePressure() == true);
     /* SafeManual: both tanks < 0.1 (empty). */
     s_pressure1 = 0.05f; s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == true);
     s_pressure1 = 0.2f;  s_pressure2 = 0.05f; CHECK(ebs.SafeManual() == false);
@@ -241,7 +241,7 @@ static void test_sm_preconditions_without_ebs_done_is_off(void)
     reset_world();
     StateManager& sm = StateManager::getInstance();
     set_drive_preconditions();
-    g_can_brake_pressure.store(2.0f);
+    g_can_brake_over_limit.store(true);
     /* EBS not driven to Done -> abs_checks_ok false -> still OFF. */
     sm.update();
     CHECK(sm.getState() == ASState::OFF);
@@ -253,7 +253,7 @@ static void test_sm_ready(void)
     StateManager& sm = StateManager::getInstance();
     drive_ebs_to_done(EbsManager::getInstance());
     set_drive_preconditions();
-    g_can_brake_pressure.store(2.0f);   // brakes engaged
+    g_can_brake_over_limit.store(true);   // brakes engaged
     g_can_r2d.store(false);             // no R2D yet
     sm.update();
     CHECK(sm.getState() == ASState::READY);
@@ -265,7 +265,7 @@ static void test_sm_driving(void)
     StateManager& sm = StateManager::getInstance();
     drive_ebs_to_done(EbsManager::getInstance());
     set_drive_preconditions();
-    g_can_brake_pressure.store(2.0f);
+    g_can_brake_over_limit.store(true);
     g_can_r2d.store(true);              // R2D -> DRIVING
     sm.update();
     CHECK(sm.getState() == ASState::DRIVING);
@@ -277,7 +277,7 @@ static void test_sm_preconditions_but_no_brakes_no_r2d_is_off(void)
     StateManager& sm = StateManager::getInstance();
     drive_ebs_to_done(EbsManager::getInstance());
     set_drive_preconditions();
-    g_can_brake_pressure.store(0.0f);  // brakes NOT engaged
+    g_can_brake_over_limit.store(false);  // brakes NOT engaged
     g_can_r2d.store(false);            // and no R2D
     sm.update();
     CHECK(sm.getState() == ASState::OFF);

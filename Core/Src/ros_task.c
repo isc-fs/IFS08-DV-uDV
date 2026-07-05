@@ -379,7 +379,10 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "steering_angle"));
 
-  // Motor RPM publisher (~10 Hz) — placeholder: no RPM sensor on uDV
+  // Motor RPM publisher (~10 Hz) — MECHANICAL shaft rpm from the ECU
+  // (CAN 0x506, int32 signed, 10 ms; the ECU already divides the
+  // inverter's electrical rpm by the pole pairs). Wheel speed for
+  // odometry still needs the final-drive ratio applied pipeline-side.
   rcl_publisher_t motor_rpm_pub;
   std_msgs__msg__Float32 motor_rpm_msg;
   motor_rpm_msg.data = 0.0f;
@@ -750,7 +753,8 @@ void ros_task_run(void)
                             / STEERING_RATIO;
         (void)rcl_publish(&steering_pub, &steering_msg, NULL);
 
-        // Motor RPM — placeholder, no RPM sensor on uDV
+        // Motor RPM — mechanical shaft rpm from the ECU (CAN 0x506)
+        motor_rpm_msg.data = (float)can_c_get_motor_rpm();
         (void)rcl_publish(&motor_rpm_pub, &motor_rpm_msg, NULL);
 
 

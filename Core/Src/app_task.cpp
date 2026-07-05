@@ -74,6 +74,14 @@ static constexpr float    INSPECTION_STEER_FREQ_HZ = 0.3f;
 static constexpr uint32_t INSPECTION_STEER_DT_MS   = 200u;
 static constexpr uint32_t INSPECTION_DURATION_MS   = 30000u;   /* 30 s demo */
 
+/* ECU torque stream (0x507) is a 20 ms cyclic per the ECU contract — pace
+ * every torque/steer TX to it (the control loop itself runs ~1 kHz and
+ * would otherwise flood the shared ACU bus). */
+static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
+/* DV ready-to-drive request (0x510) retry period until the ECU confirms
+ * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
+static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
+
 static inline float inspection_sweep_deg(uint32_t elapsed_ms)
 {
     float t = (float)elapsed_ms / 1000.0f;
@@ -424,11 +432,41 @@ extern "C" void StartAppTask(void *argument)
                 }
             }
 
+            /* Pace all torque/steer TX to the ECU's 20 ms cycle (0x507
+             * contract). One shared clock so DRIVING and not-DRIVING keep
+             * the same steady stream cadence the ECU stale-detector needs. */
+            static uint32_t last_torque_tx_ms = 0;
+            bool torque_tx_due =
+                ((uint32_t)(now_ms - last_torque_tx_ms) >= TORQUE_TX_PERIOD_MS);
+            if (torque_tx_due)
+            {
+                last_torque_tx_ms = now_ms;
+            }
+
             // Send zero control when not driving (safety)
-            if (as_state != ASState::DRIVING)
+            if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
                 Can::sendSteer(0.0f);
+            }
+
+            /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a
+             * pipeline mission without the ECU's confirm (g_can_r2d, from
+             * 0x511), re-request periodically. The ECU only honours it while
+             * its own brake sensor confirms the EBS holding (0x505 verdict)
+             * and latches the edge for the drive cycle — once confirmed,
+             * requesting stops. Standalone missions skip this: they command
+             * no torque, so the ECU stays out of DV mode. */
+            if (as_state == ASState::DRIVING &&
+                mission_needs_pipeline(current_mission_id) &&
+                !g_can_r2d.load())
+            {
+                static uint32_t last_r2d_req_ms = 0;
+                if ((uint32_t)(now_ms - last_r2d_req_ms) >= R2D_REQ_PERIOD_MS)
+                {
+                    last_r2d_req_ms = now_ms;
+                    Can::sendR2dRequest(1u);
+                }
             }
 
             // State-specific logic
@@ -493,21 +531,25 @@ extern "C" void StartAppTask(void *argument)
                         // never latch the last throttle/steering. Emergency and
                         // finished are handled by the transition chain above —
                         // they move us out of DRIVING before this runs.
-                        // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
-                        // CONTROL_STEER frames, units, sign and full-lock scaling
-                        // against the vehicle CAN DBC. The values here are the
-                        // normalised [-1,1] contract, clamped on receive.
+                        // Accel: 0x507 contract CONFIRMED against the ECU .def
+                        // (int32 LE percent — conversion in Can::sendAccel).
+                        // TODO(G3, on-car): 0x508 steer has no ECU consumer on
+                        // the current map — confirm who reads it (steering is
+                        // commanded via 0x020) or retire it.
                         bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
                                          ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
-                        if (cmd_fresh)
+                        if (torque_tx_due)
                         {
-                            Can::sendAccel(g_accel_cmd.load());
-                            Can::sendSteer(g_steer_cmd.load());
-                        }
-                        else
-                        {
-                            Can::sendAccel(0.0f);
-                            Can::sendSteer(0.0f);
+                            if (cmd_fresh)
+                            {
+                                Can::sendAccel(g_accel_cmd.load());
+                                Can::sendSteer(g_steer_cmd.load());
+                            }
+                            else
+                            {
+                                Can::sendAccel(0.0f);
+                                Can::sendSteer(0.0f);
+                            }
                         }
                     }
                     else if (current_mission_id == MISSION_INSPECTION)
