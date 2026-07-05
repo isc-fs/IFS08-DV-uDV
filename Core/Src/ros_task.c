@@ -62,6 +62,26 @@
 #define ASSI_PUB_INTERVAL_MS  100u  // /assi/state heartbeat period (~10 Hz)
 #define IMU_QUEUE_WAIT_MS     50u   // max block on the IMU queue per loop
 
+/* Agent (DVPC) session lifecycle. The session is only created once the agent
+ * answers a ping, and is torn down + re-created if it stops answering — so
+ * the uDV recovers on its own whenever the DVPC boots after us or reboots
+ * mid-run (real-car finding: boot before the DVPC used to leave the node
+ * dead until a manual uDV reset).
+ * This task is NOT an IWDG heartbeat source (see safety_monitor.h), so
+ * waiting here indefinitely is safe — CAN + the AS state machine keep
+ * running in their own tasks. */
+#define AGENT_PING_TIMEOUT_MS   100  // per attempt while waiting for the agent
+#define AGENT_RETRY_PERIOD_MS   500  // pause between failed waiting pings
+#define AGENT_CHECK_PERIOD_MS  2000u // in-session liveness ping period
+#define AGENT_CHECK_TIMEOUT_MS   20  // in-session ping timeout (loop stall budget)
+#define AGENT_FAILS_TO_DROP       2  // consecutive failed checks -> reconnect
+
+/* Count (instead of silently ignoring) entity-creation failures — with
+ * RMW_UXRCE_MAX_* caps too low the excess entities fail here (see #67);
+ * the count is surfaced on /debug right after (re)connect. */
+#define UROS_TRY(call) \
+  do { if ((call) != RCL_RET_OK) { ++entity_init_failures; } } while (0)
+
 /* RTOS queues created in freertos.c (MX_FREERTOS_Init). */
 extern osMessageQueueId_t imuQueueHandle;
 extern osMessageQueueId_t debugQueueHandle;
@@ -257,8 +277,9 @@ void ros_task_run(void)
   DWT->CYCCNT = 0;
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
-  // Wait for USB CDC to enumerate on the host
-  osDelay(2000);
+  // Short grace for USB device init; actual host/agent readiness is handled
+  // by the ping loop below (no more blind fixed delay).
+  osDelay(500);
 
   // micro-ROS custom transport (USB CDC, HDLC framing)
   rmw_uros_set_custom_transport(
@@ -280,14 +301,41 @@ void ros_task_run(void)
     for (;;) { osDelay(1000); }
   }
 
-  // micro-ROS node
+  /* ==== Agent session lifecycle: wait -> create -> run -> destroy ==== */
+  for (;;)
+  {
+
+  /* ---- Phase 1: wait until the agent (DVPC) answers a ping. ----
+   * Session creation against a dead agent fails and used to be UNCHECKED —
+   * the node then ran with a corpse session forever and only a uDV reset
+   * (after the DVPC was up) revived the topics. */
+  while (RMW_RET_OK != rmw_uros_ping_agent(AGENT_PING_TIMEOUT_MS, 1)) {
+    osDelay(AGENT_RETRY_PERIOD_MS);
+  }
+
+  /* ---- Phase 2: create the session + all entities (return codes checked
+   * or counted — see UROS_TRY / #67). ---- */
+  int entity_init_failures = 0;
+
   rclc_support_t support;
   rcl_allocator_t allocator;
   rcl_node_t node;
 
   allocator = rcl_get_default_allocator();
-  rclc_support_init(&support, 0, NULL, &allocator);
-  rclc_node_init_default(&node, "cubemx_node", "", &support);
+  if (RCL_RET_OK != rclc_support_init(&support, 0, NULL, &allocator)) {
+    /* Agent vanished between ping and session handshake — retry. */
+    osDelay(AGENT_RETRY_PERIOD_MS);
+    continue;
+  }
+  /* Teardown must not block per-entity when the agent is already gone. */
+  (void)rmw_uros_set_context_entity_destroy_session_timeout(
+      rcl_context_get_rmw_context(&support.context), 0);
+
+  if (RCL_RET_OK != rclc_node_init_default(&node, "cubemx_node", "", &support)) {
+    (void)rclc_support_fini(&support);
+    osDelay(AGENT_RETRY_PERIOD_MS);
+    continue;
+  }
 
   // Time synchronization — up to 5 attempts, continue regardless.
   for (int ts_try = 0; ts_try < 5 && !rmw_uros_epoch_synchronized(); ts_try++) {
@@ -308,37 +356,37 @@ void ros_task_run(void)
   // remap), so this matches. Settled 2026-07-04: standardised on /imu
   // (the pipeline dropped its old /imu/data_raw car remap).
   rcl_publisher_t imu_pub;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &imu_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
-    "imu");
+    "imu"));
 
   // IMU debug status publisher
   rcl_publisher_t imu_debug_pub;
   std_msgs__msg__Int32 debug_msg;
   debug_msg.data = 0;
-  rclc_publisher_init_default(
+  UROS_TRY(rclc_publisher_init_default(
     &imu_debug_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "imu/status");
+    "imu/status"));
 
   // Steering angle publisher (~10 Hz) — radians, as expected by pipeline
   rcl_publisher_t steering_pub;
   std_msgs__msg__Float32 steering_msg;
   steering_msg.data = 0.0f;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &steering_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-    "steering_angle");
+    "steering_angle"));
 
   // Motor RPM publisher (~10 Hz) — placeholder: no RPM sensor on uDV
   rcl_publisher_t motor_rpm_pub;
   std_msgs__msg__Float32 motor_rpm_msg;
   motor_rpm_msg.data = 0.0f;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &motor_rpm_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
-    "motor_rpm");
+    "motor_rpm"));
 
   // Steering feedback publisher (20 Hz)
   // data[0] = angle_actual (deg) — LWS physical angle
@@ -351,46 +399,52 @@ void ros_task_run(void)
   steering_fb_msg.data.data     = steering_fb_data;
   steering_fb_msg.data.size     = 3;
   steering_fb_msg.data.capacity = 3;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &steering_fb_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-    "steering/feedback");
+    "steering/feedback"));
 
   // RES status publisher (~10 Hz)
   rcl_publisher_t res_pub;
   std_msgs__msg__Int32 res_msg;
   res_msg.data = 0;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &res_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "res/status");
+    "res/status"));
 
   // AMI mission publisher (~10 Hz)
   rcl_publisher_t ami_pub;
   std_msgs__msg__Int32 ami_msg;
   ami_msg.data = -1;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &ami_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "ami/mission");
+    "ami/mission"));
 
   // GO signal publisher (~10 Hz): 0=no GO, 1=GO active
   rcl_publisher_t go_pub;
   std_msgs__msg__Int32 go_msg;
   go_msg.data = 0;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &go_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "res/go");
+    "res/go"));
 
-  // Debug string publisher
+  // Debug string publisher. The msg is STATIC and zeroed only once: its
+  // .data string grows by heap assignment, so re-zeroing on an agent
+  // reconnect would leak the previous buffer (same as imu_msg below).
   rcl_publisher_t debug_pub;
-  std_msgs__msg__String debug_str_msg;
-  memset(&debug_str_msg, 0, sizeof(debug_str_msg));
-  rclc_publisher_init_default(
+  static std_msgs__msg__String debug_str_msg;
+  static bool debug_str_inited = false;
+  if (!debug_str_inited) {
+    debug_str_inited = true;
+    memset(&debug_str_msg, 0, sizeof(debug_str_msg));
+  }
+  UROS_TRY(rclc_publisher_init_default(
     &debug_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String),
-    "debug");
+    "debug"));
 
   // AS state publisher (~10 Hz) — FS-Rules T14.9 byte, mirrors CAN 0x100.
   // The DV pipeline (mission_control) reconciles its lifecycle off this
@@ -401,10 +455,10 @@ void ros_task_run(void)
   rcl_publisher_t assi_pub;
   std_msgs__msg__UInt8 assi_msg;
   assi_msg.data = 0;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &assi_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
-    "assi/state");
+    "assi/state"));
 
   // /assi/pub_gap_max_ms (Int32): running max gap (ms) between successive
   // /assi/state publishes. Instrumentation for finding #4 — lets the DV
@@ -414,10 +468,10 @@ void ros_task_run(void)
   rcl_publisher_t assi_gap_pub;
   std_msgs__msg__Int32 assi_gap_msg;
   assi_gap_msg.data = 0;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &assi_gap_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "assi/pub_gap_max_ms");
+    "assi/pub_gap_max_ms"));
 
   // Raw AS-state publisher (~10 Hz) — the AS state machine state itself
   // (ASState: OFF=0 READY=1 DRIVING=2 EMERGENCY=3 FINISHED=4), distinct
@@ -426,103 +480,127 @@ void ros_task_run(void)
   rcl_publisher_t as_state_pub;
   std_msgs__msg__UInt8 as_state_msg;
   as_state_msg.data = 0;
-  rclc_publisher_init_best_effort(
+  UROS_TRY(rclc_publisher_init_best_effort(
     &as_state_pub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
-    "as_state");
+    "as_state"));
 
   // --- Subscriber ---
 
   // /cmd_test subscriber (toggle LED on receive)
   rcl_subscription_t cmd_test_sub;
   std_msgs__msg__Int32 cmd_test_msg;
-  rclc_subscription_init_default(
+  UROS_TRY(rclc_subscription_init_default(
     &cmd_test_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "cmd_test");
+    "cmd_test"));
 
   // /dv/status subscriber — pipeline lifecycle byte. RELIABLE (default)
   // matches the pipeline's latched RELIABLE+TRANSIENT_LOCAL publisher and
   // guarantees we never miss a status transition.
   rcl_subscription_t dv_status_sub;
   std_msgs__msg__UInt8 dv_status_msg;
-  rclc_subscription_init_default(
+  UROS_TRY(rclc_subscription_init_default(
     &dv_status_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
-    DV_TOPIC_DV_STATUS);
+    DV_TOPIC_DV_STATUS));
 
   // /ctrl/cmd subscriber — normalised drive command. MUST be BEST_EFFORT:
   // the pipeline publishes it best-effort, and a reliable reader would fail
   // DDS QoS matching and receive nothing (car sits still, no error).
   rcl_subscription_t ctrl_cmd_sub;
   geometry_msgs__msg__Twist ctrl_cmd_msg;
-  rclc_subscription_init_best_effort(
+  UROS_TRY(rclc_subscription_init_best_effort(
     &ctrl_cmd_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
-    DV_TOPIC_CTRL_CMD);
+    DV_TOPIC_CTRL_CMD));
 
   // --- SERVICIOS ---
   rcl_service_t Activate_stearing;
   std_srvs__srv__SetBool_Request act_steer_srv_req = {0};
   std_srvs__srv__SetBool_Response act_steer_srv_res = {0};
 
-  rclc_service_init_default(
+  UROS_TRY(rclc_service_init_default(
     &Activate_stearing, &node,
     ROSIDL_GET_SRV_TYPE_SUPPORT(std_srvs, srv, SetBool),
     "activate_steering"
-  );
+  ));
 
   rcl_service_t Force_EBS;
   std_srvs__srv__SetBool_Request force_ebs_srv_req = {0};
   std_srvs__srv__SetBool_Response force_ebs_srv_res = {0};
 
-  rclc_service_init_default(
+  UROS_TRY(rclc_service_init_default(
     &Force_EBS, &node,
     ROSIDL_GET_SRV_TYPE_SUPPORT(std_srvs, srv, SetBool),
     "force_ebs"
-  );
+  ));
 
   // --- Executor ---
   // One handle per subscription + service: cmd_test, dv/status, ctrl/cmd,
   // activate_steering, force_ebs = 5.
   rclc_executor_t executor;
-  rclc_executor_init(&executor, &support.context, 5, &allocator);
+  if (RCL_RET_OK != rclc_executor_init(&executor, &support.context, 5, &allocator)) {
+    (void)rcl_node_fini(&node);
+    (void)rclc_support_fini(&support);
+    osDelay(AGENT_RETRY_PERIOD_MS);
+    continue;
+  }
 
-  rclc_executor_add_subscription(
+  UROS_TRY(rclc_executor_add_subscription(
     &executor, &cmd_test_sub, &cmd_test_msg,
-    &cmd_test_callback, ON_NEW_DATA);
+    &cmd_test_callback, ON_NEW_DATA));
 
-  rclc_executor_add_subscription(
+  UROS_TRY(rclc_executor_add_subscription(
     &executor, &dv_status_sub, &dv_status_msg,
-    &dv_status_callback, ON_NEW_DATA);
+    &dv_status_callback, ON_NEW_DATA));
 
-  rclc_executor_add_subscription(
+  UROS_TRY(rclc_executor_add_subscription(
     &executor, &ctrl_cmd_sub, &ctrl_cmd_msg,
-    &ctrl_cmd_callback, ON_NEW_DATA);
+    &ctrl_cmd_callback, ON_NEW_DATA));
 
-  rclc_executor_add_service(
+  UROS_TRY(rclc_executor_add_service(
     &executor, &Activate_stearing, &act_steer_srv_req, &act_steer_srv_res,
-    &activate_steering_callback);
+    &activate_steering_callback));
 
-  rclc_executor_add_service(
+  UROS_TRY(rclc_executor_add_service(
     &executor, &Force_EBS, &force_ebs_srv_req, &force_ebs_srv_res,
-    &force_ebs_callback);
+    &force_ebs_callback));
 
-  // Prepare IMU message (set static fields once)
-  sensor_msgs__msg__Imu imu_msg;
-  memset(&imu_msg, 0, sizeof(imu_msg));
-  rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
+  // Prepare IMU message. STATIC + one-time init: its frame_id string is
+  // heap-assigned, so re-running memset+assign on every agent reconnect
+  // would leak the previous allocation each cycle.
+  static sensor_msgs__msg__Imu imu_msg;
+  static bool imu_msg_inited = false;
+  if (!imu_msg_inited)
+  {
+    imu_msg_inited = true;
+    memset(&imu_msg, 0, sizeof(imu_msg));
+    rosidl_runtime_c__String__assign(&imu_msg.header.frame_id, "imu_link");
 
-  // Orientation not available
-  imu_msg.orientation_covariance[0] = -1.0;
+    // Orientation not available
+    imu_msg.orientation_covariance[0] = -1.0;
 
-  // BMI088 datasheet noise specs (diagonal covariance matrices)
-  imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
-  imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
-  imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
-  imu_msg.angular_velocity_covariance[0] = 1.37e-5;
-  imu_msg.angular_velocity_covariance[4] = 1.37e-5;
-  imu_msg.angular_velocity_covariance[8] = 1.37e-5;
+    // BMI088 datasheet noise specs (diagonal covariance matrices)
+    imu_msg.linear_acceleration_covariance[0] = 8.25e-4;
+    imu_msg.linear_acceleration_covariance[4] = 8.25e-4;
+    imu_msg.linear_acceleration_covariance[8] = 8.25e-4;
+    imu_msg.angular_velocity_covariance[0] = 1.37e-5;
+    imu_msg.angular_velocity_covariance[4] = 1.37e-5;
+    imu_msg.angular_velocity_covariance[8] = 1.37e-5;
+  }
+
+  // Surface any entity-init failures on /debug (RMW_UXRCE_MAX_* caps — #67):
+  // silently-missing entities (e.g. the force_ebs service) are otherwise
+  // invisible until someone calls them and nothing happens.
+  if (entity_init_failures > 0)
+  {
+    char initbuf[128];   /* debugQueue element size — must match exactly */
+    snprintf(initbuf, sizeof(initbuf),
+             "debug: uros %d entity init(s) FAILED (RMW caps? see #67)",
+             entity_init_failures);
+    osMessageQueuePut(debugQueueHandle, &initbuf, 0, 0);
+  }
 
   uint16_t slow_pub_counter    = 0;
   uint16_t steering_fb_counter = 0;
@@ -543,11 +621,37 @@ void ros_task_run(void)
   int32_t  last_res      = can_c_get_res_status(osKernelGetTickCount(), RES_TIMEOUT_MS);
   uint16_t state_dump_counter = STATE_DUMP_INTERVAL;  /* emit on the first sample */
 
+  /* Agent liveness (phase 3): periodic in-session ping; on consecutive
+     failures break out to tear the session down and re-create it once the
+     agent answers again. */
+  uint32_t last_agent_check_ms = osKernelGetTickCount();
+  int      agent_fail_count    = 0;
+
   for (;;)
   {
     imu_sample_t sample;
     osStatus_t imu_status =
         osMessageQueueGet(imuQueueHandle, &sample, NULL, IMU_QUEUE_WAIT_MS);
+
+    // --- Agent liveness check (every AGENT_CHECK_PERIOD_MS) ---
+    // A dead agent (DVPC rebooted, USB unplugged) makes every publish above
+    // fail silently; this is the only place that notices and recovers.
+    uint32_t agent_now_ms = osKernelGetTickCount();
+    if ((uint32_t)(agent_now_ms - last_agent_check_ms) >= AGENT_CHECK_PERIOD_MS)
+    {
+      last_agent_check_ms = agent_now_ms;
+      if (RMW_RET_OK != rmw_uros_ping_agent(AGENT_CHECK_TIMEOUT_MS, 1))
+      {
+        if (++agent_fail_count >= AGENT_FAILS_TO_DROP)
+        {
+          break;   /* -> teardown + back to the agent-wait loop */
+        }
+      }
+      else
+      {
+        agent_fail_count = 0;
+      }
+    }
 
     // --- /assi/state liveness heartbeat (decoupled from IMU cadence) ---
     // Paced on a fixed wall clock and evaluated every loop iteration, whether
@@ -707,4 +811,32 @@ void ros_task_run(void)
       }
     }
   }
+
+  /* ---- Phase 4: agent lost — tear everything down (frees the FreeRTOS
+   * heap the entities hold) and go back to waiting for a ping. Destroy
+   * timeouts are 0 (set at session create), so this doesn't block on the
+   * dead agent. Fini return codes are deliberately ignored: a fini that
+   * fails because the agent is gone must not stop the local cleanup. */
+  (void)rclc_executor_fini(&executor);
+  (void)rcl_service_fini(&Force_EBS, &node);
+  (void)rcl_service_fini(&Activate_stearing, &node);
+  (void)rcl_subscription_fini(&ctrl_cmd_sub, &node);
+  (void)rcl_subscription_fini(&dv_status_sub, &node);
+  (void)rcl_subscription_fini(&cmd_test_sub, &node);
+  (void)rcl_publisher_fini(&as_state_pub, &node);
+  (void)rcl_publisher_fini(&assi_gap_pub, &node);
+  (void)rcl_publisher_fini(&assi_pub, &node);
+  (void)rcl_publisher_fini(&debug_pub, &node);
+  (void)rcl_publisher_fini(&go_pub, &node);
+  (void)rcl_publisher_fini(&ami_pub, &node);
+  (void)rcl_publisher_fini(&res_pub, &node);
+  (void)rcl_publisher_fini(&steering_fb_pub, &node);
+  (void)rcl_publisher_fini(&motor_rpm_pub, &node);
+  (void)rcl_publisher_fini(&steering_pub, &node);
+  (void)rcl_publisher_fini(&imu_debug_pub, &node);
+  (void)rcl_publisher_fini(&imu_pub, &node);
+  (void)rcl_node_fini(&node);
+  (void)rclc_support_fini(&support);
+
+  } /* for(;;) — agent session lifecycle */
 }
