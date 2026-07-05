@@ -4,6 +4,7 @@
  */
 
 #include "ebs_manager.hpp"
+#include "bench_stubs.h"
 #include <atomic>
 
 extern std::atomic<float> g_can_brake_pressure;
@@ -17,6 +18,16 @@ EbsManager::EbsManager()
 
 EBSInitState EbsManager::initSequenceStep()
 {
+    /* Bench stub (bench_stubs.h toggle, 0 on dev — this branch folds away):
+     * no pneumatics/SDC on the bench, so the real self-check below can never
+     * reach Done — report Done at once so the AS state machine can arm. See
+     * bench_stubs.h (incl. the skipped SDC-close caveat). */
+    if (BENCH_STUB_EBS_INIT)
+    {
+        init_state_ = EBSInitState::Done;
+        return init_state_;
+    }
+
     switch (init_state_)
     {
         case EBSInitState::Start:
