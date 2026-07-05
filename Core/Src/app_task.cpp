@@ -67,15 +67,27 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
     return ctx;
 }
 
+/* ECU torque stream (0x507) is a 20 ms cyclic per the ECU contract — pace
+ * every torque/steer TX to it (the control loop itself runs ~1 kHz and
+ * would otherwise flood the shared ACU bus). */
+static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
+/* DV ready-to-drive request (0x510) retry period until the ECU confirms
+ * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
+static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
+
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
- * result reaches hardware). Each channel fires iff its send_* flag is set. */
-static void app_apply_mission_command(const MissionCommand& cmd)
+ * result reaches hardware). The steering-angle channel (0x020, steering bus)
+ * fires whenever the mission sets it — the mission owns its own cadence. The
+ * normalised drive channel (0x507 torque to the ECU) is gated by drive_tx_due
+ * so it keeps the ECU's 20 ms cyclic pacing (TORQUE_TX_PERIOD_MS), regardless
+ * of how often the mission's on_tick runs. */
+static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
 {
     if (cmd.send_steer_angle)
     {
         Can::sendSteeringAngle(cmd.steer_angle_deg);
     }
-    if (cmd.send_drive)
+    if (cmd.send_drive && drive_tx_due)
     {
         Can::sendAccel(cmd.accel_norm);
         Can::sendSteer(cmd.steer_norm);
@@ -472,11 +484,41 @@ extern "C" void StartAppTask(void *argument)
                 }
             }
 
+            /* Pace all torque/steer TX to the ECU's 20 ms cycle (0x507
+             * contract). One shared clock so DRIVING and not-DRIVING keep
+             * the same steady stream cadence the ECU stale-detector needs. */
+            static uint32_t last_torque_tx_ms = 0;
+            bool torque_tx_due =
+                ((uint32_t)(now_ms - last_torque_tx_ms) >= TORQUE_TX_PERIOD_MS);
+            if (torque_tx_due)
+            {
+                last_torque_tx_ms = now_ms;
+            }
+
             // Send zero control when not driving (safety)
-            if (as_state != ASState::DRIVING)
+            if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
                 Can::sendSteer(0.0f);
+            }
+
+            /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a
+             * pipeline mission without the ECU's confirm (g_can_r2d, from
+             * 0x511), re-request periodically. The ECU only honours it while
+             * its own brake sensor confirms the EBS holding (0x505 verdict)
+             * and latches the edge for the drive cycle — once confirmed,
+             * requesting stops. Standalone missions skip this: they command
+             * no torque, so the ECU stays out of DV mode. */
+            if (as_state == ASState::DRIVING &&
+                active_mission != nullptr && active_mission->needs_pipeline &&
+                !g_can_r2d.load())
+            {
+                static uint32_t last_r2d_req_ms = 0;
+                if ((uint32_t)(now_ms - last_r2d_req_ms) >= R2D_REQ_PERIOD_MS)
+                {
+                    last_r2d_req_ms = now_ms;
+                    Can::sendR2dRequest(1u);
+                }
             }
 
             // State-specific logic
@@ -556,7 +598,10 @@ extern "C" void StartAppTask(void *argument)
                         MissionCtx ctx = app_build_mission_ctx(now_ms, now_ms - mission_time);
                         if (active_mission->on_tick != nullptr)
                         {
-                            app_apply_mission_command(active_mission->on_tick(&ctx));
+                            /* Pipeline missions stream the 0x507 torque paced to
+                             * the ECU's 20 ms cycle (torque_tx_due); a mission's
+                             * steering-angle channel keeps its own cadence. */
+                            app_apply_mission_command(active_mission->on_tick(&ctx), torque_tx_due);
                         }
                         if (active_mission->is_complete != nullptr &&
                             active_mission->is_complete(&ctx))

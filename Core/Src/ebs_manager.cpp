@@ -7,7 +7,7 @@
 #include "bench_stubs.h"
 #include <atomic>
 
-extern std::atomic<float> g_can_brake_pressure;
+extern std::atomic<bool> g_can_brake_over_limit;
 
 EbsManager::EbsManager()
 {
@@ -122,8 +122,11 @@ bool EbsManager::checkStoragePressures()
 
 bool EbsManager::checkBrakeLinePressure()
 {
-    float b_p = g_can_brake_pressure.load();
-    return (b_p > BRAKE_PRESSURE_THRESHOLD);
+    /* The ECU sends the verdict, not the value (0x505 VCU_brake_over_limit:
+     * brake_raw > config::BrakeDvHardRaw, ECU-owned threshold). The old
+     * float32-bar reading + local threshold never matched what the ECU
+     * actually transmits. */
+    return g_can_brake_over_limit.load();
 }
 
 bool EbsManager::ASBChecksOK()
