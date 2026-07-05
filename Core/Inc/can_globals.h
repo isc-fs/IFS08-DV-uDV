@@ -35,12 +35,20 @@ extern osMessageQueueId_t resRxQueueHandle;
 #ifdef __cplusplus
 #include <atomic>
 
-extern std::atomic<bool> g_can_r2d;
-extern std::atomic<bool> g_imu_vehicle_standstill;
+extern std::atomic<bool> g_can_r2d;             /* ECU 0x511 DV R2D confirm */
+extern std::atomic<bool> g_imu_vehicle_standstill; /* |rpm| < thresh (ECU 0x506) */
 extern std::atomic<int>  g_can_mission_id;
 extern std::atomic<bool> g_can_listen_go;
-extern std::atomic<bool> g_can_ts_active;
-extern std::atomic<float> g_can_brake_pressure;
+extern std::atomic<bool> g_can_ts_active;       /* ECU 0x504 */
+/* ECU 0x505 verdict: brake pressure above the hard-braking limit
+ * (config::BrakeDvHardRaw, ECU-owned). Replaces the old float32 "bar"
+ * reading — the ECU sends the verdict, not the value. */
+extern std::atomic<bool> g_can_brake_over_limit;
+/* ECU 0x506: mechanical shaft rpm (signed; negative = reverse). */
+extern std::atomic<int32_t> g_can_motor_rpm;
+/* No CAN source on the current ECU contract (the old 0x506 mapping now
+ * carries motor rpm); stays false until a source exists — see
+ * hardware_io_read_sdc_res_open()'s pin TODO. */
 extern std::atomic<bool> g_can_sdc_res_open;
 extern std::atomic<bool> g_reset_cmd;
 
@@ -100,6 +108,7 @@ extern "C" {
 float    can_c_get_steering_angle_deg(void);
 int32_t  can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms);
 int32_t  can_c_get_mission_index(void);
+int32_t  can_c_get_motor_rpm(void);
 uint8_t  can_c_get_go_signal(void);
 float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);

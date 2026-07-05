@@ -7,17 +7,32 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* CAN IDs — FDCAN3 (AMI + steering bus + autonomy control) */
+/* CAN IDs — FDCAN3 (AMI + steering bus, local DV peripherals) */
 static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
 static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au; /* echo back to AMI */
-static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u;
-static constexpr uint32_t CAN_ID_BRAKE_PRESSURE    = 0x505u;
-static constexpr uint32_t CAN_ID_SDC_RES_OPEN      = 0x506u;
-static constexpr uint32_t CAN_ID_CONTROL_ACCEL     = 0x507u;
-static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u;
-static constexpr uint32_t CAN_ID_R2D               = 0x509u;
+static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u; /* legacy — no known consumer */
+/* ASSI status byte on the local FDCAN3 bus. The ECU->AMS VCU_heartbeat also
+ * uses 0x100 but lives on the ACU bus (uDV FDCAN2) — different wire, no
+ * clash; do NOT emit this id on FDCAN2. */
 static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
 static constexpr uint32_t CAN_ID_IMU               = 0x001u;
+
+/* CAN IDs — FDCAN2 (ACU bus: ECU/VCU + AMS). The ECU<->uDV contract,
+ * matching IFS08-CE-ECU Core/Inc/can/messages/*.def (ECU side is
+ * HIL-validated, Block L). The ECU's own FDCAN2 is the same wire. */
+static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u; /* ECU->uDV: byte0 bool, 100 ms */
+static constexpr uint32_t CAN_ID_BRAKE_OVER_LIMIT  = 0x505u; /* ECU->uDV: byte0 bool verdict
+                                                                (brake_raw > BrakeDvHardRaw), 100 ms */
+static constexpr uint32_t CAN_ID_MOTOR_RPM         = 0x506u; /* ECU->uDV: int32 LE mechanical
+                                                                shaft rpm (signed), 10 ms */
+static constexpr uint32_t CAN_ID_TORQUE_CMD        = 0x507u; /* uDV->ECU: int32 LE percent
+                                                                0..100, 20 ms; stale => 0 */
+static constexpr uint32_t CAN_ID_R2D_REQUEST       = 0x510u; /* uDV->ECU: byte0 != 0 requests
+                                                                DV ready-to-drive (after GO) */
+static constexpr uint32_t CAN_ID_R2D_CONFIRM       = 0x511u; /* ECU->uDV: byte0 != 0 confirms
+                                                                DV R2D latched (acyclic) */
+/* |mechanical rpm| below this counts as vehicle standstill (0x506 decode). */
+static constexpr int32_t  RPM_STANDSTILL           = 10;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
 static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x010u;
@@ -38,6 +53,7 @@ static constexpr uint32_t CAN_ID_DL_DYN2           = 0x501u;
 static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 
 extern FDCAN_HandleTypeDef hfdcan1;
+extern FDCAN_HandleTypeDef hfdcan2;
 extern FDCAN_HandleTypeDef hfdcan3;
 
 /* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
@@ -116,6 +132,53 @@ void initRes()
     sendNmtSetOperational();
 }
 
+void initEcu()
+{
+    /* FDCAN2 = the ACU bus (ECU/VCU + AMS). Pinned and CubeMX-initialised
+     * since forever but never STARTED — which is why "0x504 was never
+     * received" on the car: the ECU transmits on this wire, not on FDCAN3.
+     *
+     * Accept only the ECU->uDV contract range 0x504..0x511 (one RANGE
+     * filter — StdFiltersNbr is 1). Everything else on the ACU bus (AMS
+     * heartbeats etc.) is rejected so it can't flood the shared RX queue. */
+    FDCAN_FilterTypeDef filter = {
+        .IdType       = FDCAN_STANDARD_ID,
+        .FilterIndex  = 0,
+        .FilterType   = FDCAN_FILTER_RANGE,
+        .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
+        .FilterID1    = CAN_ID_TS_ACTIVE,     /* 0x504 */
+        .FilterID2    = CAN_ID_R2D_CONFIRM,   /* 0x511 */
+    };
+    if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filter) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan2,
+            FDCAN_REJECT,
+            FDCAN_REJECT,
+            FDCAN_REJECT_REMOTE,
+            FDCAN_REJECT_REMOTE) != HAL_OK) {
+        Error_Handler();
+    }
+
+    /* CubeMX only enables FDCAN2_IT1 (same class of gotcha as FDCAN1's
+     * IT0 — see initRes). Instead of adding another IRQ handler, route the
+     * RX-FIFO0 new-message interrupt onto the already-wired LINE1. */
+    if (HAL_FDCAN_ConfigInterruptLines(&hfdcan2,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
+            FDCAN_INTERRUPT_LINE1) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
 void sendControl(float accel, float steer)
 {
     // Backwards-compatible helper: send two separate frames for accel and steer
@@ -128,7 +191,7 @@ void sendAccel(float accel)
     FDCAN_TxHeaderTypeDef TxHeader;
     uint8_t TxData[4];
 
-    TxHeader.Identifier = CAN_ID_CONTROL_ACCEL;
+    TxHeader.Identifier = CAN_ID_TORQUE_CMD;
     TxHeader.IdType = FDCAN_STANDARD_ID;
     TxHeader.TxFrameType = FDCAN_DATA_FRAME;
     TxHeader.DataLength = FDCAN_DLC_BYTES_4;
@@ -138,13 +201,45 @@ void sendAccel(float accel)
     TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
     TxHeader.MessageMarker = 0;
 
-    memcpy(&TxData[0], &accel, sizeof(float));
+    /* 0x507 UDV_torque_cmd is an INTEGER percent, int32 LE 0..100 (agreed
+     * with the ECU 2026-07-03, superseding the original float32 idea — a
+     * float bit-pattern decodes as a huge int32 and the ECU clamps it to
+     * 100 %!). Input is the pipeline's normalised throttle [-1..1]; the
+     * negative half (regen/brake) has no DV torque path, so it clamps to 0.
+     * The ECU applies the same conditioning (neg -> 0, >100 -> 100). */
+    float pct_f = accel * 100.0f;
+    int32_t pct = (pct_f <= 0.0f)   ? 0
+                : (pct_f >= 100.0f) ? 100
+                : (int32_t)(pct_f + 0.5f);
+    memcpy(&TxData[0], &pct, sizeof(pct));
 
     /* TX failure (queue full / bus passive / peripheral not started) is
      * recoverable — never call Error_Handler from here.  It used to hang
      * the MCU when this function ran from an ISR before FDCAN3 was
      * started; see the watchdog boot-hang fix. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData);
+}
+
+void sendR2dRequest(uint8_t request)
+{
+    /* 0x510 UDV_r2d_request: byte0 != 0 asks the ECU for the DV
+     * ready-to-drive transition (only honoured while the ECU's own brake
+     * sensor confirms hard braking — the 0x505 verdict). The ECU latches
+     * the edge for the drive cycle and confirms on 0x511. */
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_R2D_REQUEST,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_1,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+
+    /* TX failure is recoverable — see sendAccel comment. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, &request);
 }
 
 void sendSteer(float steer)
@@ -243,34 +338,39 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
         break;
     }
 
-    /* --- Autonomy state-machine inputs (ported from fix/17) ---
-     * These populate the CAN atomics StateManager reads. Without them the
-     * state machine sees TS/brake/SDC/R2D permanently false and stays in
-     * AS Off. */
-    case CAN_ID_TS_ACTIVE:               /* 0x504 */
-        g_can_ts_active.store(msg->data[0] != 0U);
+    /* --- ECU (VCU) -> uDV contract frames ---
+     * These populate the CAN atomics StateManager / EbsManager read. The
+     * decode matches the ECU's .def files (see the id block above); the old
+     * pre-#17 layouts (0x505 float32 bar, 0x506 SDC bool, 0x509 R2D) are
+     * gone — the ECU never transmitted them. */
+    case CAN_ID_TS_ACTIVE:               /* 0x504 — byte0 bool */
+        if (msg->dlc >= 1U) {
+            g_can_ts_active.store(msg->data[0] != 0U);
+        }
         break;
 
-    case CAN_ID_BRAKE_PRESSURE:          /* 0x505 — float32 LE, bar */
+    case CAN_ID_BRAKE_OVER_LIMIT:        /* 0x505 — byte0 bool verdict */
+        if (msg->dlc >= 1U) {
+            g_can_brake_over_limit.store(msg->data[0] != 0U);
+        }
+        break;
+
+    case CAN_ID_MOTOR_RPM: {             /* 0x506 — int32 LE mechanical rpm */
         if (msg->dlc >= 4U) {
-            float brake_pressure = 0.0f;
-            memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
-            g_can_brake_pressure.store(brake_pressure);
+            int32_t rpm = 0;
+            memcpy(&rpm, msg->data, sizeof(rpm));
+            g_can_motor_rpm.store(rpm);
+            /* Standstill for the FINISHED-vs-EMERGENCY decision: the shaft
+             * not turning is the ground truth (previously never written). */
+            g_imu_vehicle_standstill.store(rpm > -RPM_STANDSTILL &&
+                                           rpm <  RPM_STANDSTILL);
         }
         break;
+    }
 
-    case CAN_ID_SDC_RES_OPEN:            /* 0x506 */
+    case CAN_ID_R2D_CONFIRM:             /* 0x511 — ECU latched DV R2D */
         if (msg->dlc >= 1U) {
-            g_can_sdc_res_open.store(msg->data[0] != 0U);
-        }
-        break;
-
-    case CAN_ID_R2D:                     /* 0x509 — gated by listen_go */
-        if (msg->dlc >= 1U) {
-            bool r2d_received = (msg->data[0] != 0U);
-            if (r2d_received && g_can_listen_go.load()) {
-                g_can_r2d.store(true);
-            }
+            g_can_r2d.store(msg->data[0] != 0U);
         }
         break;
 
@@ -572,6 +672,13 @@ extern "C" int32_t can_c_get_mission_index(void)
 extern "C" uint8_t can_c_get_go_signal(void)
 {
     return g_res_go_signal.load();
+}
+
+extern "C" int32_t can_c_get_motor_rpm(void)
+{
+    /* Mechanical shaft rpm from the ECU (0x506, 10 ms). The ECU already
+     * divides the inverter's electrical rpm by the pole-pair count. */
+    return g_can_motor_rpm.load();
 }
 
 extern "C" uint8_t can_c_get_assi_status_code(void)
