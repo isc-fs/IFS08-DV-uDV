@@ -15,6 +15,8 @@
 #                           real against a controllable hardware_io stub)
 #   test_rules_compliance — FS-Rules timing-budget static_asserts
 #   test_as_transition    — pure AS transition (pipeline handshake + DV watchdog)
+#   test_missions         — mission registry + per-mission bodies (inspection
+#                           sweep/cadence/self-finish, pipeline relay, ebs stub)
 #   test_attitude         — complementary-filter roll/pitch (attitude.c) [ex-dev]
 #   test_bmi088_convert   — BMI088 raw->scaled + bind validation (bmi088.c) [ex-dev]
 
@@ -48,7 +50,15 @@ MOCKS       := mocks
 SENS_CFLAGS := -std=c11 -I$(MOCKS) -I$(CORE_INC) -Wall -Wextra -g -O0
 
 BINS := test_safety_eval test_state_machine test_rules_compliance \
-        test_as_transition test_attitude test_bmi088_convert
+        test_as_transition test_missions test_attitude test_bmi088_convert
+
+# Mission suite — pure mission bodies + registry, no HAL/RTOS/CAN. Strict flags
+# (-Werror): new dependency-free code, held to the same bar as safety_eval.
+MISSION_SRCS := test_missions.cpp \
+                $(CORE_SRC)/mission_registry.cpp \
+                $(CORE_SRC)/mission_inspection.cpp \
+                $(CORE_SRC)/mission_pipeline.cpp \
+                $(CORE_SRC)/mission_ebstest.cpp
 
 .PHONY: all test clean
 all: test
@@ -74,6 +84,12 @@ test_rules_compliance: test_rules_compliance.cpp safety_eval.o
 test_as_transition: test_as_transition.cpp
 	$(CXX) $(SM_CXXFLAGS) -o $@ test_as_transition.cpp
 
+# ---- suite 4b: mission registry + per-mission bodies --------------------
+# Pure modules (mission.h only): link the real mission sources directly, no
+# stubs. Strict CXXFLAGS with -Werror.
+test_missions: $(MISSION_SRCS)
+	$(CXX) $(CXXFLAGS) -o $@ $(MISSION_SRCS)
+
 # ---- suite 5: attitude math (complementary filter, roll/pitch) ----------
 # Links the real Core/Src/attitude.c against the HAL mock; needs libm.
 test_attitude: test_attitude.c $(CORE_SRC)/attitude.c mocks/hal_stubs.c mocks/i2c_utils_stubs.c
@@ -91,6 +107,7 @@ test: $(BINS)
 	@echo "=== test_state_machine ===";    ./test_state_machine
 	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
 	@echo "=== test_as_transition ===";    ./test_as_transition
+	@echo "=== test_missions ===";         ./test_missions
 	@echo "=== test_attitude ===";         ./test_attitude
 	@echo "=== test_bmi088_convert ===";   ./test_bmi088_convert
 

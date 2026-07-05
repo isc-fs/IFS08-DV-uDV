@@ -41,6 +41,12 @@ struct AsInputs {
                                     and a stale pipeline never trips it. */
     bool mission_complete; /**< a standalone mission self-reported done (e.g. the
                                 inspection sweep timer elapsed) -> DRIVING to FINISHED */
+    bool mission_valid;    /**< the selected AMI code maps to a real mission
+                                (mission_for_code != nullptr). GO is refused when
+                                false, so an unknown / SHUTDOWN code can never enter
+                                DRIVING and release the brakes with no mission body.
+                                (Set true for every defined mission, so the normal
+                                arming path is unchanged.) */
 };
 
 /**
@@ -93,11 +99,15 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
                                                       oscillates READY<->DRIVING and
                                                       a released GO tears the
                                                       mission down mid-drive. */
-    if (in.res_go && prev == ASState::READY
+    if (in.res_go && prev == ASState::READY && in.mission_valid
         && (in.dv_ready || !in.mission_needs_pipeline))
         return ASState::DRIVING;                   /* pipeline mission: go honoured
                                                       only if DV READY; standalone:
-                                                      go alone (no pipeline). */
+                                                      go alone (no pipeline). Both
+                                                      require a valid mission: an
+                                                      unknown / SHUTDOWN code never
+                                                      drives (would release brakes
+                                                      with no mission body). */
     /* READY is gated on the EBS init sequence being complete (dev 9395936):
      * app_task only advances the init FSM while in OFF, so arming before
      * Done would strand it (ASBChecksOK never true). A Failed init keeps

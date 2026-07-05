@@ -74,9 +74,13 @@ enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_F
 // needs_pipeline defaults to TRUE so every pre-existing case keeps its
 // pipeline-gated semantics; the standalone-mission cases pass false.
 // mission_complete defaults to false; the self-finish cases pass true.
+// mission_valid defaults to TRUE (the selected AMI code maps to a real
+// mission) so every pre-existing case is unchanged; the unknown/SHUTDOWN
+// cases pass false to assert GO is refused.
 static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
                      bool ebs_done = true, bool steer_emerg = false,
-                     bool needs_pipeline = true, bool mission_complete = false)
+                     bool needs_pipeline = true, bool mission_complete = false,
+                     bool mission_valid = true)
 {
     AsInputs in{};
     in.asms_on         = asms;
@@ -94,6 +98,7 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
     in.dv_emergency    = (dv == DV_FRESH_EMERG);
     in.mission_needs_pipeline = needs_pipeline;
     in.mission_complete       = mission_complete;
+    in.mission_valid          = mission_valid;
     return in;
 }
 
@@ -201,6 +206,32 @@ static void test_named_cases(void)
              ASState::EMERGENCY);
     CHECK_EQ(ASState::DRIVING, make(true, false, RES_GO,    DV_STALE, true, false, false),
              ASState::EMERGENCY);
+
+    // --- Invalid mission (unknown / SHUTDOWN code -> mission_for_code nullptr) ---
+    // The 9th make() arg is mission_valid. GO is REFUSED when the selected code
+    // maps to no mission, so an unknown/SHUTDOWN code can never enter DRIVING
+    // and release the brakes with no mission body. READY holds.
+    // (A) would-be standalone GO (needs_pipeline=false) is refused when invalid.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_STALE, true, false, false, false, false),
+             ASState::READY);
+    // (B) would-be pipeline GO (needs_pipeline=true, DV READY) is refused too.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY, true, false, true, false, false),
+             ASState::READY);
+    // (C) an invalid mission can still ARM to READY (a safe braked state) — the
+    // gate is on GO (Driving), not on arming.
+    CHECK_EQ(ASState::OFF, make(true, true, RES_OK, DV_STALE, true, false, false, false, false),
+             ASState::READY);
+    // (D) a valid mission is unaffected: same inputs but mission_valid=true drive.
+    CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_STALE, true, false, false, false, true),
+             ASState::DRIVING);
+    // (E) safety exits still win over an invalid mission: an e-stop from READY
+    // with an invalid mission still forces EMERGENCY.
+    CHECK_EQ(ASState::READY, make(true, true, RES_ESTOP, DV_STALE, true, false, false, false, false),
+             ASState::EMERGENCY);
+    // (F) an invalid mission already DRIVING (can't happen via GO, but defensive)
+    // stays DRIVING with a healthy world — the gate is on ENTRY, not persistence.
+    CHECK_EQ(ASState::DRIVING, make(true, true, RES_GO, DV_STALE, true, false, false, false, false),
+             ASState::DRIVING);
 }
 
 // ---- 2. exhaustive invariant sweep ----------------------------------
@@ -219,22 +250,31 @@ static void test_invariants(void)
            for (int se = 0; se < 2; ++se)
             for (int np = 0; np < 2; ++np)
              for (int mc = 0; mc < 2; ++mc)
+              for (int mv = 0; mv < 2; ++mv)
               for (ResKind res : ress)
               for (DvKind dv : dvs) {
                 AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0,
-                                   np != 0, mc != 0);
+                                   np != 0, mc != 0, mv != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
                 if (!in.asms_on) { CHECK_TRUE(out == ASState::OFF); continue; }
 
                 // INV2 Driving gate: the ONLY way to *enter* Driving (from a
-                // non-Driving state) is prev==READY && RES go && the mission's
-                // start condition — a fresh DV READY for a pipeline mission, or
-                // nothing extra for a standalone one.
+                // non-Driving state) is prev==READY && RES go && a VALID mission
+                // && the mission's start condition — a fresh DV READY for a
+                // pipeline mission, or nothing extra for a standalone one.
                 if (out == ASState::DRIVING && prev != ASState::DRIVING) {
                     CHECK_TRUE(prev == ASState::READY && in.res_go &&
+                               in.mission_valid &&
                                (in.dv_ready || !in.mission_needs_pipeline));
+                }
+
+                // INV2b mission-valid gate: an invalid mission (unknown /
+                // SHUTDOWN code) can NEVER enter Driving from a non-Driving
+                // state, regardless of every other input.
+                if (prev != ASState::DRIVING && !in.mission_valid) {
+                    CHECK_TRUE(out != ASState::DRIVING);
                 }
 
                 // INV3/INV4 latches: Emergency/Finished never spontaneously

@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <cmath>
 
 extern "C" {
     #include "FreeRTOS.h"
@@ -32,6 +31,7 @@ extern "C" {
 #include "can_task.h"
 #include "ros_globals.h"
 #include "can_globals.h"
+#include "mission.h"           /* per-mission dispatch (Mission vtable, registry) */
 
 extern "C" {
     #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
@@ -41,43 +41,45 @@ extern "C" {
  * Mission dispatch
  *
  * The AMI board sends the 0-based mission menu index on CAN 0x503 byte[0]
- * (see IFS08-DV_AMI Core/Src/ami.c `missions[]`). Autonomous missions are
- * driven by the DV pipeline over /ctrl/cmd; the standalone ones (Inspection,
- * EBS test) run open-loop in this firmware with no pipeline.
+ * (see IFS08-DV_AMI Core/Src/ami.c `missions[]`). app_task resolves the code
+ * to a `const Mission*` via mission_for_code() and drives it through the
+ * Mission vtable (mission.h). Each mission's control law lives in its own TU
+ * (mission_inspection.cpp / mission_pipeline.cpp / ...). Pipeline missions
+ * (accel/skidpad/autocross/trackdrive) are driven by the DV pipeline over
+ * /ctrl/cmd; standalone ones (inspection, EBS test) run open-loop.
+ *
+ * A mission body is PURE: it consumes a MissionCtx snapshot and returns a
+ * MissionCommand; this loop builds the snapshot (below) and applies the
+ * command via Can::, so no mission touches the CAN driver directly.
  * ------------------------------------------------------------------------ */
-enum AmiMission {
-    MISSION_MANUAL     = 0,
-    MISSION_ACCEL      = 1,
-    MISSION_SKIDPAD    = 2,
-    MISSION_AUTOCROSS  = 3,
-    MISSION_TRACKDRIVE = 4,
-    MISSION_EBS_TEST   = 5,
-    MISSION_INSPECTION = 6,
-    MISSION_SHUTDOWN   = 7,
-};
-
-/* Missions whose actuation comes from the DV pipeline (/ctrl/cmd). The rest
- * are standalone: run open-loop here, GO is not gated on the pipeline, and a
- * stale /dv/status does not trip them. */
-static inline bool mission_needs_pipeline(int m)
+static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
 {
-    return m == MISSION_ACCEL || m == MISSION_SKIDPAD ||
-           m == MISSION_AUTOCROSS || m == MISSION_TRACKDRIVE;
+    MissionCtx ctx;
+    ctx.now_ms             = now_ms;
+    ctx.mission_elapsed_ms = elapsed_ms;
+    /* /ctrl/cmd freshness — the same window the old inline pipeline branch
+     * used, so a dropped link zeroes actuation within DV_CTRL_CMD_STALE_MS. */
+    uint32_t stamp = g_ctrl_cmd_stamp_ms.load();
+    ctx.ctrl_cmd_fresh = (stamp != 0u) &&
+                         ((now_ms - stamp) < DV_CTRL_CMD_STALE_MS);
+    ctx.ctrl_accel = g_accel_cmd.load();
+    ctx.ctrl_steer = g_steer_cmd.load();
+    return ctx;
 }
 
-/* Inspection open-loop steering sweep: ±INSPECTION_STEER_AMP_DEG at
- * INSPECTION_STEER_FREQ_HZ, one 0x020 angle command per INSPECTION_STEER_DT_MS.
- * Phase derives from the mission-elapsed time so each run starts clean. */
-static constexpr float    TWO_PI                   = 6.283185307f;
-static constexpr float    INSPECTION_STEER_AMP_DEG = 90.0f;
-static constexpr float    INSPECTION_STEER_FREQ_HZ = 0.3f;
-static constexpr uint32_t INSPECTION_STEER_DT_MS   = 200u;
-static constexpr uint32_t INSPECTION_DURATION_MS   = 30000u;   /* 30 s demo */
-
-static inline float inspection_sweep_deg(uint32_t elapsed_ms)
+/* Apply a mission's actuation intent to the CAN bus (the only place a mission
+ * result reaches hardware). Each channel fires iff its send_* flag is set. */
+static void app_apply_mission_command(const MissionCommand& cmd)
 {
-    float t = (float)elapsed_ms / 1000.0f;
-    return INSPECTION_STEER_AMP_DEG * sinf(TWO_PI * INSPECTION_STEER_FREQ_HZ * t);
+    if (cmd.send_steer_angle)
+    {
+        Can::sendSteeringAngle(cmd.steer_angle_deg);
+    }
+    if (cmd.send_drive)
+    {
+        Can::sendAccel(cmd.accel_norm);
+        Can::sendSteer(cmd.steer_norm);
+    }
 }
 
 /**
@@ -200,10 +202,24 @@ extern "C" void StartAppTask(void *argument)
     bool set_mission_sent = false;
     bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
 
-    /* Standalone-mission (inspection / EBS test) run state. */
-    uint32_t mission_time = 0;         /* tick the current DRIVING run began   */
-    uint32_t last_steer_emit = 0;      /* rate-limit for the inspection sweep  */
-    bool     mission_complete = false; /* open-loop mission done -> FINISHED    */
+    /* Mission run state. mission_time stamps the current DRIVING run so the
+     * mission clock (MissionCtx.mission_elapsed_ms) is relative to the GO edge;
+     * mission_complete latches a standalone mission's self-finish -> FINISHED.
+     * (The steering rate-limit now lives inside the mission, not here.)
+     *
+     * active_mission is the mission BOUND to the current DRIVING run: captured
+     * from the selected mission on the GO edge and used for all of on_enter /
+     * on_tick / is_complete / on_exit until the run ends. Binding the run means
+     * a mid-run change of the selected code (a stray/corrupt 0x503 — the AMI
+     * latches one mission per power cycle, so it can't happen normally) can
+     * neither swap the running mission's actuation nor null it mid-drive (which
+     * would leave DRIVING with brakes released and no command). It is non-null
+     * for exactly the span as_state == DRIVING (set on the GO edge, which the
+     * mission_valid gate only allows for a real mission; cleared when leaving
+     * DRIVING). */
+    uint32_t       mission_time     = 0;
+    bool           mission_complete = false;
+    const Mission* active_mission   = nullptr;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -304,6 +320,11 @@ extern "C" void StartAppTask(void *argument)
         {
             current_mission_id = MISSION_INSPECTION;
         }
+        /* Resolve the mission ONCE per tick. nullptr = unknown / non-driving
+         * code (SHUTDOWN, aux): the transition refuses GO (mission_valid) so it
+         * can never enter DRIVING. Used below for the transition inputs, the
+         * GO/FINISHED edges and the per-tick actuation dispatch. */
+        const Mission* mission = mission_for_code(current_mission_id);
 
         // Decide the next AS state via the pure, host-tested transition (see
         // as_transition.hpp). dv_* fold in freshness: the "go" gate needs a
@@ -324,8 +345,16 @@ extern "C" void StartAppTask(void *argument)
         as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
         as_in.dv_emergency = dv_fresh && (dv_status == DV_STATUS_EMERGENCY ||
                                           dv_status == DV_STATUS_FAILED);
-        as_in.mission_needs_pipeline = mission_needs_pipeline(current_mission_id);
+        /* While already DRIVING the run is bound to active_mission (captured at
+         * GO), so the pipeline/heartbeat rules follow the mission that is
+         * actually running, immune to a mid-run code change. Before DRIVING the
+         * selected mission drives the entry gate. mission_valid always reflects
+         * the selected code (it only gates the READY->DRIVING entry). */
+        const Mission* gate_mission =
+            (previous_as_state == ASState::DRIVING) ? active_mission : mission;
+        as_in.mission_needs_pipeline = (gate_mission != nullptr) && gate_mission->needs_pipeline;
         as_in.mission_complete       = mission_complete;
+        as_in.mission_valid          = (mission != nullptr);
 
         /* Bench stub (bench_stubs.h toggle, 0 on dev — this branch folds
          * away): no DVPC on the bench. While NO /dv/status has ever arrived,
@@ -342,21 +371,40 @@ extern "C" void StartAppTask(void *argument)
 
         as_state = as_next_state(previous_as_state, as_in);
 
-        /* Steering-motor lifecycle + standalone-mission clock, driven off the
-         * AS-state edges:
-         *   READY -> DRIVING (GO): energise the steering and (re)start the
-         *   mission clock so the inspection sweep begins from phase 0.
-         *   -> FINISHED: de-energise the steering. */
+        /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
+         * edges:
+         *   READY -> DRIVING (GO): energise the steering, (re)start the mission
+         *   clock so the mission begins from elapsed 0, and fire mission
+         *   on_enter (resets the mission's internal state).
+         *   -> FINISHED: de-energise the steering and fire mission on_exit. */
         if (as_state == ASState::DRIVING && previous_as_state != ASState::DRIVING)
         {
+            /* Bind the run to the selected mission. mission is non-null here: the
+             * mission_valid gate only lets a real mission reach DRIVING. */
+            active_mission   = mission;
             Can::sendSteeringStart();
             mission_time     = now_ms;
-            last_steer_emit  = 0;
             mission_complete = false;
+            if (active_mission != nullptr && active_mission->on_enter != nullptr)
+            {
+                MissionCtx ctx = app_build_mission_ctx(now_ms, 0u);
+                active_mission->on_enter(&ctx);
+            }
         }
         if (as_state == ASState::FINISHED && previous_as_state != ASState::FINISHED)
         {
             Can::sendSteeringStop();
+            if (active_mission != nullptr && active_mission->on_exit != nullptr)
+            {
+                MissionCtx ctx = app_build_mission_ctx(now_ms, now_ms - mission_time);
+                active_mission->on_exit(&ctx);
+            }
+        }
+        /* Unbind the run when leaving DRIVING (to FINISHED / EMERGENCY / OFF).
+         * Runs after the FINISHED on_exit above, which still needs it. */
+        if (previous_as_state == ASState::DRIVING && as_state != ASState::DRIVING)
+        {
+            active_mission = nullptr;
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -467,16 +515,17 @@ extern "C" void StartAppTask(void *argument)
                     ebs.deactivateEBS();  // release: DRIVING is the ONLY state
                                           // with the brakes off (req #4)
 
-                    if (mission_needs_pipeline(current_mission_id))
+                    // CAN start-mission FALLBACK (ported from dev): fire the
+                    // (currently stubbed) start-mission command once when the
+                    // legacy setup handshake reports ready, for a pipeline
+                    // mission. Coexists with the primary dv/status handshake —
+                    // the pipeline path needs nothing from this, but if the ROS
+                    // command layer is ever rewired (see ros_task_commands.h)
+                    // the legacy CAN orchestration picks up where dev left it.
+                    // This is mission-ID orchestration, not per-tick actuation,
+                    // so it stays in app_task rather than a mission body.
+                    if (active_mission != nullptr && active_mission->needs_pipeline)
                     {
-                        // --- Autonomous mission: driven by the DV pipeline ---
-                        // CAN start-mission FALLBACK (ported from dev): fire the
-                        // (currently stubbed) start-mission command once when the
-                        // legacy setup handshake reports ready. Coexists with the
-                        // primary dv/status handshake — the pipeline path needs
-                        // nothing from this, but if the ROS command layer is ever
-                        // rewired (see ros_task_commands.h) the legacy CAN
-                        // orchestration picks up where dev left it.
                         if (g_set_mission_ready.load() && !g_mission_going_cmd.load()
                             && !start_mission_sent)
                         {
@@ -485,56 +534,35 @@ extern "C" void StartAppTask(void *argument)
                                 start_mission_sent = true;
                             }
                         }
-
-                        // Stream the pipeline's latest normalised /ctrl/cmd to the
-                        // inverter / steering ECU (the ECU expects a constant
-                        // stream, so we send every tick from the latched value).
-                        // Zero it if /ctrl/cmd goes stale, so a dropped link can
-                        // never latch the last throttle/steering. Emergency and
-                        // finished are handled by the transition chain above —
-                        // they move us out of DRIVING before this runs.
-                        // TODO(G2/G3, on-car): confirm the CONTROL_ACCEL /
-                        // CONTROL_STEER frames, units, sign and full-lock scaling
-                        // against the vehicle CAN DBC. The values here are the
-                        // normalised [-1,1] contract, clamped on receive.
-                        bool cmd_fresh = (g_ctrl_cmd_stamp_ms.load() != 0u) &&
-                                         ((now_ms - g_ctrl_cmd_stamp_ms.load()) < DV_CTRL_CMD_STALE_MS);
-                        if (cmd_fresh)
-                        {
-                            Can::sendAccel(g_accel_cmd.load());
-                            Can::sendSteer(g_steer_cmd.load());
-                        }
-                        else
-                        {
-                            Can::sendAccel(0.0f);
-                            Can::sendSteer(0.0f);
-                        }
                     }
-                    else if (current_mission_id == MISSION_INSPECTION)
+
+                    // --- Per-mission actuation via the Mission vtable ---
+                    // The mission body is pure: it reads the MissionCtx snapshot
+                    // and returns the actuation, which we apply on the CAN bus.
+                    // is_complete raises mission_complete -> FINISHED next tick
+                    // (as_next_state). A pipeline mission (trackdrive) leaves
+                    // is_complete nullptr and finishes via dv/status FINISHED.
+                    // Emergency / finished exits are handled by the transition
+                    // chain above — they move us out of DRIVING before this runs.
+                    // Dispatch to the mission BOUND at the GO edge (active_mission),
+                    // not the per-tick selected code, so a mid-run 0x503 change
+                    // can neither swap the running mission's actuation nor null it
+                    // here (which would leave DRIVING with brakes off and no
+                    // command). active_mission is non-null for the whole DRIVING
+                    // span (set on the GO edge, which mission_valid only allows for
+                    // a real mission); the guard is defensive.
+                    if (active_mission != nullptr)
                     {
-                        // --- Standalone Inspection: open-loop steering demo ---
-                        // Sweep the steering (0x020) to prove the steering
-                        // system end-to-end, then self-finish after
-                        // INSPECTION_DURATION_MS. The steering motor was started
-                        // (0x010) on the GO edge above.
-                        uint32_t elapsed = now_ms - mission_time;
-                        if (now_ms - last_steer_emit >= INSPECTION_STEER_DT_MS)
+                        MissionCtx ctx = app_build_mission_ctx(now_ms, now_ms - mission_time);
+                        if (active_mission->on_tick != nullptr)
                         {
-                            Can::sendSteeringAngle(inspection_sweep_deg(elapsed));
-                            last_steer_emit = now_ms;
+                            app_apply_mission_command(active_mission->on_tick(&ctx));
                         }
-                        if (elapsed >= INSPECTION_DURATION_MS)
+                        if (active_mission->is_complete != nullptr &&
+                            active_mission->is_complete(&ctx))
                         {
-                            // -> FINISHED on the next tick, through as_next_state.
                             mission_complete = true;
                         }
-                    }
-                    else if (current_mission_id == MISSION_EBS_TEST)
-                    {
-                        // --- Standalone EBS test: hold the wheels straight ---
-                        // TODO(on-car): drive the motor to the rules test speed,
-                        // command the EBS trigger, and verify the deceleration.
-                        Can::sendSteeringAngle(0.0f);
                     }
                     break;
                 }

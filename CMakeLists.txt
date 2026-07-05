@@ -112,6 +112,11 @@ set(CPP_SOURCES
     Core/Src/state_manager.cpp
     Core/Src/ebs_manager.cpp
     Core/Src/ros_globals.cpp
+    # Mission dispatch (registry + per-mission bodies; keep in sync with Makefile)
+    Core/Src/mission_registry.cpp
+    Core/Src/mission_inspection.cpp
+    Core/Src/mission_pipeline.cpp
+    Core/Src/mission_ebstest.cpp
 )
 
 # ASM sources
