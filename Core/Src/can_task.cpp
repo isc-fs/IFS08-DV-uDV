@@ -34,11 +34,13 @@ extern "C" void StartCanTask(void *argument)
 {
     (void)argument;  // Unused parameter
 
-    // Initialize both CAN buses we own:
-    //   FDCAN3 — AMI + steering sensor + autonomy control
+    // Initialize the three CAN buses we own:
+    //   FDCAN3 — AMI + steering (local DV peripherals)
     //   FDCAN1 — RES CANopen + DataLogger TX
+    //   FDCAN2 — ACU bus (ECU/VCU + AMS): the ECU<->uDV contract
     Can::init();
     Can::initRes();
+    Can::initEcu();
 
     /* The steering motor is NOT started here. app_task owns the steering
      * motor lifecycle: it fires Can::sendSteeringStart() on the READY->DRIVING

@@ -7,11 +7,19 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* CAN IDs — FDCAN3 (AMI + steering bus + autonomy control) */
+/* CAN IDs — FDCAN3 (AMI + steering bus, local DV peripherals) */
 static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
 static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au; /* echo back to AMI */
-/* ECU (VCU) <-> uDV contract — matches IFS08-CE-ECU Core/Inc/can/messages/
- * (the ECU side is HIL-validated, Block L). ECU FDCAN2 = this bus. */
+static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u; /* legacy — no known consumer */
+/* ASSI status byte on the local FDCAN3 bus. The ECU->AMS VCU_heartbeat also
+ * uses 0x100 but lives on the ACU bus (uDV FDCAN2) — different wire, no
+ * clash; do NOT emit this id on FDCAN2. */
+static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
+static constexpr uint32_t CAN_ID_IMU               = 0x001u;
+
+/* CAN IDs — FDCAN2 (ACU bus: ECU/VCU + AMS). The ECU<->uDV contract,
+ * matching IFS08-CE-ECU Core/Inc/can/messages/*.def (ECU side is
+ * HIL-validated, Block L). The ECU's own FDCAN2 is the same wire. */
 static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u; /* ECU->uDV: byte0 bool, 100 ms */
 static constexpr uint32_t CAN_ID_BRAKE_OVER_LIMIT  = 0x505u; /* ECU->uDV: byte0 bool verdict
                                                                 (brake_raw > BrakeDvHardRaw), 100 ms */
@@ -19,17 +27,10 @@ static constexpr uint32_t CAN_ID_MOTOR_RPM         = 0x506u; /* ECU->uDV: int32 
                                                                 shaft rpm (signed), 10 ms */
 static constexpr uint32_t CAN_ID_TORQUE_CMD        = 0x507u; /* uDV->ECU: int32 LE percent
                                                                 0..100, 20 ms; stale => 0 */
-static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u; /* legacy — no ECU consumer */
 static constexpr uint32_t CAN_ID_R2D_REQUEST       = 0x510u; /* uDV->ECU: byte0 != 0 requests
                                                                 DV ready-to-drive (after GO) */
 static constexpr uint32_t CAN_ID_R2D_CONFIRM       = 0x511u; /* ECU->uDV: byte0 != 0 confirms
                                                                 DV R2D latched (acyclic) */
-/* 0x50B: uDV ASSI status byte. Moved OFF 0x100 — that id is the ECU->AMS
- * VCU_heartbeat (10 ms, AMS opens the AIRs if it goes stale); a second
- * transmitter there would corrupt a load-bearing safety frame. 0x50B sits
- * in the autonomy 0x50x cluster with mission-ACK 0x50A. */
-static constexpr uint32_t CAN_ID_ASSI              = 0x50Bu;
-static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 /* |mechanical rpm| below this counts as vehicle standstill (0x506 decode). */
 static constexpr int32_t  RPM_STANDSTILL           = 10;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
@@ -52,9 +53,10 @@ static constexpr uint32_t CAN_ID_DL_DYN2           = 0x501u;
 static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 
 extern FDCAN_HandleTypeDef hfdcan1;
+extern FDCAN_HandleTypeDef hfdcan2;
 extern FDCAN_HandleTypeDef hfdcan3;
 
-/* Last ASSI status code emitted on CAN 0x50B (FS-Rules T14.9:
+/* Last ASSI status code emitted on CAN 0x100 (FS-Rules T14.9:
  * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
  * Cached on every sendAssiStatus() so the micro-ROS layer can mirror it
  * on /assi/state — the ROS topic then carries the identical byte as the
@@ -130,6 +132,53 @@ void initRes()
     sendNmtSetOperational();
 }
 
+void initEcu()
+{
+    /* FDCAN2 = the ACU bus (ECU/VCU + AMS). Pinned and CubeMX-initialised
+     * since forever but never STARTED — which is why "0x504 was never
+     * received" on the car: the ECU transmits on this wire, not on FDCAN3.
+     *
+     * Accept only the ECU->uDV contract range 0x504..0x511 (one RANGE
+     * filter — StdFiltersNbr is 1). Everything else on the ACU bus (AMS
+     * heartbeats etc.) is rejected so it can't flood the shared RX queue. */
+    FDCAN_FilterTypeDef filter = {
+        .IdType       = FDCAN_STANDARD_ID,
+        .FilterIndex  = 0,
+        .FilterType   = FDCAN_FILTER_RANGE,
+        .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
+        .FilterID1    = CAN_ID_TS_ACTIVE,     /* 0x504 */
+        .FilterID2    = CAN_ID_R2D_CONFIRM,   /* 0x511 */
+    };
+    if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filter) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan2,
+            FDCAN_REJECT,
+            FDCAN_REJECT,
+            FDCAN_REJECT_REMOTE,
+            FDCAN_REJECT_REMOTE) != HAL_OK) {
+        Error_Handler();
+    }
+
+    /* CubeMX only enables FDCAN2_IT1 (same class of gotcha as FDCAN1's
+     * IT0 — see initRes). Instead of adding another IRQ handler, route the
+     * RX-FIFO0 new-message interrupt onto the already-wired LINE1. */
+    if (HAL_FDCAN_ConfigInterruptLines(&hfdcan2,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
+            FDCAN_INTERRUPT_LINE1) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
 void sendControl(float accel, float steer)
 {
     // Backwards-compatible helper: send two separate frames for accel and steer
@@ -168,7 +217,7 @@ void sendAccel(float accel)
      * recoverable — never call Error_Handler from here.  It used to hang
      * the MCU when this function ran from an ISR before FDCAN3 was
      * started; see the watchdog boot-hang fix. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData);
 }
 
 void sendR2dRequest(uint8_t request)
@@ -190,7 +239,7 @@ void sendR2dRequest(uint8_t request)
     };
 
     /* TX failure is recoverable — see sendAccel comment. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &request);
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, &request);
 }
 
 void sendSteer(float steer)
@@ -525,7 +574,7 @@ void sendDataLogger()
 
 void sendAssiStatus(uint8_t status)
 {
-    /* ASSI state on FDCAN3 ID 0x50B, 1-byte payload (FS-Rules T14.9:
+    /* ASSI state on FDCAN3 ID 0x100, 1-byte payload (FS-Rules T14.9:
      * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
      * The ASSI peripheral does the flashing/buzzer; the uDV only emits
      * the state code. Non-blocking enqueue, safe from any context. */
@@ -572,7 +621,7 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 }
 
 /* C-callable ASSI EMERGENCY emitter for the safety monitor (and any ISR
- * path). Sends the T14.9 EMERGENCY code (0x01) on 0x50B — non-blocking
+ * path). Sends the T14.9 EMERGENCY code (0x01) on 0x100 — non-blocking
  * FIFO enqueue, so it is safe from the supervisor task or an ISR. */
 extern "C" void can_interface_send_assi_emergency_from_isr(void)
 {
@@ -634,7 +683,7 @@ extern "C" int32_t can_c_get_motor_rpm(void)
 
 extern "C" uint8_t can_c_get_assi_status_code(void)
 {
-    /* Last AS state byte emitted on CAN 0x50B (FS-Rules T14.9). The
+    /* Last AS state byte emitted on CAN 0x100 (FS-Rules T14.9). The
      * micro-ROS /assi/state publisher mirrors this so the DV pipeline
      * reads the identical code the ASSI peripheral does. */
     return g_assi_status_code.load();

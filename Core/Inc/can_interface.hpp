@@ -8,10 +8,12 @@
 
 namespace Can {
 
-/* FDCAN3 bring-up (AMI + steering sensor + autonomy control bus) */
+/* FDCAN3 bring-up (AMI + steering bus, local DV peripherals) */
 void init();
 /* FDCAN1 bring-up (RES CANopen + DataLogger TX bus) */
 void initRes();
+/* FDCAN2 bring-up (ACU bus: ECU/VCU + AMS — the ECU<->uDV contract) */
+void initEcu();
 
 void sendControl(float accel, float steer);
 /* 0x507 torque command to the ECU: input is the pipeline's normalised
