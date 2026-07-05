@@ -57,9 +57,21 @@ All tasks and queues are **created** in [Core/Src/freertos.c](Core/Src/freertos.
 | `canTask` | AboveNormal | 4 KB | Drain `canRxQueueHandle` + `resRxQueueHandle`, data logger TX | [can_task.cpp](Core/Src/can_task.cpp) |
 | `assiTask` | BelowNormal | 2 KB | ASSI LED renderer: AS mode → UART commands to the Arduino bridge | [assi_task.c](Core/Src/assi_task.c) |
 | `safetyTask` | High | 2 KB | Two-tier watchdog / IWDG refresh | [safety_monitor.c](Core/Src/safety_monitor.c) |
-| `appTask` | Normal | 4 KB | AS state machine + EBS init sequence | [app_task.cpp](Core/Src/app_task.cpp) |
+| `appTask` | Normal | 4 KB | AS state machine + EBS init sequence + mission dispatch | [app_task.cpp](Core/Src/app_task.cpp) |
 
 The shared microsecond timestamp `dwt_micros()` (used by both the IMU and ROS tasks) lives in [dwt_time.c](Core/Src/dwt_time.c).
+
+### Mission dispatch
+
+`appTask` resolves the AMI-selected mission (CAN `0x503`) to a `const Mission*`
+and drives it through a small vtable ([mission.h](Core/Inc/mission.h)); each
+mission's control law lives in its own translation unit
+(`Core/Src/mission_*.cpp`) selected by [mission_registry.cpp](Core/Src/mission_registry.cpp).
+Missions are **pure** (consume a `MissionCtx`, return a `MissionCommand`), so
+`appTask` owns all CAN actuation and every mission is host-unit-testable with no
+stubs — the same pattern as [as_transition.hpp](Core/Inc/as_transition.hpp).
+The AS state machine is mission-agnostic. **See [docs/MISSIONS.md](docs/MISSIONS.md)
+for the full model and how to add a new mission.**
 
 Inter-task communication uses FreeRTOS message queues:
 - **`imuQueueHandle`** (depth 16): `imu_sample_t` structs from `imuTask` → `defaultTask`
