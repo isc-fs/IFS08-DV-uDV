@@ -17,7 +17,12 @@ extern "C" {
     #include "hardware_io.h"
     #include "safety_monitor.h"  /* IWDG safety supervisor: heartbeat/arm */
     #include "assi_task.h"       /* ASSI mode API (UART/Arduino LED bridge) */
+    #include "bench_stubs.h"     /* bench stub toggles (all 0 on dev) */
+
+    /* /debug queue (freertos.c) — used to announce active bench stubs. */
+    extern osMessageQueueId_t debugQueueHandle;
 }
+#include <cstdio>              /* snprintf for the stub announcement */
 
 #include "state_manager.hpp"
 #include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
@@ -219,6 +224,18 @@ extern "C" void StartAppTask(void *argument)
      * task only publishes the AS mode via assi_set_mode() below. The task
      * boots in AS_MODE_OFF, the correct AS Off indication (T14.9.1). */
 
+    /* A build with any bench stub toggled on (bench_stubs.h) announces
+     * itself on /debug once at boot — a stubbed image must never
+     * masquerade as a flight build. Folds away when all toggles are 0. */
+    if (BENCH_STUB_EBS_INIT || BENCH_STUB_DVPC)
+    {
+        char stub_buf[128];   /* debugQueue element size */
+        snprintf(stub_buf, sizeof(stub_buf),
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d dvpc=%d)",
+                 BENCH_STUB_EBS_INIT, BENCH_STUB_DVPC);
+        (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
+    }
+
     // Main control loop
     while (1)
     {
@@ -309,6 +326,19 @@ extern "C" void StartAppTask(void *argument)
                                           dv_status == DV_STATUS_FAILED);
         as_in.mission_needs_pipeline = mission_needs_pipeline(current_mission_id);
         as_in.mission_complete       = mission_complete;
+
+        /* Bench stub (bench_stubs.h toggle, 0 on dev — this branch folds
+         * away): no DVPC on the bench. While NO /dv/status has ever arrived,
+         * fake a fresh pipeline READY so pipeline missions can arm/drive and
+         * the lost-heartbeat rule stays quiet. A real pipeline (dv_seen)
+         * wins permanently once it speaks. */
+        if (BENCH_STUB_DVPC && !dv_seen)
+        {
+            as_in.dv_fresh     = true;
+            as_in.dv_ready     = true;
+            as_in.dv_finished  = false;
+            as_in.dv_emergency = false;
+        }
 
         as_state = as_next_state(previous_as_state, as_in);
 

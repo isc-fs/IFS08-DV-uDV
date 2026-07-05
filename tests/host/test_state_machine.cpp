@@ -18,8 +18,17 @@
 
 #include "state_manager.hpp"
 #include "ebs_manager.hpp"
+#include "bench_stubs.h"   /* toggles must be 0 here — suite tests REAL logic */
 #include "can_globals.h"
 #include "ros_globals.h"
+
+/* Fail the build if someone commits enabled bench stubs: this suite (and the
+ * car) must always see the real EBS init + pipeline gating. The bench flips
+ * the toggles only on a throwaway bench/ branch. */
+static_assert(BENCH_STUB_EBS_INIT == 0,
+              "BENCH_STUB_EBS_INIT must be 0 on dev (bench_stubs.h)");
+static_assert(BENCH_STUB_DVPC == 0,
+              "BENCH_STUB_DVPC must be 0 on dev (bench_stubs.h)");
 
 // ---------------------------------------------------------------------
 // Controllable hardware_io stub (replaces the HAL-backed hardware_io.c).
