@@ -124,7 +124,11 @@ Core/Src/can_task.cpp \
 Core/Src/app_task.cpp \
 Core/Src/state_manager.cpp \
 Core/Src/ebs_manager.cpp \
-Core/Src/ros_globals.cpp
+Core/Src/ros_globals.cpp \
+Core/Src/mission_registry.cpp \
+Core/Src/mission_inspection.cpp \
+Core/Src/mission_pipeline.cpp \
+Core/Src/mission_ebstest.cpp
 
 # ASM sources
 ASM_SOURCES =  \

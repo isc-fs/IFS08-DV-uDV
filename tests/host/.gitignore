@@ -3,6 +3,7 @@ test_safety_eval
 test_state_machine
 test_rules_compliance
 test_as_transition
+test_missions
 test_attitude
 test_bmi088_convert
 *.o
