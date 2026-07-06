@@ -287,7 +287,13 @@ void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 
     can_msg_t msg;
     msg.id  = rxh.Identifier;
-    msg.dlc = (uint8_t)(rxh.DataLength >> 16);
+    /* HAL_FDCAN_GetRxMessage returns DataLength as the DLC code (1..8 for the
+     * classic frames this bus uses) — already the byte count, NOT a value that
+     * needs the old >>16 unshift. The stale `>> 16` made msg.dlc read 0 on
+     * every frame, so every `if (msg->dlc < N) break;` guard tripped: the AMI
+     * mission (0x503) was dropped (no store, no 0x50A ACK), steering feedback
+     * (0x500) and the e-stop decode never ran. */
+    msg.dlc = (uint8_t)rxh.DataLength;
     memcpy(msg.data, rxdata, 8);
     /* Tag the message with its source FDCAN bus so downstream dispatch
      * can distinguish messages from multiple CAN peripherals. */
