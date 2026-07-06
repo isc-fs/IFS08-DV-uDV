@@ -574,6 +574,20 @@ extern "C" void StartAppTask(void *argument)
                     ebs.deactivateEBS();  // release: DRIVING is the ONLY state
                                           // with the brakes off (req #4)
 
+                    /* Keep the steering motor armed while DRIVING. The steering
+                     * board runs the motor only while it keeps receiving
+                     * motor_start (0x010=1) and cuts out on a command-timeout;
+                     * a single start on the GO edge was NOT enough on the car
+                     * (feat/18-ebs, car-proven). Re-send it, paced to the 20 ms
+                     * torque clock to avoid flooding 0x010 (feat/18-ebs sent it
+                     * every ~1 ms tick). Homing runs once on the board (guarded
+                     * by !arrancado), so repeats do not re-home. The GO-edge
+                     * start above still arms it immediately. */
+                    if (torque_tx_due)
+                    {
+                        Can::sendSteeringStart();
+                    }
+
                     // CAN start-mission FALLBACK (ported from dev): fire the
                     // (currently stubbed) start-mission command once when the
                     // legacy setup handshake reports ready, for a pipeline
