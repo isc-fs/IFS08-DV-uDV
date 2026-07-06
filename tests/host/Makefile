@@ -30,10 +30,12 @@ CFLAGS   := -std=c11   -I$(CORE_INC) -Wall -Wextra -Werror -g -O0
 CXXFLAGS := -std=c++17 -I$(CORE_INC) -Wall -Wextra -Werror -g -O0
 
 # State-machine suite links real firmware sources (state_manager, ebs_manager,
-# can_globals, ros_globals). Stubs/ shadows the RTOS headers those pull in;
+# can_globals, ros_globals). Stubs/ shadows the RTOS headers those pull in, and
+# mocks/ shadows stm32h7xx_hal.h — can_globals.h now includes bmi088.h (for
+# can_c_send_imu), which pulls in the HAL; the suite never calls into it.
 # -Wall (not -Werror) so pre-existing style warnings in the brought-over
 # sources don't block the behavioural tests.
-SM_CXXFLAGS := -std=c++17 -I$(STUBS) -I$(CORE_INC) -Wall -Wextra -g -O0
+SM_CXXFLAGS := -std=c++17 -I$(STUBS) -Imocks -I$(CORE_INC) -Wall -Wextra -g -O0
 SM_SRCS     := test_state_machine.cpp \
                $(CORE_SRC)/state_manager.cpp \
                $(CORE_SRC)/ebs_manager.cpp \
