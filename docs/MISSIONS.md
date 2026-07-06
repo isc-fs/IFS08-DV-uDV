@@ -39,7 +39,7 @@ struct Mission {
 | Type | Fields |
 |------|--------|
 | `MissionCtx` (in) | `now_ms`, `mission_elapsed_ms` (since the GO edge), `ctrl_cmd_fresh`, `ctrl_accel`, `ctrl_steer` (latest normalised `/ctrl/cmd`) |
-| `MissionCommand` (out) | `send_steer_angle` + `steer_angle_deg` (0x020 angle), **or** `send_drive` + `accel_norm` + `steer_norm` (normalised accel/steer). Default-init = emit nothing. A mission uses one channel; never both. |
+| `MissionCommand` (out) | Direct-angle channel: `send_steer_angle` + `steer_angle_deg` (absolute `0x020` angle, mission-paced — inspection/EBS). Pipeline channels (app_task paces to the ECU's 20 ms cycle): `send_accel` + `accel_norm` (`0x507` torque) and `send_steer` + `steer_norm` (applied as `norm × STEER_FULL_LOCK_DEG` on `0x020`). Default-init = emit nothing. A mission uses the direct-angle channel **or** the pipeline channels, never both. |
 
 `needs_pipeline` is a **field, not a call**, because the AS transition reads it in
 READY to gate GO and to arm the lost-heartbeat rule — it must be known *before*
@@ -123,7 +123,7 @@ Say you are adding mission code **N** (must match the AMI `missions[]` index).
    namespace {
    MissionCommand my_on_tick(const MissionCtx* ctx) {
        MissionCommand cmd = {};                 // default: emit nothing
-       // ... set cmd.send_steer_angle / cmd.send_drive + values ...
+       // ... set cmd.send_steer_angle (0x020) OR cmd.send_accel/cmd.send_steer ...
        return cmd;
    }
    bool my_is_complete(const MissionCtx* ctx) { return ctx->mission_elapsed_ms >= 12000u; }
@@ -176,19 +176,21 @@ new TU, the two manifests, and the tests.
   saturates the steering firmware's ±60° clamp. The first tick of a run always
   commands (independent of the tick-counter value).
 - **Pipeline** (1-4, incl. **trackdrive**) — relays the pipeline's latest
-  normalised `/ctrl/cmd`; zeros both channels when `/ctrl/cmd` goes stale so a
-  dropped link never latches the last command. The mission's `on_tick` runs every
-  loop tick, but `app_task` paces the actual torque TX (0x507 to the ECU) to the
-  ECU's 20 ms cyclic contract (`TORQUE_TX_PERIOD_MS`); while DRIVING a pipeline
-  mission, `app_task` also drives the DV ready-to-drive handshake (0x510 → 0x511)
-  until the ECU confirms.
+  normalised `/ctrl/cmd`: throttle → `0x507` ECU torque (`send_accel`), steering →
+  `0x020` absolute angle (`send_steer`, applied as `norm × STEER_FULL_LOCK_DEG`).
+  On a stale `/ctrl/cmd` the torque is zeroed but **no** steering is sent (a
+  `0x020` zero would center the wheel mid-corner). The mission's `on_tick` runs
+  every loop tick; `app_task` paces both channels to the ECU's 20 ms cycle
+  (`TORQUE_TX_PERIOD_MS`) and, while DRIVING a pipeline mission, drives the DV
+  ready-to-drive handshake (`0x510` → `0x511`) until the ECU confirms.
 - **EBS test** (5) — **stub**: holds the wheels straight. The real test (drive to
   speed, trigger the EBS, verify deceleration) is an on-car TODO.
 
 ### Open items (on-car)
 
-- Trackdrive actuation: the `0x507` torque contract is confirmed against the ECU
-  `.def` (int32 percent, paced 20 ms); the `0x508` normalised-steer frame has no
-  ECU consumer on the current map (steering is commanded via `0x020`) — confirm
-  who reads it or retire it (G3). The `[-1, 1]` values are clamped on receive.
+- Trackdrive actuation: `0x507` torque is confirmed against the ECU `.def` (int32
+  percent, paced 20 ms). Steering goes over `0x020` as `norm × STEER_FULL_LOCK_DEG`
+  (65°, under the steering controller's 70° cutoff); the full-lock span, steering
+  ratio and sign are commissioning items (#71). The old `0x508` normalised-steer
+  frame was retired (no ECU consumer).
 - EBS-test mission body is a hold-straight stub.

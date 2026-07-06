@@ -36,9 +36,15 @@
 
 /* ==== Toggle stubs here: 0 = real behavior (dev default), 1 = stubbed ==== */
 
+/* TEMPORARY (pre-production bench/car testing): both stubs are ON. This is a
+ * deliberate, owner-approved exception to the "never merge a 1 to dev" rule
+ * while there is no working EBS-pneumatics rig / DVPC on the car. REVERT BOTH
+ * TO 0 before any production / competition run (the firmware still announces
+ * "BENCH STUBS COMPILED IN" on /debug at boot so a stubbed image is obvious). */
+
 /* EBS init self-check -> Done immediately */
-#define BENCH_STUB_EBS_INIT   0
+#define BENCH_STUB_EBS_INIT   1
 /* fake fresh pipeline READY until the first real /dv/status arrives */
-#define BENCH_STUB_DVPC       0
+#define BENCH_STUB_DVPC       1
 
 #endif /* BENCH_STUBS_H */

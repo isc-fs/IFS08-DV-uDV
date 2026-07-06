@@ -57,18 +57,24 @@ struct MissionCtx {
 };
 
 /**
- * Actuation a mission wants applied THIS tick. Two independent channels so a
- * mission emits only what it uses (default-init = emit nothing):
- *   - steering angle  -> Can::sendSteeringAngle (0x020, degrees) — inspection / EBS test
- *   - normalised drive -> Can::sendAccel + Can::sendSteer          — pipeline missions
- * app_task applies each channel iff its `send_*` flag is set.
+ * Actuation a mission wants applied THIS tick. Default-init = emit nothing.
+ * Actuator paths (app_task applies each iff its `send_*` flag is set):
+ *   - send_steer_angle: absolute 0x020 steering angle, at the mission's own
+ *     cadence -> Can::sendSteeringAngle. Used by inspection / EBS test.
+ *   - send_accel: normalised ECU torque on 0x507 (pipeline missions), paced by
+ *     app_task to the ECU's 20 ms cycle -> Can::sendAccel.
+ *   - send_steer: normalised pipeline steering, applied as an absolute 0x020
+ *     angle (norm * STEER_FULL_LOCK_DEG), same 20 ms pace. Kept separate from
+ *     send_accel so a stale link can zero torque WITHOUT commanding steering (a
+ *     0x020 zero would snap the wheel to center; the old 0x508 frame is gone).
  */
 struct MissionCommand {
-    bool  send_steer_angle;  /**< emit an absolute steering-angle command      */
-    float steer_angle_deg;   /**< degrees (steering firmware clamps to ±60)     */
-    bool  send_drive;        /**< emit normalised accel + steer                 */
-    float accel_norm;        /**< normalised throttle [-1, 1]                   */
-    float steer_norm;        /**< normalised steering [-1, 1]                   */
+    bool  send_steer_angle;  /**< emit an absolute steering-angle command (0x020) */
+    float steer_angle_deg;   /**< degrees (steering firmware clamps to ±60)       */
+    bool  send_accel;        /**< emit normalised ECU torque (0x507)              */
+    float accel_norm;        /**< normalised throttle [-1, 1]                     */
+    bool  send_steer;        /**< emit normalised pipeline steering (-> 0x020)    */
+    float steer_norm;        /**< normalised steering [-1, 1]                     */
 };
 
 /**

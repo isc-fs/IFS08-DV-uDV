@@ -71,26 +71,42 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
  * every torque/steer TX to it (the control loop itself runs ~1 kHz and
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
+/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
+ * controller takes an absolute angle on 0x020 (0.01 deg units). Full-lock
+ * span for the conversion, kept UNDER the steering controller's 70 deg
+ * cutoff (PIPELINE_INTERFACE.md G3) with margin.
+ * TODO(commission, #71): measure the real full-lock angle + steering ratio
+ * and the sign convention (ROS +z = CCW/left) on the car. */
+static constexpr float    STEER_FULL_LOCK_DEG      = 65.0f;
 /* DV ready-to-drive request (0x510) retry period until the ECU confirms
  * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
 static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
- * result reaches hardware). The steering-angle channel (0x020, steering bus)
- * fires whenever the mission sets it — the mission owns its own cadence. The
- * normalised drive channel (0x507 torque to the ECU) is gated by drive_tx_due
- * so it keeps the ECU's 20 ms cyclic pacing (TORQUE_TX_PERIOD_MS), regardless
- * of how often the mission's on_tick runs. */
+ * result reaches hardware). Two independent actuator paths:
+ *  - send_steer_angle: absolute 0x020 steering angle at the mission's own
+ *    cadence (inspection sweep / EBS-test hold).
+ *  - send_accel / send_steer: the pipeline drive, paced by drive_tx_due to the
+ *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x020
+ *    angle = norm * STEER_FULL_LOCK_DEG. They are separate so a stale link can
+ *    zero the torque WITHOUT commanding steering — a 0x020 zero would snap the
+ *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
 static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
 {
     if (cmd.send_steer_angle)
     {
         Can::sendSteeringAngle(cmd.steer_angle_deg);
     }
-    if (cmd.send_drive && drive_tx_due)
+    if (drive_tx_due)
     {
-        Can::sendAccel(cmd.accel_norm);
-        Can::sendSteer(cmd.steer_norm);
+        if (cmd.send_accel)
+        {
+            Can::sendAccel(cmd.accel_norm);
+        }
+        if (cmd.send_steer)
+        {
+            Can::sendSteeringAngle(cmd.steer_norm * STEER_FULL_LOCK_DEG);
+        }
     }
 }
 
@@ -495,11 +511,12 @@ extern "C" void StartAppTask(void *argument)
                 last_torque_tx_ms = now_ms;
             }
 
-            // Send zero control when not driving (safety)
+            /* Zero torque when not driving (safety). No steering command
+             * outside DRIVING: the steering motor is stopped (0x010), and a
+             * 0x020 frame would command the wheel to CENTER, not "hold". */
             if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
-                Can::sendSteer(0.0f);
             }
 
             /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a

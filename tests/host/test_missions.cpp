@@ -149,7 +149,8 @@ static void test_inspection_cadence(void)
     // First DRIVING tick emits immediately (now >> DT).
     MissionCommand a = tick(&mission_inspection, 1000, 0, false, 0, 0);
     CHECK(a.send_steer_angle);
-    CHECK(!a.send_drive);            // inspection never uses the drive channel
+    CHECK(!a.send_accel);            // inspection never uses the drive channels
+    CHECK(!a.send_steer);
 
     // +100 ms (< DT): no new command.
     MissionCommand b = tick(&mission_inspection, 1100, 100, false, 0, 0);
@@ -279,14 +280,17 @@ static void test_inspection_full_run(void)
 /* ==== 3. pipeline relay ================================================== */
 static void test_pipeline_passthrough(void)
 {
-    // Fresh /ctrl/cmd -> pass the normalised throttle/steer through, drive on.
+    // Fresh /ctrl/cmd -> torque (send_accel) + normalised steering (send_steer);
+    // the norm->deg conversion happens in app_task, so the mission passes the
+    // normalised steer through untouched. It never uses the direct-angle channel.
     MissionCommand a = tick(&mission_pipeline, 1000, 500, true, 0.5f, -0.3f);
-    CHECK(a.send_drive);
-    CHECK(!a.send_steer_angle);          // pipeline never uses the angle channel
+    CHECK(a.send_accel);
+    CHECK(a.send_steer);
+    CHECK(!a.send_steer_angle);          // pipeline uses send_steer, not the sweep channel
     CHECK_NEAR(a.accel_norm, 0.5f, 1e-6f);
     CHECK_NEAR(a.steer_norm, -0.3f, 1e-6f);
 
-    // Full range passes through unclamped by the mission (clamp is on receive).
+    // Full range passes through unclamped by the mission (clamp is downstream).
     MissionCommand hi = tick(&mission_pipeline, 1000, 500, true, 1.0f, 1.0f);
     CHECK_NEAR(hi.accel_norm, 1.0f, 1e-6f);
     CHECK_NEAR(hi.steer_norm, 1.0f, 1e-6f);
@@ -297,12 +301,13 @@ static void test_pipeline_passthrough(void)
 
 static void test_pipeline_zeros_when_stale(void)
 {
-    // Stale /ctrl/cmd -> still stream (send_drive), but ZERO both channels so a
-    // dropped link never latches the last throttle/steering.
+    // Stale /ctrl/cmd -> torque still streams but ZEROED (send_accel, accel 0),
+    // and NO steering (send_steer false) — a 0x020 zero would center the wheel.
     MissionCommand s = tick(&mission_pipeline, 1000, 500, false, 0.9f, -0.7f);
-    CHECK(s.send_drive);
+    CHECK(s.send_accel);
     CHECK_NEAR(s.accel_norm, 0.0f, 1e-6f);
-    CHECK_NEAR(s.steer_norm, 0.0f, 1e-6f);
+    CHECK(!s.send_steer);
+    CHECK(!s.send_steer_angle);
 }
 
 /* ==== 4. ebs-test stub + manual no-op =================================== */
@@ -312,7 +317,8 @@ static void test_ebstest_holds_straight(void)
     MissionCommand a = tick(&mission_ebstest, 1000, 100, true, 0.5f, 0.5f);
     CHECK(a.send_steer_angle);
     CHECK_NEAR(a.steer_angle_deg, 0.0f, 1e-6f);
-    CHECK(!a.send_drive);
+    CHECK(!a.send_accel);
+    CHECK(!a.send_steer);
     MissionCommand b = tick(&mission_ebstest, 9999, 20000, false, -1.0f, 1.0f);
     CHECK(b.send_steer_angle);
     CHECK_NEAR(b.steer_angle_deg, 0.0f, 1e-6f);
@@ -350,9 +356,10 @@ static void test_classification_invariants(void)
 
 static void test_single_actuation_channel(void)
 {
-    // No mission ever drives BOTH the angle channel and the normalised-drive
-    // channel in one tick (they target different actuators). Sweep a range of
-    // contexts across every mission that has an on_tick body.
+    // A mission drives EITHER the direct-angle channel (send_steer_angle,
+    // inspection/ebs) OR the pipeline channels (send_accel/send_steer), never
+    // both — they are two different actuation styles on the same wheel/torque.
+    // Sweep a range of contexts across every mission that has an on_tick body.
     const Mission* bodies[] = {&mission_inspection, &mission_pipeline, &mission_ebstest};
     for (unsigned b = 0; b < sizeof(bodies)/sizeof(bodies[0]); ++b) {
         const Mission* m = bodies[b];
@@ -362,7 +369,7 @@ static void test_single_actuation_channel(void)
             now += INSP_DT_MS + 1;   // keep inspection emitting
             for (int fresh = 0; fresh < 2; ++fresh) {
                 MissionCommand cmd = tick(m, now, el, fresh != 0, 0.4f, -0.4f);
-                CHECK(!(cmd.send_steer_angle && cmd.send_drive));
+                CHECK(!(cmd.send_steer_angle && (cmd.send_accel || cmd.send_steer)));
             }
         }
     }
