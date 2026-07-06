@@ -9,14 +9,14 @@
 
 /* CAN IDs — FDCAN3 (AMI + steering bus + autonomy control) */
 static constexpr uint32_t CAN_ID_MISSION_SELECT    = 0x503u;
-static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u;
-static constexpr uint32_t CAN_ID_BRAKE_PRESSURE    = 0x505u;
-static constexpr uint32_t CAN_ID_SDC_RES_OPEN      = 0x506u;
-static constexpr uint32_t CAN_ID_CONTROL_ACCEL     = 0x507u;
+//static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u;
+//static constexpr uint32_t CAN_ID_BRAKE_PRESSURE    = 0x505u;
+//static constexpr uint32_t CAN_ID_SDC_RES_OPEN      = 0x506u;
+//static constexpr uint32_t CAN_ID_CONTROL_ACCEL     = 0x507u;
 static constexpr uint32_t CAN_ID_CONTROL_STEER     = 0x508u;
-static constexpr uint32_t CAN_ID_R2D               = 0x509u;
-static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
-static constexpr uint32_t CAN_ID_IMU               = 0x001u;
+//static constexpr uint32_t CAN_ID_R2D               = 0x509u;
+//static constexpr uint32_t CAN_ID_ASSI              = 0x100u;
+//static constexpr uint32_t CAN_ID_IMU               = 0x001u;
 static constexpr uint32_t CAN_ID_MISSION_ACK       = 0x50Au;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
@@ -32,6 +32,29 @@ static constexpr uint32_t CAN_ID_RES_BOOTUP        = 0x700u + RES_NODE_ID; /* 0x
 static constexpr uint32_t CAN_ID_DL_DYN1           = 0x500u;
 static constexpr uint32_t CAN_ID_DL_DYN2           = 0x501u;
 static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
+
+/* CAN IDs — FDCAN2 (ACU bus: ECU/VCU + AMS). The ECU<->uDV contract,
+ * matching IFS08-CE-ECU Core/Inc/can/messages/*.def (ECU side is
+ * HIL-validated, Block L). The ECU's own FDCAN2 is the same wire. */
+static constexpr uint32_t CAN_ID_TS_ACTIVE         = 0x504u; /* ECU->uDV: byte0 bool, 100 ms */
+static constexpr uint32_t CAN_ID_BRAKE_OVER_LIMIT  = 0x505u; /* ECU->uDV: byte0 bool verdict
+                                                                (brake_raw > BrakeDvHardRaw), 100 ms */
+static constexpr uint32_t CAN_ID_MOTOR_RPM         = 0x506u; /* ECU->uDV: int32 LE mechanical
+                                                                shaft rpm (signed), 10 ms */
+static constexpr uint32_t CAN_ID_TORQUE_CMD        = 0x507u; /* uDV->ECU: int32 LE percent
+                                                                0..100, 20 ms; stale => 0 */
+static constexpr uint32_t CAN_ID_R2D_REQUEST       = 0x510u; /* uDV->ECU: byte0 != 0 requests
+                                                                DV ready-to-drive (after GO) */
+static constexpr uint32_t CAN_ID_R2D_CONFIRM       = 0x511u; /* ECU->uDV: byte0 != 0 confirms
+                                                                DV R2D latched (acyclic) */
+static constexpr uint32_t CAN_ID_IMU               = 0x512u; /* uDV->ECU: ax/ay/az int16 mg +
+                                                                gx int16 0.1 dps, 50 Hz.
+                                                                0x5xx on purpose: telemetry
+                                                                must never win arbitration
+                                                                over the safety frames (the
+                                                                dev-era 0x001 outranked
+                                                                everything on the bus).
+                                                                ECU-side .def still needed. */
 
 extern FDCAN_HandleTypeDef hfdcan1;
 extern FDCAN_HandleTypeDef hfdcan3;
@@ -119,30 +142,6 @@ void sendControl(float accel, float steer)
     sendSteer(steer);
 }
 
-void sendAccel(float accel)
-{
-    FDCAN_TxHeaderTypeDef TxHeader;
-    uint8_t TxData[4];
-
-    TxHeader.Identifier = CAN_ID_CONTROL_ACCEL;
-    TxHeader.IdType = FDCAN_STANDARD_ID;
-    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
-    TxHeader.DataLength = FDCAN_DLC_BYTES_4;
-    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    TxHeader.MessageMarker = 0;
-
-    memcpy(&TxData[0], &accel, sizeof(float));
-
-    /* TX failure (queue full / bus passive / peripheral not started) is
-     * recoverable — never call Error_Handler from here.  It used to hang
-     * the MCU when this function ran from an ISR before FDCAN3 was
-     * started; see the watchdog boot-hang fix. */
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
-}
-
 void sendSteer(float steer)
 {
     FDCAN_TxHeaderTypeDef TxHeader;
@@ -162,6 +161,109 @@ void sendSteer(float steer)
 
     /* TX failure is recoverable — see sendAccel comment. */
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, TxData);
+}
+
+void initEcu()
+{
+    /* FDCAN2 = the ACU bus (ECU/VCU + AMS). Pinned and CubeMX-initialised
+     * since forever but never STARTED — which is why "0x504 was never
+     * received" on the car: the ECU transmits on this wire, not on FDCAN3.
+     *
+     * Accept only the ECU->uDV contract range 0x504..0x511 (one RANGE
+     * filter — StdFiltersNbr is 1). Everything else on the ACU bus (AMS
+     * heartbeats etc.) is rejected so it can't flood the shared RX queue. */
+    FDCAN_FilterTypeDef filter = {
+        .IdType       = FDCAN_STANDARD_ID,
+        .FilterIndex  = 0,
+        .FilterType   = FDCAN_FILTER_RANGE,
+        .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
+        .FilterID1    = CAN_ID_TS_ACTIVE,     /* 0x504 */
+        .FilterID2    = CAN_ID_R2D_CONFIRM,   /* 0x511 */
+    };
+    if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filter) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ConfigGlobalFilter(&hfdcan2,
+            FDCAN_REJECT,
+            FDCAN_REJECT,
+            FDCAN_REJECT_REMOTE,
+            FDCAN_REJECT_REMOTE) != HAL_OK) {
+        Error_Handler();
+    }
+
+    /* CubeMX only enables FDCAN2_IT1 (same class of gotcha as FDCAN1's
+     * IT0 — see initRes). Instead of adding another IRQ handler, route the
+     * RX-FIFO0 new-message interrupt onto the already-wired LINE1. */
+    if (HAL_FDCAN_ConfigInterruptLines(&hfdcan2,
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
+            FDCAN_INTERRUPT_LINE1) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK) {
+        Error_Handler();
+    }
+
+    if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+void sendAccel(float accel)
+{
+    FDCAN_TxHeaderTypeDef TxHeader;
+    uint8_t TxData[4];
+
+    TxHeader.Identifier = CAN_ID_TORQUE_CMD;
+    TxHeader.IdType = FDCAN_STANDARD_ID;
+    TxHeader.TxFrameType = FDCAN_DATA_FRAME;
+    TxHeader.DataLength = FDCAN_DLC_BYTES_4;
+    TxHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    TxHeader.BitRateSwitch = FDCAN_BRS_OFF;
+    TxHeader.FDFormat = FDCAN_CLASSIC_CAN;
+    TxHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    TxHeader.MessageMarker = 0;
+
+    /* 0x507 UDV_torque_cmd is an INTEGER percent, int32 LE 0..100 (agreed
+     * with the ECU 2026-07-03, superseding the original float32 idea — a
+     * float bit-pattern decodes as a huge int32 and the ECU clamps it to
+     * 100 %!). Input is the pipeline's normalised throttle [-1..1]; the
+     * negative half (regen/brake) has no DV torque path, so it clamps to 0.
+     * The ECU applies the same conditioning (neg -> 0, >100 -> 100). */
+    float pct_f = accel * 100.0f;
+    int32_t pct = (pct_f <= 0.0f)   ? 0
+                : (pct_f >= 100.0f) ? 100
+                : (int32_t)(pct_f + 0.5f);
+    memcpy(&TxData[0], &pct, sizeof(pct));
+
+    /* TX failure (queue full / bus passive / peripheral not started) is
+     * recoverable — never call Error_Handler from here.  It used to hang
+     * the MCU when this function ran from an ISR before FDCAN3 was
+     * started; see the watchdog boot-hang fix. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, TxData);
+}
+
+void sendR2dRequest(uint8_t request)
+{
+    /* 0x510 UDV_r2d_request: byte0 != 0 asks the ECU for the DV
+     * ready-to-drive transition (only honoured while the ECU's own brake
+     * sensor confirms hard braking — the 0x505 verdict). The ECU latches
+     * the edge for the drive cycle and confirms on 0x511. */
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_R2D_REQUEST,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_1,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+
+    /* TX failure is recoverable — see sendAccel comment. */
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan2, &TxHeader, &request);
 }
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
@@ -239,29 +341,6 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
      * AS Off. */
     case CAN_ID_TS_ACTIVE:               /* 0x504 */
         g_can_ts_active.store(msg->data[0] != 0U);
-        break;
-
-    case CAN_ID_BRAKE_PRESSURE:          /* 0x505 — float32 LE, bar */
-        if (msg->dlc >= 4U) {
-            float brake_pressure = 0.0f;
-            memcpy(&brake_pressure, msg->data, sizeof(brake_pressure));
-            g_can_brake_pressure.store(brake_pressure);
-        }
-        break;
-
-    case CAN_ID_SDC_RES_OPEN:            /* 0x506 */
-        if (msg->dlc >= 1U) {
-            g_can_sdc_res_open.store(msg->data[0] != 0U);
-        }
-        break;
-
-    case CAN_ID_R2D:                     /* 0x509 — gated by listen_go */
-        if (msg->dlc >= 1U) {
-            bool r2d_received = (msg->data[0] != 0U);
-            if (r2d_received && g_can_listen_go.load()) {
-                g_can_r2d.store(true);
-            }
-        }
         break;
 
     case CAN_ID_STEERING:
@@ -460,29 +539,6 @@ void sendDataLogger()
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &hdr502, d502);
 }
 
-void sendAssiStatus(uint8_t status)
-{
-    /* ASSI state on FDCAN3 ID 0x100, 1-byte payload (FS-Rules T14.9:
-     * OFF=0x00 EMERGENCY=0x01 READY=0x02 DRIVING=0x03 FINISHED=0x04).
-     * The ASSI peripheral does the flashing/buzzer; the uDV only emits
-     * the state code. Non-blocking enqueue, safe from any context. */
-    /* Mirror the same byte to the micro-ROS /assi/state publisher. */
-    g_assi_status_code.store(status);
-    FDCAN_TxHeaderTypeDef TxHeader = {
-        .Identifier          = CAN_ID_ASSI,
-        .IdType              = FDCAN_STANDARD_ID,
-        .TxFrameType         = FDCAN_DATA_FRAME,
-        .DataLength          = FDCAN_DLC_BYTES_1,
-        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
-        .BitRateSwitch       = FDCAN_BRS_OFF,
-        .FDFormat            = FDCAN_CLASSIC_CAN,
-        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
-        .MessageMarker       = 0,
-    };
-    uint8_t payload = status;
-    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, &payload);
-}
-
 } // namespace Can
 
 // C-compatible wrapper for ISR — routes both FDCAN1 (RES bus) and
@@ -511,10 +567,10 @@ extern "C" void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan)
 /* C-callable ASSI EMERGENCY emitter for the safety monitor (and any ISR
  * path). Sends the T14.9 EMERGENCY code (0x01) on 0x100 — non-blocking
  * FIFO enqueue, so it is safe from the supervisor task or an ISR. */
-extern "C" void can_interface_send_assi_emergency_from_isr(void)
-{
-    Can::sendAssiStatus(0x01u);
-}
+//extern "C" void can_interface_send_assi_emergency_from_isr(void)//
+//{
+    //Can::sendAssiStatus(0x01u);
+//}
 
 /* C-callable accessors so freertos.c (C file) can read atomic CAN state */
 extern "C" float can_c_get_steer_angle_actual(void)

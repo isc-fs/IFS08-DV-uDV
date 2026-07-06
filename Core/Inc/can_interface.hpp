@@ -15,11 +15,12 @@ void init();
 void initRes();
 
 void sendControl(float accel, float steer);
-void sendAccel(float accel);
 void sendSteer(float steer);
-void sendR2D(bool r2d);
 void sendIMU(const bmi088_scaled_t &imu);
-void sendAssiStatus(uint8_t status);
+
+void initEcu();
+void sendAccel(float accel);
+void sendR2dRequest(uint8_t request);
 
 /* RES CANopen — send NMT "set operational" to RES node 0x11 on FDCAN1.
  * Sent automatically on receipt of the RES boot-up frame (0x711). */
@@ -49,5 +50,5 @@ void resRxDispatch(const can_msg_t *msg);
 
 extern "C" {
     void can_interface_rx_isr_callback(FDCAN_HandleTypeDef *hfdcan);
-    void can_interface_send_assi_emergency_from_isr(void);
+    //void can_interface_send_assi_emergency_from_isr(void);
 }

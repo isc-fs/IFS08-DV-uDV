@@ -144,7 +144,7 @@ extern "C" void StartAppTask(void *argument)
     uint32_t mission_time = osKernelGetTickCount();
 
     // Send initial OFF status via CAN
-    Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
+    //Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
     /* Let StartCanTask bring up FDCAN3 before we emit frames in earnest
      * (the initial status above is best-effort, dropped if CAN isn't up).
@@ -215,8 +215,10 @@ extern "C" void StartAppTask(void *argument)
         } else if (res_go && as_state == ASState::READY) {
             as_state = ASState::DRIVING;
             Can::sendSteeringStart();
+            Can::sendR2dRequest(1u);
             mission_time = osKernelGetTickCount(); // Efecto secundario mantenido
         } else if (res_ok && ts_on) {
+            Can::initEcu();
             as_state = ASState::READY;
         } else {
             as_state = previous_as_state;
@@ -227,7 +229,7 @@ extern "C" void StartAppTask(void *argument)
         // Send ASSI status if state changed
         if (as_state != last_as_state)
         {
-            Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
+            //Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
             last_as_state = as_state;
         }
 
@@ -318,6 +320,7 @@ extern "C" void StartAppTask(void *argument)
                             Can::sendSteeringStart();
                             move_steer_sin();
                             //sen_motor_power(15); //15%
+                            Can::sendAccel(0.15f);
                             if(now-mission_time > 30000){
                                 as_state = ASState::FINISHED;
                                 Can::sendSteeringStop();
@@ -358,6 +361,7 @@ extern "C" void StartAppTask(void *argument)
                     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
                     assi_set_mode(AS_MODE_FINISHED);
                     ebs.activateEBS();
+                    Can::sendAccel(0.0f);
                     // Mission complete - EBS already active, just ensure mission is cancelled
                     break;
             }

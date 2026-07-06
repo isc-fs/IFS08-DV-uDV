@@ -19,7 +19,7 @@
 /* C-callable ASSI-EMERGENCY CAN emitter (defined in can_interface.cpp,
  * declared extern "C" in can_interface.hpp). Forward-declared here so
  * this C file doesn't include the C++ header. */
-extern void can_interface_send_assi_emergency_from_isr(void);
+//extern void can_interface_send_assi_emergency_from_isr(void);
 
 /* --- tuning ---------------------------------------------------------- */
 
@@ -139,7 +139,7 @@ void StartSafetyTask(void *argument)
         if (emergency_latched) {
             safety_enter_safe_state();         /* hold EBS fired + SDC open */
             if ((uint32_t)(now - last_assi_ms) >= ASSI_RESEND_PERIOD_MS) {
-                can_interface_send_assi_emergency_from_isr();
+                //can_interface_send_assi_emergency_from_isr();
                 last_assi_ms = now;
             }
         }
