@@ -278,7 +278,7 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
-                    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
+                    //HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
                     //Can::sendSteeringStart();
                     //Can::sendSteeringStop();
                     //move_steer_sin();
@@ -355,7 +355,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
+                    HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
                     assi_set_mode(AS_MODE_FINISHED);
+                    ebs.activateEBS();
                     // Mission complete - EBS already active, just ensure mission is cancelled
                     break;
             }
