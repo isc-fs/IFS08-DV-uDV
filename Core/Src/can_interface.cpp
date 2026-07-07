@@ -1,6 +1,5 @@
 #include "can_interface.hpp"
 #include "as_state.h"
-#include "bench_stubs.h"   /* BENCH_STUB_RES (all 0 on dev) */
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -678,14 +677,6 @@ extern "C" float can_c_get_steering_angle_deg(void)
 extern "C" int32_t can_c_get_res_status(uint32_t now_tick, uint32_t timeout_ms)
 {
     uint32_t last = g_res_last_rx_tick.load();
-    /* Bench stub (bench_stubs.h, 0 on dev — folds away): with no RES box on
-     * the bench, no 0x191 ever arrives, so `last` stays 0 and the real logic
-     * below returns -2 (never received) -> res_ok false -> READY unreachable.
-     * Report a healthy OK link instead so the bench can arm to READY. Only
-     * while NOTHING real has been seen: once a real 0x191 lands, `last` != 0
-     * and the genuine e-stop/GO/timeout logic takes over (a CAN tool sending a
-     * real GO still crosses the GO edge). */
-    if (BENCH_STUB_RES && last == 0U)            return  0; /* stub: healthy OK */
     if (last == 0U)                              return -2; /* nunca recibido */
     if ((now_tick - last) > timeout_ms)          return -1; /* timeout */
     if (g_res_estop.load())                      return  1; /* E-Stop activo */

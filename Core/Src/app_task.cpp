@@ -271,12 +271,12 @@ extern "C" void StartAppTask(void *argument)
     /* A build with any bench stub toggled on (bench_stubs.h) announces
      * itself on /debug once at boot — a stubbed image must never
      * masquerade as a flight build. Folds away when all toggles are 0. */
-    if (BENCH_STUB_EBS_INIT || BENCH_STUB_DVPC || BENCH_STUB_RES)
+    if (BENCH_STUB_EBS_INIT || BENCH_STUB_DVPC)
     {
         char stub_buf[128];   /* debugQueue element size */
         snprintf(stub_buf, sizeof(stub_buf),
-                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d dvpc=%d res=%d)",
-                 BENCH_STUB_EBS_INIT, BENCH_STUB_DVPC, BENCH_STUB_RES);
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d dvpc=%d)",
+                 BENCH_STUB_EBS_INIT, BENCH_STUB_DVPC);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
     }
 
