@@ -98,6 +98,7 @@ extern std::atomic<uint8_t>  g_res_go_signal;
 extern std::atomic<uint8_t>  g_res_radio_quality;
 extern std::atomic<bool>     g_res_pre_alarm;
 extern std::atomic<uint32_t> g_res_last_rx_tick;
+extern std::atomic<uint8_t>  g_res_raw0;        /* last 0x191 data[0] (pit-diag) */
 
 #endif /* __cplusplus */
 

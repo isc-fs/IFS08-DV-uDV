@@ -46,9 +46,26 @@ static volatile uint8_t  s_armed[SAFETY_NUM_TASKS];
  * safety_flag_watchdog_reset). Makes the supervisor come up latched. */
 static volatile uint8_t  s_boot_watchdog_reset = 0u;
 
+/* --- pit-diag mirrors (read-only snapshots for the CAN diag stream) --- */
+static volatile uint8_t  s_diag_latched   = 0u;   /* emergency latched now  */
+static volatile int8_t   s_diag_stalled   = -1;   /* stalled task id, -1 none */
+
 void safety_flag_watchdog_reset(void)
 {
     s_boot_watchdog_reset = 1u;
+}
+
+/* Pit-diag accessors — cheap read-only snapshots for the FDCAN2 health frame. */
+uint8_t safety_diag_reset_flag(void) { return s_boot_watchdog_reset; }
+uint8_t safety_diag_latched(void)    { return s_diag_latched; }
+int8_t  safety_diag_stalled_task(void){ return s_diag_stalled; }
+uint8_t safety_diag_armed_mask(void)
+{
+    uint8_t m = 0u;
+    for (int i = 0; i < SAFETY_NUM_TASKS; ++i) {
+        if (s_armed[i]) m |= (uint8_t)(1u << i);
+    }
+    return m;
 }
 
 void safety_heartbeat(safety_task_id_t id)
@@ -139,7 +156,9 @@ void StartSafetyTask(void *argument)
         int stalled = safety_eval(watch, counts, armed, SAFETY_NUM_TASKS, now);
         if (stalled >= 0) {
             emergency_latched = 1u;   /* latch — never auto-clears */
+            s_diag_stalled = (int8_t)stalled;
         }
+        s_diag_latched = emergency_latched;   /* mirror for pit-diag */
 
         if (emergency_latched) {
             safety_enter_safe_state();         /* hold EBS fired + SDC open */

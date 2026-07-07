@@ -24,6 +24,8 @@
 #ifndef SAFETY_MONITOR_H
 #define SAFETY_MONITOR_H
 
+#include <stdint.h>   /* uint8_t / int8_t (pit-diag snapshot accessors) */
+
 /* ---- Timing budget (single source of truth; HAL-free so it can be
  *      asserted against the FS-Rules limits in the host test suite). ----
  *
@@ -78,6 +80,12 @@ void safety_arm(safety_task_id_t id);
  * hang, so we must not silently re-arm into normal operation.
  */
 void safety_flag_watchdog_reset(void);
+
+/* Pit-diag read-only snapshots for the FDCAN2 health frame (see pit_diag). */
+uint8_t safety_diag_reset_flag(void);    /* 1 = this boot followed an IWDG reset */
+uint8_t safety_diag_latched(void);       /* 1 = graceful emergency latched now    */
+int8_t  safety_diag_stalled_task(void);  /* stalled task id, -1 = none            */
+uint8_t safety_diag_armed_mask(void);    /* bit i set = task i armed/monitored    */
 
 /**
  * @brief FreeRTOS entry point for the safety supervisor task.

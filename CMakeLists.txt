@@ -106,6 +106,7 @@ set(C_SOURCES
 set(CPP_SOURCES
     Core/Src/can_interface.cpp
     Core/Src/can_globals.cpp
+    Core/Src/pit_diag.cpp
     Core/Src/can_task.cpp
     # AS state machine (keep in sync with Makefile)
     Core/Src/app_task.cpp

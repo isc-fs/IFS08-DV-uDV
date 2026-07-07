@@ -1,6 +1,7 @@
 #include "can_interface.hpp"
 #include "as_state.h"
 #include "bench_stubs.h"   /* BENCH_STUB_RES (all 0 on dev) */
+#include "pit_diag.h"      /* CAN_ID_PITDIAG_ARM + pit_diag_arm_from_can */
 #include <cstring>
 #include "main.h"
 #include "stm32h7xx_hal.h"
@@ -165,6 +166,21 @@ void initEcu()
             FDCAN_REJECT,
             FDCAN_REJECT_REMOTE,
             FDCAN_REJECT_REMOTE) != HAL_OK) {
+        Error_Handler();
+    }
+
+    /* Second filter: the pit-diag arm frame (0x7DE) -> FIFO0. Outside the
+     * 0x504..0x511 contract range, so it needs its own slot (StdFiltersNbr
+     * is 2). Lets the pit tool enable the diag stream over CAN. */
+    FDCAN_FilterTypeDef arm_filter = {
+        .IdType       = FDCAN_STANDARD_ID,
+        .FilterIndex  = 1,
+        .FilterType   = FDCAN_FILTER_DUAL,
+        .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
+        .FilterID1    = CAN_ID_PITDIAG_ARM,   /* 0x7DE */
+        .FilterID2    = CAN_ID_PITDIAG_ARM,
+    };
+    if (HAL_FDCAN_ConfigFilter(&hfdcan2, &arm_filter) != HAL_OK) {
         Error_Handler();
     }
 
@@ -395,6 +411,10 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
         }
         break;
 
+    case CAN_ID_PITDIAG_ARM:             /* 0x7DE — pit tool enables diag stream */
+        pit_diag_arm_from_can(msg->data, msg->dlc);
+        break;
+
     case CAN_ID_STEERING:
         //snprintf(srv_msg, sizeof(srv_msg), "id direcion detectado");
         HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
@@ -445,6 +465,7 @@ void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
     {
     case CAN_ID_RES_PDO_TX: {
         if (msg->dlc < 1U) break;   /* dlc=0 is legal CAN — don't decode e-stop from garbage */
+        g_res_raw0.store(msg->data[0]);   /* raw byte for pit-diag 0x7A1 */
         g_res_estop.store((msg->data[0] & 0x01U) == 0U);
         g_res_go_signal.store((msg->data[0] & 0x04U) != 0U ? 1U : 0U);
         if (msg->dlc >= 7U) g_res_radio_quality.store(msg->data[6]);
