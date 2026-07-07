@@ -138,7 +138,7 @@ void initRes()
 void sendControl(float accel, float steer)
 {
     // Backwards-compatible helper: send two separate frames for accel and steer
-    sendAccel(accel);
+    //sendAccel(accel);
     sendSteer(steer);
 }
 
@@ -172,13 +172,13 @@ void initEcu()
      * Accept only the ECU->uDV contract range 0x504..0x511 (one RANGE
      * filter — StdFiltersNbr is 1). Everything else on the ACU bus (AMS
      * heartbeats etc.) is rejected so it can't flood the shared RX queue. */
-    FDCAN_FilterTypeDef filter = {
+    /*FDCAN_FilterTypeDef filter = {
         .IdType       = FDCAN_STANDARD_ID,
         .FilterIndex  = 0,
         .FilterType   = FDCAN_FILTER_RANGE,
         .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
-        .FilterID1    = CAN_ID_TS_ACTIVE,     /* 0x504 */
-        .FilterID2    = CAN_ID_R2D_CONFIRM,   /* 0x511 */
+        .FilterID1    = CAN_ID_TS_ACTIVE,     
+        .FilterID2    = CAN_ID_R2D_CONFIRM,  
     };
     if (HAL_FDCAN_ConfigFilter(&hfdcan2, &filter) != HAL_OK) {
         Error_Handler();
@@ -192,22 +192,20 @@ void initEcu()
         Error_Handler();
     }
 
-    /* CubeMX only enables FDCAN2_IT1 (same class of gotcha as FDCAN1's
-     * IT0 — see initRes). Instead of adding another IRQ handler, route the
-     * RX-FIFO0 new-message interrupt onto the already-wired LINE1. */
+
     if (HAL_FDCAN_ConfigInterruptLines(&hfdcan2,
             FDCAN_IT_RX_FIFO0_NEW_MESSAGE,
             FDCAN_INTERRUPT_LINE1) != HAL_OK) {
         Error_Handler();
-    }
+    }*/
 
     if (HAL_FDCAN_Start(&hfdcan2) != HAL_OK) {
-        Error_Handler();
+        //Error_Handler();
     }
 
-    if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
+    /*if (HAL_FDCAN_ActivateNotification(&hfdcan2, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
         Error_Handler();
-    }
+    }*/
 }
 
 void sendAccel(float accel)

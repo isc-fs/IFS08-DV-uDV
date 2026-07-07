@@ -218,7 +218,7 @@ extern "C" void StartAppTask(void *argument)
             Can::sendR2dRequest(1u);
             mission_time = osKernelGetTickCount(); // Efecto secundario mantenido
         } else if (res_ok && ts_on) {
-            Can::initEcu();
+            //Can::initEcu();
             as_state = ASState::READY;
         } else {
             as_state = previous_as_state;
@@ -269,13 +269,6 @@ extern "C" void StartAppTask(void *argument)
                 }
             }*/
 
-            // Send zero control when not driving (safety)
-            if (as_state != ASState::DRIVING)
-            {
-                Can::sendAccel(0.0f);
-                Can::sendSteer(0.0f);
-            }
-
             // State-specific logic
             switch (as_state)
             {
@@ -286,16 +279,9 @@ extern "C" void StartAppTask(void *argument)
                     //move_steer_sin();
                     assi_set_mode(AS_MODE_OFF);
                     ebs.activateEBS();
-                    // Perform EBS initialization sequence steps
-                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
-                    {
-                        ebs_state = ebs.initSequenceStep();
-                    }
-                    else
-                    {
-                        ebs.deactivateEBS();
-                    }
+                    
                     break;
+                    
 
                 case ASState::READY:
                     assi_set_mode(AS_MODE_READY);
@@ -345,16 +331,7 @@ extern "C" void StartAppTask(void *argument)
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
 
-                    // Cancel any active mission
-                    if (g_set_mission_in_progress.load())
-                    {
-                        send_cancel_set_mission_command();
-                    }
-
-                    if (g_mission_going_cmd.load())
-                    {
-                        send_cancel_mission_command();
-                    }
+                    
                     break;
 
                 case ASState::FINISHED:
