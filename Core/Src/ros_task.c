@@ -244,13 +244,22 @@ static const char *res_status_name(int32_t s)
    sig is packed with the AS_SIG_* bits from as_state.h; res is the raw
    can_c_get_res_status() code. */
 static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
-                               uint8_t as, uint16_t sig, uint8_t ebs, int32_t res)
+                               uint8_t as, uint16_t sig, uint8_t ebs, int32_t res,
+                               int32_t mission)
 {
   char as_tok[48];
   if (prev_as != as)
     snprintf(as_tok, sizeof(as_tok), "AS %s->%s", as_state_name(prev_as), as_state_name(as));
   else
     snprintf(as_tok, sizeof(as_tok), "AS %s", as_state_name(as));
+
+  /* Mission field mirrors /ami/mission (raw g_can_mission_id via
+   * can_c_get_mission_index): the AMI code actually received (-1 = none),
+   * NOT the pipeline-handshake-gated mission_selected — which reads "unset"
+   * for a standalone mission with no DVPC even after a valid AMI select. */
+  char mission_tok[8];
+  if (mission < 0) snprintf(mission_tok, sizeof(mission_tok), "none");
+  else             snprintf(mission_tok, sizeof(mission_tok), "%ld", (long)mission);
 
   snprintf(buf, n,
     "%s || ASMS:%s TS:%s SDC:%s EBS:%s ABS:%s || "
@@ -262,7 +271,7 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
     (sig & AS_SIG_EBS_ACTIVATED)  ? "on"         : "off",
     (sig & AS_SIG_ABS_CHECKS_OK)  ? "ok"         : "fail",
     (sig & AS_SIG_BRAKES_ENGAGED) ? "on"         : "off",
-    (sig & AS_SIG_MISSION_SEL)    ? "set"        : "unset",
+    mission_tok,
     (sig & AS_SIG_R2D)            ? "on"         : "off",
     (sig & AS_SIG_STANDSTILL)     ? "standstill" : "moving",
     (sig & AS_SIG_MISSION_DONE)   ? "yes"        : "no",
@@ -622,6 +631,7 @@ void ros_task_run(void)
   uint16_t last_signals  = ros_get_state_signals();
   uint8_t  last_ebs      = ros_get_ebs_init_state();
   int32_t  last_res      = can_c_get_res_status(osKernelGetTickCount(), RES_TIMEOUT_MS);
+  int32_t  last_mission  = can_c_get_mission_index();
   uint16_t state_dump_counter = STATE_DUMP_INTERVAL;  /* emit on the first sample */
 
   /* Agent liveness (phase 3): periodic in-session ping; on consecutive
@@ -710,22 +720,26 @@ void ros_task_run(void)
       uint16_t sig_now = ros_get_state_signals();
       uint8_t  ebs_now = ros_get_ebs_init_state();
       int32_t  res_now = can_c_get_res_status(osKernelGetTickCount(), RES_TIMEOUT_MS);
+      int32_t  mission_now = can_c_get_mission_index();
       bool changed  = (as_now != last_as_state) ||
                       (sig_now != last_signals) ||
                       (ebs_now != last_ebs) ||
-                      (res_now != last_res);
+                      (res_now != last_res) ||
+                      (mission_now != last_mission);
       bool periodic = (++state_dump_counter >= STATE_DUMP_INTERVAL);
       if (changed || periodic)
       {
         char state_buf[256];
         format_state_debug(state_buf, sizeof(state_buf),
-                           last_as_state, as_now, sig_now, ebs_now, res_now);
+                           last_as_state, as_now, sig_now, ebs_now, res_now,
+                           mission_now);
         rosidl_runtime_c__String__assign(&debug_str_msg.data, state_buf);
         (void)rcl_publish(&debug_pub, &debug_str_msg, NULL);
         last_as_state = as_now;
         last_signals  = sig_now;
         last_ebs      = ebs_now;
         last_res      = res_now;
+        last_mission  = mission_now;
         state_dump_counter = 0;
       }
 
