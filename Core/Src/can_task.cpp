@@ -20,6 +20,7 @@ extern "C" {
 
 #include "can_interface.hpp"
 #include "can_task.h"
+#include "pit_diag.h"
 #include "safety_monitor.h"   /* heartbeat / arm (extern "C" guarded) */
 
 /**
@@ -75,6 +76,10 @@ extern "C" void StartCanTask(void *argument)
         }
 
         uint32_t now = osKernelGetTickCount();
+
+        /* Pit-diag: CAN-only observability stream on FDCAN2 (self-paced,
+         * gated by the 0x7DE arm frame — no-op until armed). */
+        pit_diag_service(now);
 
         // DataLogger TX every 100 ms (DS 2.2 cadence).
         if ((now - last_dl_tick) >= DL_TX_INTERVAL_MS)

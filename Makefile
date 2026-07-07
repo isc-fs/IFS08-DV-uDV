@@ -120,6 +120,7 @@ Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c
 CPP_SOURCES = \
 Core/Src/can_interface.cpp \
 Core/Src/can_globals.cpp \
+Core/Src/pit_diag.cpp \
 Core/Src/can_task.cpp \
 Core/Src/app_task.cpp \
 Core/Src/state_manager.cpp \
@@ -181,11 +182,16 @@ MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
 AS_DEFS = 
 
 # C defines
+## Short git hash baked in for the pit-diag fw-info frame (0x7A4). 0 if not a
+## git checkout. `?=` so CI/other callers can override.
+GIT_HASH ?= $(shell git rev-parse --short=8 HEAD 2>/dev/null || echo 0)
+
 C_DEFS =  \
 -DUSE_PWR_LDO_SUPPLY \
 -DUSE_HAL_DRIVER \
 -DSTM32H733xx \
--DSTM32_THREAD_SAFE_STRATEGY=4
+-DSTM32_THREAD_SAFE_STRATEGY=4 \
+-DGIT_HASH=0x$(GIT_HASH)
 
 
 # AS includes
