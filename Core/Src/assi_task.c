@@ -34,11 +34,13 @@ assi_mode_t assi_get_mode(void)
 }
 
 /* Flash timing (FS-Rules T14.9.1: 2-5 Hz at 50 % duty). One loop pass per
- * half-period: 150 ms on + 150 ms off => 3.3 Hz, mid-band for jitter margin.
- * The SAME constant is used for both phases (and for the steady states'
- * refresh), so the duty cycle is 50 % by construction — if you change the
- * rate, change only this constant, never one phase's delay alone. */
-#define ASSI_HALF_PERIOD_MS  150u
+ * half-period: 250 ms on + 250 ms off => 2 Hz. Bench-validated rate (the
+ * Arduino bridge renders the toggle cleanly here; the earlier 150 ms / 3.3 Hz
+ * looked erratic on the real strip). The SAME constant is used for both
+ * phases (and for the steady states' refresh), so the duty cycle is 50 % by
+ * construction — if you change the rate, change only this constant, never one
+ * phase's delay alone. */
+#define ASSI_HALF_PERIOD_MS  250u
 
 void StartAssiTask(void *argument)
 {
