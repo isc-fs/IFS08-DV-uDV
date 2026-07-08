@@ -77,10 +77,13 @@ enum DvKind  { DV_STALE, DV_FRESH_OTHER, DV_FRESH_READY, DV_FRESH_FINISHED, DV_F
 // mission_valid defaults to TRUE (the selected AMI code maps to a real
 // mission) so every pre-existing case is unchanged; the unknown/SHUTDOWN
 // cases pass false to assert GO is refused.
+// ready_dwell defaults to TRUE so every pre-existing GO case still reaches
+// DRIVING; the AS-Ready dwell-gate cases pass false to assert GO is held
+// until the mandated >=5 s READY dwell has elapsed (FS-Rules).
 static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
                      bool ebs_done = true, bool steer_emerg = false,
                      bool needs_pipeline = true, bool mission_complete = false,
-                     bool mission_valid = true)
+                     bool mission_valid = true, bool ready_dwell = true)
 {
     AsInputs in{};
     in.asms_on         = asms;
@@ -99,6 +102,7 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
     in.mission_needs_pipeline = needs_pipeline;
     in.mission_complete       = mission_complete;
     in.mission_valid          = mission_valid;
+    in.ready_dwell_elapsed    = ready_dwell;
     return in;
 }
 
@@ -126,6 +130,32 @@ static void test_named_cases(void)
     CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_STALE),       ASState::READY);
     // Ready + go + pipeline READY -> DRIVING.
     CHECK_EQ(ASState::READY, make(true, true, RES_GO, DV_FRESH_READY), ASState::DRIVING);
+
+    // --- AS-Ready dwell gate (FS-Rules >=5 s in READY before GO) ---
+    // 10th make() arg is ready_dwell. A GO before the dwell elapses is REFUSED:
+    // the car holds in READY even with an otherwise-complete GO gate.
+    // (A) pipeline mission, DV READY, GO, but dwell NOT elapsed -> stay READY.
+    CHECK_EQ(ASState::READY,
+             make(true, true, RES_GO, DV_FRESH_READY, true, false, true, false, true, false),
+             ASState::READY);
+    // (B) standalone mission, GO, but dwell NOT elapsed -> stay READY.
+    CHECK_EQ(ASState::READY,
+             make(true, true, RES_GO, DV_STALE, true, false, false, false, true, false),
+             ASState::READY);
+    // (C) same standalone GO once the dwell HAS elapsed -> DRIVING (control).
+    CHECK_EQ(ASState::READY,
+             make(true, true, RES_GO, DV_STALE, true, false, false, false, true, true),
+             ASState::DRIVING);
+    // (D) the dwell gate must NOT weaken the fail-safe order: an e-stop from
+    // READY with the dwell not elapsed still forces EMERGENCY.
+    CHECK_EQ(ASState::READY,
+             make(true, true, RES_ESTOP, DV_STALE, true, false, true, false, true, false),
+             ASState::EMERGENCY);
+    // (E) the dwell gates ENTRY only, not persistence: already DRIVING with a
+    // healthy world stays DRIVING regardless of the dwell flag.
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_GO, DV_FRESH_OTHER, true, false, true, false, true, false),
+             ASState::DRIVING);
 
     // Driving, pipeline still Running (fresh, not ready/finished/emerg),
     // RES still go -> stay DRIVING (no READY<->DRIVING oscillation with a
@@ -251,10 +281,11 @@ static void test_invariants(void)
             for (int np = 0; np < 2; ++np)
              for (int mc = 0; mc < 2; ++mc)
               for (int mv = 0; mv < 2; ++mv)
+              for (int dw = 0; dw < 2; ++dw)
               for (ResKind res : ress)
               for (DvKind dv : dvs) {
                 AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0,
-                                   np != 0, mc != 0, mv != 0);
+                                   np != 0, mc != 0, mv != 0, dw != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
@@ -267,7 +298,8 @@ static void test_invariants(void)
                 if (out == ASState::DRIVING && prev != ASState::DRIVING) {
                     CHECK_TRUE(prev == ASState::READY && in.res_go &&
                                in.mission_valid &&
-                               (in.dv_ready || !in.mission_needs_pipeline));
+                               (in.dv_ready || !in.mission_needs_pipeline) &&
+                               in.ready_dwell_elapsed);
                 }
 
                 // INV2b mission-valid gate: an invalid mission (unknown /

@@ -81,6 +81,9 @@ static constexpr float    STEER_FULL_LOCK_DEG      = 65.0f;
 /* DV ready-to-drive request (0x510) retry period until the ECU confirms
  * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
 static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
+/* Mandated minimum time in AS READY before a RES GO may be honoured
+ * (FS-Rules AS-Ready dwell). Gates READY->DRIVING via as_in.ready_dwell_elapsed. */
+static constexpr uint32_t READY_DWELL_MS           = 5000u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
@@ -386,6 +389,13 @@ extern "C" void StartAppTask(void *argument)
         as_in.mission_needs_pipeline = (gate_mission != nullptr) && gate_mission->needs_pipeline;
         as_in.mission_complete       = mission_complete;
         as_in.mission_valid          = (mission != nullptr);
+        /* FS-Rules AS-Ready dwell: a GO is only honoured after the car has been
+         * in READY for >= READY_DWELL_MS. ready_start_time is stamped on the
+         * READY-entry tick below (0 while not in READY), so this reads false on
+         * the entry tick and until the dwell elapses — refusing an early GO. */
+        as_in.ready_dwell_elapsed    =
+            (ready_start_time != 0u) &&
+            ((hardware_io_now_ms() - ready_start_time) > READY_DWELL_MS);
 
         /* Bench stub (bench_stubs.h toggle, 0 on dev — this branch folds
          * away): no DVPC on the bench. While NO /dv/status has ever arrived,
@@ -561,12 +571,15 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::READY:
                     ebs.activateEBS();   // held engaged in READY (req #4)
-                    // Wait 5 seconds in READY state before signaling "go" to CAN
+                    /* Stamp the READY-entry time; the mandated dwell is enforced
+                     * on the transition via as_in.ready_dwell_elapsed (built
+                     * above from this timestamp). g_can_listen_go mirrors the
+                     * same >= READY_DWELL_MS condition for telemetry (pit_diag). */
                     if (ready_start_time == 0)
                     {
                         ready_start_time = hardware_io_now_ms();
                     }
-                    else if (hardware_io_now_ms() - ready_start_time > 5000)
+                    else if (hardware_io_now_ms() - ready_start_time > READY_DWELL_MS)
                     {
                         g_can_listen_go.store(true);
                     }
