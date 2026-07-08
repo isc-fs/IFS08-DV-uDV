@@ -566,6 +566,7 @@ void sendNmtSetOperational()
  * matching DIR_INACTIVO). */
 static void sendSteeringMotorCmd(uint8_t motor_start)
 {
+    if (BENCH_STUB_STEERING) return;   /* bench: never command the steering (0x010) */
     /* #113: calibration and normal operation are mutually exclusive — never
      * command the motor while the steering is calibrating (it ignores 0x10
      * anyway, but sending it would re-arm the instant calib ends). */
@@ -611,6 +612,7 @@ void sendSteeringCalib(uint8_t cmd)
 
 void sendSteeringAngle(float angle_deg)
 {
+    if (BENCH_STUB_STEERING) return;   /* bench: never send a steering angle (0x020) */
     if (g_steer_motor_state.load() == ESTADO_MOTOR_CALIBRANDO) return;  /* #113 */
     /* Scale: int32 LE in 0.01-deg units (matches dev's steering_angle_cmd) */
     int32_t scaled = (int32_t)(angle_deg * 100.0f);

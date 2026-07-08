@@ -1,70 +1,90 @@
 /**
  * @file    bench_stubs.h
- * @brief   Bench stub toggles — THE one file you edit to stub a dependency.
+ * @brief   Bench stub toggles — the ONE place a bench dependency is faked.
  *
- * Mirrors the ECU pattern (IFS08-CE-ECU ecu_config.hpp + bench/car-stubs):
- * the stub hooks live in the main code permanently, gated on the constants
- * below. dev keeps everything 0 (= real behavior, stub branches compile to
- * nothing); a bench build flips the toggle(s) here, rebuilds and flashes.
- * Keep bench flips on a `bench/...` branch as a single one-line commit on
- * top of dev — never merge a 1 to dev.
+ * Mirrors the ECU pattern (IFS08-CE-ECU ecu_config.hpp + bench/car-stubs): the
+ * stub hooks live in the main code PERMANENTLY, gated on the constants below.
+ * Each is consumed as `if (BENCH_STUB_X)` — a compile-time constant the compiler
+ * folds away, so a car build carries zero stub code, but BOTH branches always
+ * compile (no #ifdef bitrot). When any toggle is 1 the firmware announces it on
+ * /debug at boot ("BENCH STUBS COMPILED IN") so a stubbed image can never
+ * masquerade as a flight build; the pit-diag stub mask carries them too.
  *
- * The toggles are consumed as `if (BENCH_STUB_X)` — a constant the compiler
- * folds away, so a car build carries zero stub code, but BOTH branches are
- * always compiled (no #ifdef bitrot). When any toggle is 1 the firmware
- * announces it on /debug at boot ("BENCH STUBS COMPILED IN") so a stubbed
- * image can never masquerade as a flight build.
+ * === dev is flight-clean: every toggle DEFAULTS TO 0 here. ===
+ * Do NOT edit the defaults in this file to 1. Turn a stub on for a bench build
+ * ONE of two ways, neither of which touches dev:
+ *   (a) preferred — pass it as a build define, no source edit, no branch:
+ *         make BENCH="-DBENCH_STUB_STEERING=1 -DBENCH_STUB_DVPC=1"
+ *       (the Makefile forwards $(BENCH) into the compile flags). Same source as
+ *       flight; the difference lives only in the build command.
+ *   (b) a thin `bench/<scenario>` branch: a single commit that #defines the
+ *       toggle(s) ABOVE the guarded defaults below. Never merge it to dev.
  *
- *   BENCH_STUB_EBS_INIT — EbsManager::initSequenceStep() reports Done
- *     immediately, skipping the actuator/pressure self-check that needs the
- *     EBS pneumatics + SDC feedback (without them CheckActuator1 can never
- *     pass and the car can never arm). activate/deactivateEBS() still drive
- *     D1/D2 for real — observable on a scope.
- *     NOTE: the skipped sequence also performs hardware_io_set_as_close_sdc()
- *     on the way through WaitTS; with the stub on, the AS SDC relay is never
- *     closed. Fine when TSMS is driven by a bench switch; not fine if the rig
- *     emulates car wiring through the SDC relay.
+ * Because each toggle is `#ifndef`-guarded, a -D override (a) or a bench branch
+ * #define (b) wins and this file's 0 is skipped.
  *
- *   BENCH_STUB_DVPC — while NO /dv/status has ever been received (no DVPC
- *     on the bench), the AS inputs are forced to a fresh pipeline READY so
- *     pipeline missions can arm/drive and the lost-heartbeat watchdog does
- *     not fire. The moment a real pipeline publishes, its bytes win and the
- *     stub goes inert for the rest of the power cycle.
+ *   BENCH_STUB_EBS_INIT — EbsManager::initSequenceStep() reports Done at once,
+ *     skipping the WHOLE self-check. NO actuator fires and the AS SDC line is
+ *     NOT closed — the "nothing wired" desk-bench shortcut. MUST be 0 for on-car
+ *     valve bring-up (use EBS_SENSORS instead) — at 1 the sequence is skipped so
+ *     D1/D2 never fire and the AS SDC relay (D4) stays open.
  *
- *   BENCH_STUB_RES — while NO real RES frame (0x191) has ever arrived (no RES
- *     box on the bench), can_c_get_res_status() reports a healthy link (OK: no
- *     e-stop, no GO) instead of the never-received/timeout code. This is what
- *     lets a bare bench reach AS READY (rule 8 gates on res_ok), since the RES
- *     GO/status is consumed from CAN 0x191, not the A2 GO_RES pin. The moment a
- *     real RES frame arrives the stub goes inert (real e-stop/GO/timeout win),
- *     so a CAN tool sending a real 0x191 GO still drives READY->DRIVING.
- *     NOTE: with no real RES, the status is stuck at OK — it never returns GO,
- *     so the car reaches READY but does not self-advance to DRIVING. Send a
- *     real 0x191 GO frame (or use the real RES) to cross the GO edge.
+ *   BENCH_STUB_EBS_SENSORS — on-car EBS valve bring-up WITHOUT compressed air.
+ *     Runs the REAL init sequence (actuators fire A1 then A2, SDC line closed for
+ *     real); only the pressure / SDC-feedback SENSOR reads are faked to pass
+ *     (checkStoragePressures A5/A4, checkBrakeLinePressure 0x505, the Start/WaitLow
+ *     SDC-ready read). The TS wait (ASMS A3 ∧ TSMS A6) stays REAL. Do NOT set with
+ *     EBS_INIT (EBS_INIT wins and suppresses actuation — see the #error below).
+ *
+ *   BENCH_STUB_SDC — fake only the SDC-ready read (A1=RES_1_IN on this PCB).
+ *     Redundant while EBS_SENSORS=1; exists to fake SDC on its own and to run the
+ *     EBS pressure checks for real. Does NOT touch the D4 SDC drive.
+ *
+ *   BENCH_STUB_DVPC — while NO /dv/status has ever arrived (no DVPC on the bench)
+ *     the AS inputs are forced to a fresh pipeline READY so pipeline missions can
+ *     arm/drive and the lost-heartbeat watchdog can't fire. The moment a real
+ *     pipeline publishes, its bytes win and the stub goes inert for the rest of
+ *     the power cycle.
+ *
+ *   BENCH_STUB_RES — while NO real 0x191 has arrived, can_c_get_res_status()
+ *     reports a healthy link (OK: no e-stop/GO) so a bare bench reaches AS READY.
+ *     Goes inert the moment a real RES frame arrives. NOTE: with a real RES box
+ *     present, keep this 0 or it pins the status to OK and NEVER reports GO.
+ *
+ *   BENCH_STUB_STEERING — fully decouple the steering: the uDV sends NOTHING to
+ *     the steering board (no 0x010 motor-start, no 0x020 angle) AND ignores its
+ *     ESTADO_MOTOR feedback so a latched EMERGENCIA can't trip AS. For an
+ *     UNCALIBRATED steering that must not be driven. Calibration (0x30) is NOT
+ *     suppressed — that path must still work to bring the steering up.
  */
 #ifndef BENCH_STUBS_H
 #define BENCH_STUBS_H
 
-/* ==== Toggle stubs here: 0 = real behavior (dev default), 1 = stubbed ==== */
+/* ==== flight defaults: ALL 0. Override per bench build via -D (see header). ==== */
+#ifndef BENCH_STUB_EBS_INIT
+#define BENCH_STUB_EBS_INIT    0
+#endif
+#ifndef BENCH_STUB_EBS_SENSORS
+#define BENCH_STUB_EBS_SENSORS 0
+#endif
+#ifndef BENCH_STUB_SDC
+#define BENCH_STUB_SDC         0
+#endif
+#ifndef BENCH_STUB_DVPC
+#define BENCH_STUB_DVPC        0
+#endif
+#ifndef BENCH_STUB_RES
+#define BENCH_STUB_RES         0
+#endif
+#ifndef BENCH_STUB_STEERING
+#define BENCH_STUB_STEERING    0
+#endif
 
-/* TEMPORARY (pre-production bench/car testing): these stubs are ON. This is a
- * deliberate, owner-approved exception to the "never merge a 1 to dev" rule
- * while there is no EBS-pneumatics rig / DVPC / RES box on the bench. REVERT
- * ALL TO 0 before any production / competition run (the firmware still
- * announces "BENCH STUBS COMPILED IN" on /debug at boot so a stubbed image is
- * obvious). */
-
-/* EBS init self-check -> Done immediately */
-#define BENCH_STUB_EBS_INIT   1
-/* fake fresh pipeline READY until the first real /dv/status arrives */
-#define BENCH_STUB_DVPC       1
-/* fake a healthy RES link (OK, no e-stop/GO) until a real 0x191 arrives.
- * OFF (0): with a real RES box present, this stub would pin the link status
- * to OK and NEVER report GO (can_c_get_res_status returns 0, never 2) until a
- * real 0x191 arrives — so the car reaches READY but the GO edge can never
- * register. It also masks a non-streaming RES as healthy. Keep 0 so real
- * e-stop/GO flow; the RES is (re)commanded operational by the NMT re-arm in
- * can_task (StartCanTask) so its 0x191 PDO actually streams. */
-#define BENCH_STUB_RES        0
+/* EBS_INIT skips the whole sequence (no actuation); EBS_SENSORS runs it for real
+ * with faked reads. Setting both means EBS_INIT wins and silently suppresses the
+ * actuation EBS_SENSORS was turned on to get — never useful, so make it an error. */
+#if BENCH_STUB_EBS_INIT && BENCH_STUB_EBS_SENSORS
+#error "BENCH_STUB_EBS_INIT and BENCH_STUB_EBS_SENSORS are mutually exclusive (EBS_INIT skips the actuation EBS_SENSORS runs)."
+#endif
 
 #endif /* BENCH_STUBS_H */
