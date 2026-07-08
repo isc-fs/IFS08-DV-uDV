@@ -237,6 +237,25 @@ static void send_calib(void)
     tx8(CAN_ID_PITDIAG_CALIB, d);
 }
 
+/* Live steering angle relay so a CAN-only pit (MingoCAN on FDCAN2) can SEE what
+ * the LWS is measuring — essential during manual end-stop calibration, where the
+ * operator turns the wheel to the stops and needs the live angle (the raw LWS
+ * 0x2B0 and the 0x500 feedback are on FDCAN3, invisible to the pit otherwise). */
+static void send_steer(void)
+{
+    int16_t lws_raw = g_steering_angle_raw.load();           /* 0x2B0, x0.1 deg    */
+    int16_t act = (int16_t)(g_steer_angle_actual.load() * 10.0f);  /* 0x500, ->x0.1 */
+    int16_t tgt = (int16_t)(g_steer_angle_target.load() * 10.0f);
+    uint8_t d[8] = {
+        (uint8_t)(lws_raw & 0xFFu), (uint8_t)((uint16_t)lws_raw >> 8), /* [0-1] LWS raw x0.1deg */
+        (uint8_t)(act & 0xFFu),     (uint8_t)((uint16_t)act >> 8),     /* [2-3] actual x0.1deg  */
+        (uint8_t)(tgt & 0xFFu),     (uint8_t)((uint16_t)tgt >> 8),     /* [4-5] target x0.1deg  */
+        g_steering_status.load(),                    /* [6] LWS status byte            */
+        (uint8_t)(int8_t)g_steer_motor_state.load(), /* [7] ESTADO_MOTOR (-1/0/1/2)    */
+    };
+    tx8(CAN_ID_PITDIAG_STEER, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -253,6 +272,7 @@ void pit_diag_service(uint32_t now_ms)
         send_health(now_ms);
         send_canhealth();
         send_calib();
+        send_steer();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;
