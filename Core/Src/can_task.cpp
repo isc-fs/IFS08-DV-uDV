@@ -39,6 +39,7 @@ extern "C" void StartCanTask(void *argument)
     //   FDCAN1 — RES CANopen + DataLogger TX
     Can::init();
     Can::initRes();
+    Can::initEcu();
 
     //Can::sendSteeringMotor(1);  // Motor start — sent once before angle loop
 

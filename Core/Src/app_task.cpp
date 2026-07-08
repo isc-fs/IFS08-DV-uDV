@@ -218,7 +218,6 @@ extern "C" void StartAppTask(void *argument)
             Can::sendR2dRequest(1u);
             mission_time = osKernelGetTickCount(); // Efecto secundario mantenido
         } else if (res_ok && ts_on) {
-            //Can::initEcu();
             as_state = ASState::READY;
         } else {
             as_state = previous_as_state;
@@ -305,8 +304,8 @@ extern "C" void StartAppTask(void *argument)
                         case 6:  //Inspection
                             Can::sendSteeringStart();
                             move_steer_sin();
+                            Can::sendAccel(15.0f);
                             //sen_motor_power(15); //15%
-                            Can::sendAccel(0.15f);
                             if(now-mission_time > 30000){
                                 as_state = ASState::FINISHED;
                                 Can::sendSteeringStop();
@@ -330,7 +329,7 @@ extern "C" void StartAppTask(void *argument)
                     assi_set_mode(AS_MODE_EMERGENCY);
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
-
+                    Can::sendAccel(0.0f);
                     
                     break;
 
