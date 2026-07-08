@@ -58,7 +58,13 @@
 #define BENCH_STUB_EBS_INIT   1
 /* fake fresh pipeline READY until the first real /dv/status arrives */
 #define BENCH_STUB_DVPC       1
-/* fake a healthy RES link (OK, no e-stop/GO) until a real 0x191 arrives */
-#define BENCH_STUB_RES        1
+/* fake a healthy RES link (OK, no e-stop/GO) until a real 0x191 arrives.
+ * OFF (0): with a real RES box present, this stub would pin the link status
+ * to OK and NEVER report GO (can_c_get_res_status returns 0, never 2) until a
+ * real 0x191 arrives — so the car reaches READY but the GO edge can never
+ * register. It also masks a non-streaming RES as healthy. Keep 0 so real
+ * e-stop/GO flow; the RES is (re)commanded operational by the NMT re-arm in
+ * can_task (StartCanTask) so its 0x191 PDO actually streams. */
+#define BENCH_STUB_RES        0
 
 #endif /* BENCH_STUBS_H */
