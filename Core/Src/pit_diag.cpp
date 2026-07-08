@@ -216,19 +216,20 @@ static void send_canhealth(void)
 /* Steering end-stop calibration status relay (#113): forwards the steering's
  * 0x510 (received on FDCAN3) to the pit tool on FDCAN2, so MingoCAN can show
  * calibration progress without tapping the steering bus. */
-static void send_calib(uint32_t now)
+static void send_calib(void)
 {
+    /* Layout matches the MingoCAN host decoder verbatim (can-flasher#428/#430):
+     * all 8 bytes are calib data — phase, error, then three int16 LE ×0.1° values,
+     * no age byte. */
     int16_t c   = g_steer_calib_center.load();
     int16_t hr  = g_steer_calib_halfrange.load();
     int16_t lim = g_steer_calib_limit.load();
-    uint16_t age = age_ms(g_steer_calib_last_rx_tick.load(), now);
     uint8_t d[8] = {
         g_steer_calib_phase.load(),      /* [0] phase (0 idle .. 9 OK, 10 FAIL) */
         g_steer_calib_error.load(),      /* [1] error code                       */
-        (uint8_t)(c & 0xFFu), (uint8_t)((uint16_t)c >> 8),     /* [2-3] center x0.1deg   */
-        (uint8_t)(hr & 0xFFu), (uint8_t)((uint16_t)hr >> 8),   /* [4-5] half-range x0.1  */
-        (uint8_t)(lim & 0xFFu),          /* [6] limit low byte (x0.1 deg)        */
-        (uint8_t)(age > 0xFEu ? 0xFFu : age), /* [7] status age ms (0xFF=never)  */
+        (uint8_t)(c & 0xFFu),   (uint8_t)((uint16_t)c >> 8),     /* [2-3] center x0.1deg    */
+        (uint8_t)(hr & 0xFFu),  (uint8_t)((uint16_t)hr >> 8),    /* [4-5] half-range x0.1   */
+        (uint8_t)(lim & 0xFFu), (uint8_t)((uint16_t)lim >> 8),   /* [6-7] motor limit x0.1  */
     };
     tx8(CAN_ID_PITDIAG_CALIB, d);
 }
@@ -248,7 +249,7 @@ void pit_diag_service(uint32_t now_ms)
         send_pipe(now_ms);
         send_health(now_ms);
         send_canhealth();
-        send_calib(now_ms);
+        send_calib();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;
