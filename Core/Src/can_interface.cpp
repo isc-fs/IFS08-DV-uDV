@@ -502,7 +502,11 @@ void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
 
 void sendNmtSetOperational()
 {
-    /* NMT "set operational" command for node 0x11. */
+    /* NMT "start remote node" broadcast (node-id 0 = ALL nodes). Starts the RES
+     * into OPERATIONAL regardless of its configured node ID — robust for a
+     * single-RES bus and removes the node-id assumption behind 0x191/0x711.
+     * Was addressed to RES_NODE_ID (0x11); if the RES ID ever differed, the
+     * targeted NMT was ACKed but ignored. */
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_NMT,
         .IdType              = FDCAN_STANDARD_ID,
@@ -514,7 +518,7 @@ void sendNmtSetOperational()
         .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
         .MessageMarker       = 0,
     };
-    uint8_t nmt[2] = { 0x01u, (uint8_t)RES_NODE_ID };
+    uint8_t nmt[2] = { 0x01u, 0x00u };   /* 0x00 = broadcast (all nodes) */
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, nmt);
     g_nmt_sent_count.fetch_add(1, std::memory_order_relaxed);  /* pit-diag 0x7A5 */
 }
