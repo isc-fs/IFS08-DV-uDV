@@ -50,7 +50,11 @@
 #define DPS_TO_RAD (float)(M_PI / 180.0)
 #define TIME_SYNC_TIMEOUT_MS  1000
 #define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
-#define SLOW_PUB_INTERVAL     40    // publish steering/RES/AMI every 40 IMU samples (~10 Hz)
+#define FAST_PUB_INTERVAL     4     // publish steering_angle/motor_rpm every 4 IMU samples (~100 Hz)
+#define SLOW_PUB_INTERVAL     40    // publish RES/AMI/GO/AS-state every 40 IMU samples (~10 Hz)
+// STEERING_RATIO: steering-wheel degrees / front-wheel degrees. Placeholder 1.0
+// until measured on the physical car (EKF over-estimates yaw rate until then).
+#define STEERING_RATIO        1.0f
 #define DL_TX_INTERVAL_MS     100   // Data Logger TX period
 #define RES_TIMEOUT_MS        150   // RES PDO timeout (expect every 30 ms)
 #define STATE_DUMP_INTERVAL   200   // /debug state heartbeat: every 200 IMU samples (~2 Hz at 400 Hz)
@@ -379,7 +383,7 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "imu/status"));
 
-  // Steering angle publisher (~10 Hz) — radians, as expected by pipeline
+  // Steering angle publisher (~100 Hz) — radians, as expected by pipeline
   rcl_publisher_t steering_pub;
   std_msgs__msg__Float32 steering_msg;
   steering_msg.data = 0.0f;
@@ -388,7 +392,7 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "steering_angle"));
 
-  // Motor RPM publisher (~10 Hz) — MECHANICAL shaft rpm from the ECU
+  // Motor RPM publisher (~100 Hz) — MECHANICAL shaft rpm from the ECU
   // (CAN 0x506, int32 signed, 10 ms; the ECU already divides the
   // inverter's electrical rpm by the pole pairs). Wheel speed for
   // odometry still needs the final-drive ratio applied pipeline-side.
@@ -400,7 +404,7 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
     "motor_rpm"));
 
-  // Steering feedback publisher (20 Hz)
+  // Steering feedback publisher (~100 Hz)
   // data[0] = angle_actual (deg) — LWS physical angle
   // data[1] = angle_target (deg) — last commanded angle echoed by controller
   // data[2] = angle_motor  (deg) — stepper position calculated by steps
@@ -614,8 +618,8 @@ void ros_task_run(void)
     osMessageQueuePut(debugQueueHandle, &initbuf, 0, 0);
   }
 
+  uint16_t fast_pub_counter    = 0;
   uint16_t slow_pub_counter    = 0;
-  uint16_t steering_fb_counter = 0;
 
   /* /assi/state heartbeat pacing + inter-publish gap instrumentation.
      last_assi_pub_ms == 0 also serves as the "no publish yet" sentinel so the
@@ -743,10 +747,26 @@ void ros_task_run(void)
         state_dump_counter = 0;
       }
 
-      // --- Steering feedback at 20 Hz (every 20 IMU samples) ---
-      if (++steering_fb_counter >= 20)
+      // --- Steering angle + motor RPM + steering feedback at 100 Hz ---
+      // (every 4 IMU samples). All feed the pipeline EKF and all share the
+      // 0x500/0x506 CAN sources, which run at 100 Hz (motor rpm 0x506 @10 ms;
+      // steering 0x500 @10 ms once STEERING fix/dyn1-100hz lands), so
+      // publishing here at 100 Hz carries fresh measurements, not repeats.
+      if (++fast_pub_counter >= FAST_PUB_INTERVAL)
       {
-        steering_fb_counter = 0;
+        fast_pub_counter = 0;
+
+        // Front-wheel steering angle (rad)
+        steering_msg.data = can_c_get_steering_angle_deg()
+                            * (float)(M_PI / 180.0)
+                            / STEERING_RATIO;
+        (void)rcl_publish(&steering_pub, &steering_msg, NULL);
+
+        // Motor RPM — mechanical shaft rpm from the ECU (CAN 0x506)
+        motor_rpm_msg.data = (float)can_c_get_motor_rpm();
+        (void)rcl_publish(&motor_rpm_pub, &motor_rpm_msg, NULL);
+
+        // Steering feedback array: actual / target / motor angle (deg)
         steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
         steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
         steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
@@ -757,20 +777,6 @@ void ros_task_run(void)
       if (++slow_pub_counter >= SLOW_PUB_INTERVAL)
       {
         slow_pub_counter = 0;
-
-        // TODO: STEERING_RATIO must be measured on the physical car
-        // (steering wheel degrees / front wheel degrees). Using 1.0 as
-        // placeholder — EKF will overestimate yaw rate until corrected.
-        #define STEERING_RATIO 1.0f
-        steering_msg.data = can_c_get_steering_angle_deg()
-                            * (float)(M_PI / 180.0)
-                            / STEERING_RATIO;
-        (void)rcl_publish(&steering_pub, &steering_msg, NULL);
-
-        // Motor RPM — mechanical shaft rpm from the ECU (CAN 0x506)
-        motor_rpm_msg.data = (float)can_c_get_motor_rpm();
-        (void)rcl_publish(&motor_rpm_pub, &motor_rpm_msg, NULL);
-
 
         // RES status: 0=OK, 1=E-STOP, -1=TIMEOUT
         uint32_t now_tick = osKernelGetTickCount();
