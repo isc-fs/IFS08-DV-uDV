@@ -461,6 +461,12 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 
 void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
 {
+    /* Count every frame through the FDCAN1 filter (0x191 + 0x711): a nonzero
+     * count means FDCAN1 RX is alive and the RES is on the bus, even before the
+     * 0x191 PDO streams. Read on pit-diag 0x7A5 to split "dead bus" from
+     * "RES silent". */
+    g_res_rx_frame_count.fetch_add(1, std::memory_order_relaxed);
+
     switch (msg->id)
     {
     case CAN_ID_RES_PDO_TX: {
@@ -510,6 +516,7 @@ void sendNmtSetOperational()
     };
     uint8_t nmt[2] = { 0x01u, (uint8_t)RES_NODE_ID };
     (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &TxHeader, nmt);
+    g_nmt_sent_count.fetch_add(1, std::memory_order_relaxed);  /* pit-diag 0x7A5 */
 }
 
 /* 0x010 motor control, 4-byte payload: byte[0] is motor_start (rest 0).

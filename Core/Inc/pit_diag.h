@@ -23,6 +23,7 @@
 #define CAN_ID_PITDIAG_PIPE    0x7A2u  /* dv/status + age, ctrl cmds + age, setup bits */
 #define CAN_ID_PITDIAG_HEALTH  0x7A3u  /* heap, task mask, reset cause, uptime, latched */
 #define CAN_ID_PITDIAG_FWINFO  0x7A4u  /* git hash, stub mask, heap size (~1 Hz) */
+#define CAN_ID_PITDIAG_CANHEALTH 0x7A5u /* FDCAN1 protocol status + err counters + RES rx/NMT counts */
 
 /* RX arm frame (pit tool -> uDV): 4-byte magic, big-endian. */
 #define CAN_ID_PITDIAG_ARM     0x7DEu
