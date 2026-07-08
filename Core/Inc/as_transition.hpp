@@ -30,6 +30,11 @@ struct AsInputs {
     bool res_ok;        /**< RES received, no e-stop / go                  */
     bool steer_emergency; /**< steering reported ESTADO_MOTOR_EMERGENCIA (grave) */
     bool ebs_init_done; /**< EBS init sequence reached EBSInitState::Done   */
+    bool ready_dwell_elapsed; /**< the car has been in AS READY for the mandated
+                                 minimum dwell (>= 5 s, FS-Rules) — a GO received
+                                 before it elapses must be refused. Sourced in
+                                 app_task from the READY-entry timestamp; gates
+                                 READY->DRIVING alongside res_go. */
     bool dv_fresh;      /**< /dv/status seen within DV_STATUS_STALE_MS      */
     bool dv_ready;      /**< fresh && /dv/status == DV_STATUS_READY         */
     bool dv_finished;   /**< fresh && /dv/status == DV_STATUS_FINISHED      */
@@ -100,14 +105,19 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
                                                       a released GO tears the
                                                       mission down mid-drive. */
     if (in.res_go && prev == ASState::READY && in.mission_valid
-        && (in.dv_ready || !in.mission_needs_pipeline))
+        && (in.dv_ready || !in.mission_needs_pipeline)
+        && in.ready_dwell_elapsed)
         return ASState::DRIVING;                   /* pipeline mission: go honoured
                                                       only if DV READY; standalone:
                                                       go alone (no pipeline). Both
                                                       require a valid mission: an
                                                       unknown / SHUTDOWN code never
                                                       drives (would release brakes
-                                                      with no mission body). */
+                                                      with no mission body). The
+                                                      ready_dwell_elapsed gate holds
+                                                      GO until the mandated >=5 s AS
+                                                      READY dwell has passed (FS-Rules)
+                                                      — a GO before then is refused. */
     /* READY is gated on the EBS init sequence being complete (dev 9395936):
      * app_task only advances the init FSM while in OFF, so arming before
      * Done would strand it (ASBChecksOK never true). A Failed init keeps
