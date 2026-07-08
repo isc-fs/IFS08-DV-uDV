@@ -206,12 +206,12 @@ extern "C" void StartAppTask(void *argument)
             as_state = ASState::OFF;
         } else if (previous_as_state == ASState::EMERGENCY) {
             as_state = ASState::EMERGENCY;
+        } else if (previous_as_state == ASState::FINISHED) {
+            as_state = ASState::FINISHED; // Sticky
         } else if (res_estop || (!ts_on && (previous_as_state == ASState::DRIVING || previous_as_state == ASState::READY))) {
             as_state = ASState::EMERGENCY;
         } else if (previous_as_state == ASState::DRIVING) {
             as_state = ASState::DRIVING; // Sticky
-        } else if (previous_as_state == ASState::FINISHED) {
-            as_state = ASState::FINISHED; // Sticky
         } else if (res_go && as_state == ASState::READY) {
             as_state = ASState::DRIVING;
             Can::sendSteeringStart();
