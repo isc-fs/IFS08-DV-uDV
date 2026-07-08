@@ -86,9 +86,22 @@ extern std::atomic<float>    g_steer_angle_motor;
 enum SteerMotorState : int8_t {
     ESTADO_MOTOR_OFF        = 0,
     ESTADO_MOTOR_ON         = 1,
+    ESTADO_MOTOR_CALIBRANDO = 2,   /* end-stop calibration in progress — NOT operative,
+                                      but healthy: must NOT trip AS emergency (#113) */
     ESTADO_MOTOR_EMERGENCIA = -1,
 };
 extern std::atomic<int8_t>   g_steer_motor_state;
+
+/* Steering end-stop calibration status (0x510 from the steering, FDCAN3, #113).
+ * phase: 0 idle, 1-2 capture end-stops, 3 return-to-center, 4-8 sweep, 9 OK,
+ * 10 FAIL. err: 0 none,1 LWS,2 timeout,3 range,4 center,5 flash,6 divergence,
+ * 7 aborted,8 emergency. center/half-range/limit are int16 ×0.1 deg. */
+extern std::atomic<uint8_t>  g_steer_calib_phase;
+extern std::atomic<uint8_t>  g_steer_calib_error;
+extern std::atomic<int16_t>  g_steer_calib_center;
+extern std::atomic<int16_t>  g_steer_calib_halfrange;
+extern std::atomic<int16_t>  g_steer_calib_limit;
+extern std::atomic<uint32_t> g_steer_calib_last_rx_tick;
 
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.

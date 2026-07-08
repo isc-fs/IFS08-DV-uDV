@@ -18,6 +18,14 @@ std::atomic<float> g_steer_angle_motor{0.0f};
 // Default OFF (not EMERGENCIA) so an absent 0x500 never fabricates an emergency.
 std::atomic<int8_t> g_steer_motor_state{ESTADO_MOTOR_OFF};
 
+// Steering end-stop calibration status (0x510, FDCAN3, #113)
+std::atomic<uint8_t>  g_steer_calib_phase{0};
+std::atomic<uint8_t>  g_steer_calib_error{0};
+std::atomic<int16_t>  g_steer_calib_center{0};
+std::atomic<int16_t>  g_steer_calib_halfrange{0};
+std::atomic<int16_t>  g_steer_calib_limit{0};
+std::atomic<uint32_t> g_steer_calib_last_rx_tick{0};
+
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};
 std::atomic<int8_t>   g_steering_speed_raw{0};

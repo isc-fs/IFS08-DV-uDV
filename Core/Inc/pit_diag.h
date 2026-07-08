@@ -24,10 +24,14 @@
 #define CAN_ID_PITDIAG_HEALTH  0x7A3u  /* heap, task mask, reset cause, uptime, latched */
 #define CAN_ID_PITDIAG_FWINFO  0x7A4u  /* git hash, stub mask, heap size (~1 Hz) */
 #define CAN_ID_PITDIAG_CANHEALTH 0x7A5u /* FDCAN1 protocol status + err counters + RES rx/NMT counts */
+#define CAN_ID_PITDIAG_CALIB   0x7A6u  /* steering end-stop calib status relay (#113) */
 
 /* RX arm frame (pit tool -> uDV): 4-byte magic, big-endian. */
 #define CAN_ID_PITDIAG_ARM     0x7DEu
 #define PITDIAG_ARM_MAGIC      0xDEADBEEFu
+/* RX steering-calibration trigger (pit tool -> uDV): byte0 1=start / 2=abort.
+ * Honoured only while the stream is armed (see pit_diag_is_armed). */
+#define CAN_ID_PITDIAG_CALIB_TRIGGER 0x7DFu
 
 /* Bench convenience: stream unconditionally (no arm frame needed). Keep 0 for
  * the car so the ACU bus stays quiet until a pit tool arms it. */
@@ -46,6 +50,10 @@ void pit_diag_arm_from_can(const uint8_t *data, uint8_t dlc);
 /* Called from canTask (~10 Hz). Builds + TXs the diag frames on FDCAN2 when
  * enabled (armed, or PITDIAG_STREAM_ALWAYS). No-op otherwise. */
 void pit_diag_service(uint32_t now_ms);
+
+/* Is the diag stream armed? Gates the operator steering-calibration trigger so
+ * calibration can only be kicked off from a deliberate pit-diag session (#113). */
+uint8_t pit_diag_is_armed(void);
 
 #ifdef __cplusplus
 }

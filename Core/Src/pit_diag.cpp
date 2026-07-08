@@ -38,6 +38,8 @@ void pit_diag_arm_from_can(const uint8_t *data, uint8_t dlc)
     }
 }
 
+uint8_t pit_diag_is_armed(void) { return s_armed; }
+
 /* ---- helpers ------------------------------------------------------------ */
 static inline void tx8(uint32_t id, const uint8_t d[8])
 {
@@ -211,6 +213,26 @@ static void send_canhealth(void)
     tx8(CAN_ID_PITDIAG_CANHEALTH, d);
 }
 
+/* Steering end-stop calibration status relay (#113): forwards the steering's
+ * 0x510 (received on FDCAN3) to the pit tool on FDCAN2, so MingoCAN can show
+ * calibration progress without tapping the steering bus. */
+static void send_calib(uint32_t now)
+{
+    int16_t c   = g_steer_calib_center.load();
+    int16_t hr  = g_steer_calib_halfrange.load();
+    int16_t lim = g_steer_calib_limit.load();
+    uint16_t age = age_ms(g_steer_calib_last_rx_tick.load(), now);
+    uint8_t d[8] = {
+        g_steer_calib_phase.load(),      /* [0] phase (0 idle .. 9 OK, 10 FAIL) */
+        g_steer_calib_error.load(),      /* [1] error code                       */
+        (uint8_t)(c & 0xFFu), (uint8_t)((uint16_t)c >> 8),     /* [2-3] center x0.1deg   */
+        (uint8_t)(hr & 0xFFu), (uint8_t)((uint16_t)hr >> 8),   /* [4-5] half-range x0.1  */
+        (uint8_t)(lim & 0xFFu),          /* [6] limit low byte (x0.1 deg)        */
+        (uint8_t)(age > 0xFEu ? 0xFFu : age), /* [7] status age ms (0xFF=never)  */
+    };
+    tx8(CAN_ID_PITDIAG_CALIB, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -226,6 +248,7 @@ void pit_diag_service(uint32_t now_ms)
         send_pipe(now_ms);
         send_health(now_ms);
         send_canhealth();
+        send_calib(now_ms);
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;

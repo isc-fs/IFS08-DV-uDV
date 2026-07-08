@@ -45,6 +45,7 @@ void sendNmtSetOperational();
 void sendSteeringStart();
 void sendSteeringStop();
 void sendSteeringAngle(float angle_deg);
+void sendSteeringCalib(uint8_t cmd);   /* #113: 0x30 end-stop calib — 1=start, 2=abort */
 
 /* DataLogger TX (FDCAN1) per FS-DV spec DS 2.2 — emits 0x500/0x501/0x502.
  * Intended to be called periodically (~10 Hz) from can_task. */
