@@ -25,6 +25,7 @@
 #define CAN_ID_PITDIAG_FWINFO  0x7A4u  /* git hash, stub mask, heap size (~1 Hz) */
 #define CAN_ID_PITDIAG_CANHEALTH 0x7A5u /* FDCAN1 protocol status + err counters + RES rx/NMT counts */
 #define CAN_ID_PITDIAG_CALIB   0x7A6u  /* steering end-stop calib status relay (#113) */
+#define CAN_ID_PITDIAG_STEER   0x7A7u  /* live steering: LWS raw + actual/target angle, LWS+motor state */
 
 /* RX arm frame (pit tool -> uDV): 4-byte magic, big-endian. */
 #define CAN_ID_PITDIAG_ARM     0x7DEu
