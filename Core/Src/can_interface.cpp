@@ -441,6 +441,9 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
         break;
 
     case CAN_ID_PITDIAG_CALIB_TRIGGER:   /* 0x7DF — operator starts/aborts steering calib */
+        /* Count every 0x7DF seen (before the gate) so the pit can tell the frame
+         * actually reached the uDV on FDCAN2 vs never arriving (diag 0x7A8). */
+        g_calib_trigger_rx_count.fetch_add(1, std::memory_order_relaxed);
         /* Only honoured while pit-diag is armed (deliberate, MingoCAN-gated),
          * and only for the two valid commands. Relays 0x30 to the steering. */
         if (msg->dlc >= 1U && pit_diag_is_armed() &&
@@ -595,6 +598,8 @@ void sendSteeringStop()  { sendSteeringMotorCmd(0u); }
  * uncalibrated steering is brought up, so it must always be able to TX. */
 void sendSteeringCalib(uint8_t cmd)
 {
+    g_calib_relay_count.fetch_add(1, std::memory_order_relaxed);  /* diag 0x7A8 */
+    g_calib_last_cmd.store(cmd);
     uint8_t data[1] = { cmd };
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_STEER_CALIB,
