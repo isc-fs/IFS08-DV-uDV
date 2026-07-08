@@ -256,6 +256,26 @@ static void send_steer(void)
     tx8(CAN_ID_PITDIAG_STEER, d);
 }
 
+/* Calibration RELAY diag (uDV side): closes the loop on the 0x7DF->0x30 path so
+ * the bench can tell where a stuck calibration is. rx_count = 0x7DF frames seen
+ * on FDCAN2 (reached the uDV); relay_count = 0x30 frames TX'd on FDCAN3 (uDV
+ * commanded the steering). Read: rx=0 -> trigger never arrived (wrong bus / not
+ * armed-tool / not sent); rx>0 & relay=0 -> received but not relayed (armed=0 or
+ * bad cmd); relay>0 but steering idle -> it's the steering (steering #21). */
+static void send_calib_dbg(void)
+{
+    uint16_t rx  = g_calib_trigger_rx_count.load();
+    uint16_t rly = g_calib_relay_count.load();
+    uint8_t d[8] = {
+        (uint8_t)(rx & 0xFFu),  (uint8_t)(rx >> 8),   /* [0-1] 0x7DF rx count (FDCAN2) LE */
+        (uint8_t)(rly & 0xFFu), (uint8_t)(rly >> 8),  /* [2-3] 0x30 relay count (FDCAN3) LE */
+        g_calib_last_cmd.load(),      /* [4] last cmd relayed (1 start / 2 abort) */
+        pit_diag_is_armed(),          /* [5] armed gate (0x7DF ignored if 0)      */
+        0u, 0u,
+    };
+    tx8(CAN_ID_PITDIAG_CALIBDBG, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -273,6 +293,7 @@ void pit_diag_service(uint32_t now_ms)
         send_canhealth();
         send_calib();
         send_steer();
+        send_calib_dbg();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;

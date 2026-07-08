@@ -26,6 +26,11 @@ std::atomic<int16_t>  g_steer_calib_halfrange{0};
 std::atomic<int16_t>  g_steer_calib_limit{0};
 std::atomic<uint32_t> g_steer_calib_last_rx_tick{0};
 
+// Calibration relay diag (uDV side, #113 / steering #21)
+std::atomic<uint16_t> g_calib_trigger_rx_count{0};
+std::atomic<uint16_t> g_calib_relay_count{0};
+std::atomic<uint8_t>  g_calib_last_cmd{0};
+
 // Steering sensor state (re-ported from v0.1)
 std::atomic<int16_t>  g_steering_angle_raw{0};
 std::atomic<int8_t>   g_steering_speed_raw{0};

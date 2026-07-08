@@ -103,6 +103,12 @@ extern std::atomic<int16_t>  g_steer_calib_halfrange;
 extern std::atomic<int16_t>  g_steer_calib_limit;
 extern std::atomic<uint32_t> g_steer_calib_last_rx_tick;
 
+/* Calibration RELAY diag (uDV side, #113 / steering #21): prove the 0x7DF trigger
+ * (FDCAN2) reaches us and that we emit 0x30 (FDCAN3) to the steering. */
+extern std::atomic<uint16_t> g_calib_trigger_rx_count; /* 0x7DF frames seen on FDCAN2 */
+extern std::atomic<uint16_t> g_calib_relay_count;      /* 0x30 frames we TX'd on FDCAN3 */
+extern std::atomic<uint8_t>  g_calib_last_cmd;         /* last 0x30 cmd relayed (1/2)   */
+
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
  */

@@ -26,6 +26,7 @@
 #define CAN_ID_PITDIAG_CANHEALTH 0x7A5u /* FDCAN1 protocol status + err counters + RES rx/NMT counts */
 #define CAN_ID_PITDIAG_CALIB   0x7A6u  /* steering end-stop calib status relay (#113) */
 #define CAN_ID_PITDIAG_STEER   0x7A7u  /* live steering: LWS raw + actual/target angle, LWS+motor state */
+#define CAN_ID_PITDIAG_CALIBDBG 0x7A8u /* uDV calib-relay diag: 0x7DF rx count, 0x30 relay count, armed */
 
 /* RX arm frame (pit tool -> uDV): 4-byte magic, big-endian. */
 #define CAN_ID_PITDIAG_ARM     0x7DEu
