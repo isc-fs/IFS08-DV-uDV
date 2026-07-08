@@ -10,9 +10,15 @@ Firmware for the **uDV** (micro Driverless Vehicle) board — an STM32H733XG (Co
 
 ### Make (primary)
 ```bash
-make          # Build all (ELF, HEX, BIN) → build/binaries/uDV.elf
+make          # Build all (ELF, HEX, BIN) → build/binaries/uDV.elf — FLIGHT (all stubs 0)
 make clean    # Remove build artifacts
 ```
+
+**Bench builds** turn stubs on via `-D` overrides, no source edit and no branch — dev stays flight-clean:
+```bash
+make BENCH="-DBENCH_STUB_STEERING=1 -DBENCH_STUB_DVPC=1"   # e.g. steering decoupled + no DVPC
+```
+All `BENCH_STUB_*` default to 0 in [bench_stubs.h](Core/Inc/bench_stubs.h) (`#ifndef`-guarded); a `-D` wins. Any stub at 1 announces itself on `/debug` at boot and in the pit-diag stub mask, so a stubbed image can't pass as flight. See the header for the per-stub docs and the scenario→flags mapping.
 
 ### CMake (IDE / clangd)
 ```bash

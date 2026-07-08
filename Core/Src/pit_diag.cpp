@@ -76,8 +76,11 @@ static inline int8_t clamp_pct(float f)   /* [-1,1] -> [-100,100] */
 
 static inline uint8_t stub_mask(void)
 {
-    return (uint8_t)((BENCH_STUB_EBS_INIT ? 0x01u : 0u) |
-                     (BENCH_STUB_DVPC     ? 0x02u : 0u));
+    return (uint8_t)((BENCH_STUB_EBS_INIT    ? 0x01u : 0u) |
+                     (BENCH_STUB_DVPC        ? 0x02u : 0u) |
+                     (BENCH_STUB_EBS_SENSORS ? 0x04u : 0u) |
+                     (BENCH_STUB_SDC         ? 0x08u : 0u) |
+                     (BENCH_STUB_STEERING    ? 0x10u : 0u));
 }
 
 /* ---- frame builders ----------------------------------------------------- */

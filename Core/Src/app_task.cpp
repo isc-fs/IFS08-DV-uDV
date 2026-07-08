@@ -271,12 +271,14 @@ extern "C" void StartAppTask(void *argument)
     /* A build with any bench stub toggled on (bench_stubs.h) announces
      * itself on /debug once at boot — a stubbed image must never
      * masquerade as a flight build. Folds away when all toggles are 0. */
-    if (BENCH_STUB_EBS_INIT || BENCH_STUB_DVPC || BENCH_STUB_RES)
+    if (BENCH_STUB_EBS_INIT || BENCH_STUB_EBS_SENSORS || BENCH_STUB_SDC ||
+        BENCH_STUB_DVPC || BENCH_STUB_RES || BENCH_STUB_STEERING)
     {
         char stub_buf[128];   /* debugQueue element size */
         snprintf(stub_buf, sizeof(stub_buf),
-                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d dvpc=%d res=%d)",
-                 BENCH_STUB_EBS_INIT, BENCH_STUB_DVPC, BENCH_STUB_RES);
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d)",
+                 BENCH_STUB_EBS_INIT, BENCH_STUB_EBS_SENSORS, BENCH_STUB_SDC,
+                 BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
     }
 
@@ -328,6 +330,7 @@ extern "C" void StartAppTask(void *argument)
          * an absolute cut-off requiring a physical reset — a dead steering
          * motor means the car can't steer, so treat it like an RES e-stop. */
         bool steer_emergency =
+            (!BENCH_STUB_STEERING) &&
             (g_steer_motor_state.load() == ESTADO_MOTOR_EMERGENCIA);
 
         // --- Pipeline (DVPC) status, read level-triggered off /dv/status ---

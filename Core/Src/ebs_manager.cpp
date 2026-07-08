@@ -31,7 +31,11 @@ EBSInitState EbsManager::initSequenceStep()
     switch (init_state_)
     {
         case EBSInitState::Start:
-            if (hardware_io_read_sdc_is_ready())
+            /* SDC-ready gate. BENCH_STUB_SDC / EBS_SENSORS fake it (on this PCB
+             * the read is A1=RES_1_IN, not a true SDC signal) so we advance
+             * without real SDC feedback — actuation further down still runs for
+             * real, and the D4 SDC drive is unaffected. Folds away on a car build. */
+            if (BENCH_STUB_SDC || BENCH_STUB_EBS_SENSORS || hardware_io_read_sdc_is_ready())
             {
                 init_state_ = EBSInitState::WaitLow;
                 start_time_ = hardware_io_now_ms();
@@ -39,7 +43,7 @@ EBSInitState EbsManager::initSequenceStep()
             break;
 
         case EBSInitState::WaitLow:
-            if (!hardware_io_read_sdc_is_ready())
+            if (BENCH_STUB_SDC || BENCH_STUB_EBS_SENSORS || !hardware_io_read_sdc_is_ready())
             {
                 init_state_ = EBSInitState::CheckPressure;
             }
@@ -113,6 +117,12 @@ EBSInitState EbsManager::initSequenceStep()
 
 bool EbsManager::checkStoragePressures()
 {
+    /* BENCH_STUB_EBS_SENSORS: fake the pneumatic tank pressure sensors (A5/A4)
+     * so the self-check passes with no air. The valves still actuate for real;
+     * this only bypasses the reading. Folds away on a car build. */
+    if (BENCH_STUB_EBS_SENSORS)
+        return true;
+
     float a1_p = hardware_io_read_actuator1_storage_pressure();
     float a2_p = hardware_io_read_actuator2_storage_pressure();
 
@@ -122,6 +132,12 @@ bool EbsManager::checkStoragePressures()
 
 bool EbsManager::checkBrakeLinePressure()
 {
+    /* BENCH_STUB_EBS_SENSORS: fake the hydraulic brake-line verdict so the
+     * actuator self-test passes with no air (the actuator still fires for real
+     * just above/below this check). Folds away on a car build. */
+    if (BENCH_STUB_EBS_SENSORS)
+        return true;
+
     /* The ECU sends the verdict, not the value (0x505 VCU_brake_over_limit:
      * brake_raw > config::BrakeDvHardRaw, ECU-owned threshold). The old
      * float32-bar reading + local threshold never matched what the ECU
