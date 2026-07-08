@@ -31,5 +31,7 @@ std::atomic<uint8_t>  g_res_radio_quality{0};
 std::atomic<bool>     g_res_pre_alarm{false};
 std::atomic<uint32_t> g_res_last_rx_tick{0};
 std::atomic<uint8_t>  g_res_raw0{0};        /* last 0x191 data[0] (pit-diag) */
+std::atomic<uint16_t> g_res_rx_frame_count{0}; /* total FDCAN1 RES-queue frames (pit-diag) */
+std::atomic<uint16_t> g_nmt_sent_count{0};     /* NMT set-operational TX count (pit-diag) */
 
 

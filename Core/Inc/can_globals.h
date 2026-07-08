@@ -99,6 +99,8 @@ extern std::atomic<uint8_t>  g_res_radio_quality;
 extern std::atomic<bool>     g_res_pre_alarm;
 extern std::atomic<uint32_t> g_res_last_rx_tick;
 extern std::atomic<uint8_t>  g_res_raw0;        /* last 0x191 data[0] (pit-diag) */
+extern std::atomic<uint16_t> g_res_rx_frame_count; /* total FDCAN1 RES-queue frames drained (pit-diag) */
+extern std::atomic<uint16_t> g_nmt_sent_count;     /* NMT set-operational frames we've TX'd (pit-diag) */
 
 #endif /* __cplusplus */
 

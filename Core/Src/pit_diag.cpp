@@ -179,6 +179,38 @@ static void send_fwinfo(uint32_t now)
     tx8(CAN_ID_PITDIAG_FWINFO, d);
 }
 
+/* FDCAN1 (RES bus) health — so a bench that CANNOT tap FDCAN1 can still tell,
+ * from the FDCAN2 stream, whether the bus is dead or the RES is just silent:
+ *   - bus_off / TEC pinned + LEC=ACK(3)  -> electrical: RES not ACKing /
+ *     termination / RES unpowered (the uDV is alone on the bus).
+ *   - error-active, rx_frames == 0        -> FDCAN1 healthy, RES genuinely
+ *     silent (no 0x191 and no 0x711 boot-up arriving).
+ * nmt_sent proves the uDV is actively (re)commanding the RES operational. */
+static void send_canhealth(void)
+{
+    FDCAN_ProtocolStatusTypeDef ps = {0};
+    FDCAN_ErrorCountersTypeDef  ec = {0};
+    (void)HAL_FDCAN_GetProtocolStatus(&hfdcan1, &ps);
+    (void)HAL_FDCAN_GetErrorCounters(&hfdcan1, &ec);
+    uint8_t flags =
+        (uint8_t)((ps.BusOff        ? 0x01u : 0u) |
+                  (ps.ErrorPassive  ? 0x02u : 0u) |
+                  (ps.Warning       ? 0x04u : 0u));
+    uint16_t rxf = g_res_rx_frame_count.load();
+    uint16_t nmt = g_nmt_sent_count.load();
+    uint8_t d[8] = {
+        flags,                              /* [0] b0=BusOff b1=ErrPassive b2=Warning */
+        (uint8_t)ps.LastErrorCode,          /* [1] LEC: 3=ACK(no other node) 0/7=ok   */
+        (uint8_t)(ec.TxErrorCnt & 0xFFu),   /* [2] TEC (0..255)                       */
+        (uint8_t)(ec.RxErrorCnt & 0xFFu),   /* [3] REC (0..127)                       */
+        (uint8_t)(rxf & 0xFFu),             /* [4-5] FDCAN1 filtered RX frame count LE */
+        (uint8_t)(rxf >> 8),
+        (uint8_t)(nmt & 0xFFu),             /* [6] NMT set-operational TX count (low)  */
+        (uint8_t)(ps.LastErrorCode == 3u ? 1u : 0u), /* [7] convenience: ACK-error now */
+    };
+    tx8(CAN_ID_PITDIAG_CANHEALTH, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -193,6 +225,7 @@ void pit_diag_service(uint32_t now_ms)
         send_res(now_ms);
         send_pipe(now_ms);
         send_health(now_ms);
+        send_canhealth();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;
