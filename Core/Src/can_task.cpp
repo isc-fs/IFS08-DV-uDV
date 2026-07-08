@@ -31,20 +31,6 @@ extern "C" {
 /* DataLogger TX cadence: DS 2.2 specifies a 100 ms heartbeat for 0x500/501/502. */
 #define DL_TX_INTERVAL_MS       100
 
-/* RES bring-up re-arm. The RES is a CANopen node that only streams its 0x191
- * PDO (carrying the GO / e-stop bits) once commanded OPERATIONAL via NMT
- * (spec DS 3 "RES Technical Information": boot-up 0x711 -> master NMT
- * 0x000 [0x01, node] -> 0x191 every 30 ms). The boot-up handshake in
- * resRxDispatch only fires if we are listening when the RES boots; if the uDV
- * is reset/powered AFTER the RES, that one-shot boot-up frame is missed and the
- * RES sits pre-operational and SILENT (no PDO, so GO can never arrive — and
- * with BENCH_STUB_RES the car still reaches READY, hiding it). So re-send NMT
- * set-operational periodically until 0x191 is actually arriving. NMT to an
- * already-operational node is a no-op, and this self-quiesces once the PDO
- * stream is healthy (and re-kicks if the RES ever drops back to pre-op). */
-#define RES_NMT_REARM_INTERVAL_MS  500   /* how often to (re)issue NMT while silent */
-#define RES_PDO_STALE_MS           200   /* PDO gap that means "not streaming" (30 ms nominal) */
-
 extern "C" void StartCanTask(void *argument)
 {
     (void)argument;  // Unused parameter
@@ -67,7 +53,6 @@ extern "C" void StartCanTask(void *argument)
     safety_arm(SAFETY_TASK_CAN);
 
     uint32_t last_dl_tick    = osKernelGetTickCount();
-    uint32_t last_nmt_tick   = osKernelGetTickCount();
 
     // Task loop - runs indefinitely until the task is deleted
     while (1)
@@ -91,20 +76,6 @@ extern "C" void StartCanTask(void *argument)
         }
 
         uint32_t now = osKernelGetTickCount();
-
-        /* RES bring-up: keep the RES commanded OPERATIONAL until its 0x191 PDO
-         * is actually streaming, so GO can be received regardless of uDV/RES
-         * power-up order (see the RES_NMT_* note above). Self-quiesces once the
-         * PDO stream is fresh. */
-        if ((now - last_nmt_tick) >= RES_NMT_REARM_INTERVAL_MS)
-        {
-            uint32_t last_pdo = g_res_last_rx_tick.load();
-            if (last_pdo == 0U || (now - last_pdo) > RES_PDO_STALE_MS)
-            {
-                Can::sendNmtSetOperational();
-            }
-            last_nmt_tick = now;
-        }
 
         /* Pit-diag: CAN-only observability stream on FDCAN2 (self-paced,
          * gated by the 0x7DE arm frame — no-op until armed). */

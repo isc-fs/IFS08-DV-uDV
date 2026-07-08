@@ -477,12 +477,9 @@ void resRxDispatch(const can_msg_t *msg)  //CAN FDCAN1
     }
 
     case CAN_ID_RES_BOOTUP:
-        /* The RES announces its boot-up once (0x711, data[0]==0x00) and we
-         * answer with NMT set-operational so it starts streaming its 0x191
-         * PDO (which carries GO / e-stop). This handles the RES-boots-while-
-         * we-are-listening case; the power-up-order case (uDV reset AFTER the
-         * RES, so this one-shot frame is missed) is covered by the periodic
-         * re-arm in can_task — see StartCanTask. */
+        /* 0x700+node carries boot-up (data[0]==0x00) AND heartbeats
+         * (0x04/0x05/0x7F...). Only boot-up warrants an NMT start —
+         * re-sending it on every heartbeat spams the bus. */
         if (msg->dlc >= 1U && msg->data[0] == 0x00U)
         {
             sendNmtSetOperational();
