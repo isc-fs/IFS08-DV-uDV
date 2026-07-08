@@ -345,19 +345,19 @@ extern "C" void StartAppTask(void *argument)
         bool     dv_fresh      = dv_seen &&
                                  ((now_ms - g_dv_status_stamp_ms.load()) < DV_STATUS_STALE_MS);
 
-        /* Selected mission (0-based AMI index on 0x503). Default to Inspection
-         * when none has been received. Read here — before the transition — so
-         * the state machine can gate the GO / finish rules on the mission type
-         * (standalone missions need no pipeline). */
+        /* Selected mission (0-based AMI index on 0x503). NO default: when none
+         * has been received (g_can_mission_id < 0) the mission stays UNRESOLVED
+         * (nullptr) so the transition's mission_valid gate REFUSES GO — the car
+         * must never enter DRIVING without an explicitly selected mission. (The
+         * old "default to Inspection when none" silently made GO drivable with
+         * no selection.) Read here — before the transition — so the state
+         * machine can gate the GO / finish rules on the mission type. */
         int current_mission_id = g_can_mission_id.load();
-        if (current_mission_id < 0)
-        {
-            current_mission_id = MISSION_INSPECTION;
-        }
-        /* Resolve the mission ONCE per tick. nullptr = unknown / non-driving
-         * code (SHUTDOWN, aux): the transition refuses GO (mission_valid) so it
-         * can never enter DRIVING. Used below for the transition inputs, the
-         * GO/FINISHED edges and the per-tick actuation dispatch. */
+        /* Resolve the mission ONCE per tick. nullptr = no selection / unknown /
+         * non-driving code (SHUTDOWN, aux): the transition refuses GO
+         * (mission_valid) so it can never enter DRIVING. mission_for_code(<0)
+         * returns nullptr. Used below for the transition inputs, the GO/FINISHED
+         * edges and the per-tick actuation dispatch. */
         const Mission* mission = mission_for_code(current_mission_id);
 
         // Decide the next AS state via the pure, host-tested transition (see
