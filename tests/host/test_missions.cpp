@@ -93,12 +93,10 @@ static float expected_sweep_deg(uint32_t elapsed_ms)
 /* ==== 1. registry mapping =============================================== */
 static void test_registry_mapping(void)
 {
-    // MANUAL (0): real, standalone, no actuation body.
+    // MANUAL (0): NOT a uDV drive mission -> nullptr, so the GO gate refuses it
+    // (human drives; manual R2D is the ECU start-button path, not the uDV GO).
     const Mission* m0 = mission_for_code(MISSION_MANUAL);
-    CHECK(m0 != nullptr);
-    CHECK(m0 != nullptr && !m0->needs_pipeline);
-    CHECK(m0 != nullptr && std::strcmp(m0->name, "manual") == 0);
-    CHECK(m0 != nullptr && m0->on_tick == nullptr);   // genuine no-op
+    CHECK(m0 == nullptr);
 
     // Pipeline missions 1..4 all resolve to the SAME shared body.
     const Mission* accel     = mission_for_code(MISSION_ACCEL);
@@ -324,16 +322,12 @@ static void test_ebstest_holds_straight(void)
     CHECK_NEAR(b.steer_angle_deg, 0.0f, 1e-6f);
 }
 
-static void test_manual_is_noop(void)
+static void test_manual_not_a_drive_mission(void)
 {
-    const Mission* m = mission_for_code(MISSION_MANUAL);
-    CHECK(m != nullptr);
-    // A no-op mission carries no actuation and never self-finishes.
-    CHECK(m != nullptr && m->on_tick == nullptr);
-    CHECK(m != nullptr && m->is_complete == nullptr);
-    CHECK(m != nullptr && m->on_enter == nullptr);
-    CHECK(m != nullptr && m->on_exit == nullptr);
-    CHECK(m != nullptr && !m->needs_pipeline);
+    // MANUAL (0) maps to no uDV mission -> the GO gate refuses it, so pressing
+    // RES GO in manual can't enter autonomous DRIVING (manual R2D is the ECU
+    // start-button + brake path, not the uDV GO path).
+    CHECK(mission_for_code(MISSION_MANUAL) == nullptr);
 }
 
 /* ==== 5. cross-cutting invariants ======================================= */
@@ -345,8 +339,8 @@ static void test_classification_invariants(void)
         const Mission* m = mission_for_code(code);
         bool should_need_pipeline = (code >= MISSION_ACCEL && code <= MISSION_TRACKDRIVE);
         if (m == nullptr) {
-            // Only 7/8/9 (and out of range) are unmapped.
-            CHECK(code >= MISSION_SHUTDOWN);
+            // Unmapped (GO refused): MANUAL (0, human-driven) and 7/8/9.
+            CHECK(code == MISSION_MANUAL || code >= MISSION_SHUTDOWN);
         } else {
             CHECK(m->needs_pipeline == should_need_pipeline);
             CHECK(m->name != nullptr && m->name[0] != '\0');
@@ -386,7 +380,7 @@ int main(void)
     test_pipeline_passthrough();
     test_pipeline_zeros_when_stale();
     test_ebstest_holds_straight();
-    test_manual_is_noop();
+    test_manual_not_a_drive_mission();
     test_classification_invariants();
     test_single_actuation_channel();
 

@@ -16,23 +16,15 @@ extern const Mission mission_ebstest;      /* mission_ebstest.cpp    — code 5 
 
 namespace {
 
-/* MANUAL (code 0): autonomous system selected but the car is driven manually —
- * no actuation, never self-finishes. A genuine no-op needs no own file. */
-const Mission mission_manual = {
-    "manual",   /* name           */
-    false,      /* needs_pipeline */
-    nullptr,    /* on_enter       */
-    nullptr,    /* on_tick        */
-    nullptr,    /* is_complete    */
-    nullptr,    /* on_exit        */
-};
-
-/* Indexed by AmiMission code. nullptr = no uDV mission for that code; app_task
- * refuses the GO (READY->DRIVING) edge for a nullptr mission, so SHUTDOWN and
- * the undefined aux codes can never release the brakes. Order MUST match the
- * AmiMission enum in mission.h. */
+/* Indexed by AmiMission code. nullptr = no uDV drive mission for that code;
+ * app_task refuses the GO (READY->DRIVING) edge for a nullptr mission, so those
+ * codes can never release the brakes. Order MUST match the AmiMission enum in
+ * mission.h. */
 const Mission* const k_by_code[] = {
-    &mission_manual,      /* 0  MISSION_MANUAL                       */
+    nullptr,              /* 0  MISSION_MANUAL — human drives; the uDV does NOT
+                                 enter autonomous DRIVING on a RES GO. Manual R2D
+                                 is the ECU start-button + brake path, not this
+                                 GO path — so GO is refused (mission_valid=false). */
     &mission_pipeline,    /* 1  MISSION_ACCEL      (pipeline)         */
     &mission_pipeline,    /* 2  MISSION_SKIDPAD    (pipeline)         */
     &mission_pipeline,    /* 3  MISSION_AUTOCROSS  (pipeline)         */
