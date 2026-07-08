@@ -50,6 +50,14 @@ static constexpr uint32_t CAN_ID_STEER_CMD         = 0x020u;
  * distinct frame on a different bus — keep its own name so the two never
  * read as the same message. See CAN_ID_DL_DYN1 for the TX counterpart. */
 static constexpr uint32_t CAN_ID_STEER_FEEDBACK    = 0x500u;
+/* End-stop calibration (#113, steering PR #16), FDCAN3:
+ *  0x30  uDV -> steering: byte0 1=start / 2=abort (only when motor idle)
+ *  0x510 steering -> uDV: 8B calib status (phase/err/center/half-range/limit).
+ * ⚠ 0x510 numerically == CAN_ID_R2D_REQUEST, but that is a uDV->ECU TX on
+ *   FDCAN2 — this is a steering->uDV RX on FDCAN3, so no runtime clash. Flagged
+ *   for the steering PR #16 to renumber if a cleaner map is wanted. */
+static constexpr uint32_t CAN_ID_STEER_CALIB        = 0x30u;
+static constexpr uint32_t CAN_ID_STEER_CALIB_STATUS = 0x510u;
 
 /* CAN IDs — FDCAN1 (RES CANopen + DataLogger TX) */
 static constexpr uint32_t RES_NODE_ID              = 0x11u;
@@ -169,16 +177,17 @@ void initEcu()
         Error_Handler();
     }
 
-    /* Second filter: the pit-diag arm frame (0x7DE) -> FIFO0. Outside the
-     * 0x504..0x511 contract range, so it needs its own slot (StdFiltersNbr
-     * is 2). Lets the pit tool enable the diag stream over CAN. */
+    /* Second filter: the pit-diag arm frame (0x7DE) AND the steering-calibration
+     * trigger (0x7DF) -> FIFO0. Both outside the 0x504..0x511 contract range, so
+     * they share this dual-filter slot (StdFiltersNbr is 2). Lets the pit tool
+     * enable the diag stream and (while armed) kick off steering calibration. */
     FDCAN_FilterTypeDef arm_filter = {
         .IdType       = FDCAN_STANDARD_ID,
         .FilterIndex  = 1,
         .FilterType   = FDCAN_FILTER_DUAL,
         .FilterConfig = FDCAN_FILTER_TO_RXFIFO0,
-        .FilterID1    = CAN_ID_PITDIAG_ARM,   /* 0x7DE */
-        .FilterID2    = CAN_ID_PITDIAG_ARM,
+        .FilterID1    = CAN_ID_PITDIAG_ARM,            /* 0x7DE */
+        .FilterID2    = CAN_ID_PITDIAG_CALIB_TRIGGER,  /* 0x7DF */
     };
     if (HAL_FDCAN_ConfigFilter(&hfdcan2, &arm_filter) != HAL_OK) {
         Error_Handler();
@@ -348,9 +357,25 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
         g_steer_angle_target.store((int8_t)msg->data[3] * 0.5f);
         g_steer_angle_motor.store((int8_t)msg->data[4] * 0.5f);
         /* Byte 5: stepper-driver state (ESTADO_MOTOR_*). EMERGENCIA (-1) is a
-         * grave fault — app_task folds it into the AS emergency trigger. */
+         * grave fault — app_task folds it into the AS emergency trigger.
+         * CALIBRANDO (2) is non-operative-but-healthy (never an emergency). */
         g_steer_motor_state.store((int8_t)msg->data[5]);
         break;
+
+    case CAN_ID_STEER_CALIB_STATUS: {    /* 0x510 (FDCAN3) — end-stop calib status (#113) */
+        if (msg->dlc < 8U) break;
+        g_steer_calib_phase.store(msg->data[0]);
+        g_steer_calib_error.store(msg->data[1]);
+        int16_t c, hr, lim;
+        memcpy(&c,   &msg->data[2], sizeof(c));   /* int16 LE x0.1 deg */
+        memcpy(&hr,  &msg->data[4], sizeof(hr));
+        memcpy(&lim, &msg->data[6], sizeof(lim));
+        g_steer_calib_center.store(c);
+        g_steer_calib_halfrange.store(hr);
+        g_steer_calib_limit.store(lim);
+        g_steer_calib_last_rx_tick.store(osKernelGetTickCount());
+        break;
+    }
 
     case CAN_ID_MISSION_SELECT: {
         if (msg->dlc < 1U) break;   /* malformed: no store, no ACK — AMI retries */
@@ -413,6 +438,15 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
 
     case CAN_ID_PITDIAG_ARM:             /* 0x7DE — pit tool enables diag stream */
         pit_diag_arm_from_can(msg->data, msg->dlc);
+        break;
+
+    case CAN_ID_PITDIAG_CALIB_TRIGGER:   /* 0x7DF — operator starts/aborts steering calib */
+        /* Only honoured while pit-diag is armed (deliberate, MingoCAN-gated),
+         * and only for the two valid commands. Relays 0x30 to the steering. */
+        if (msg->dlc >= 1U && pit_diag_is_armed() &&
+            (msg->data[0] == 1U || msg->data[0] == 2U)) {
+            sendSteeringCalib(msg->data[0]);
+        }
         break;
 
     case CAN_ID_STEERING:
@@ -532,6 +566,10 @@ void sendNmtSetOperational()
  * matching DIR_INACTIVO). */
 static void sendSteeringMotorCmd(uint8_t motor_start)
 {
+    /* #113: calibration and normal operation are mutually exclusive — never
+     * command the motor while the steering is calibrating (it ignores 0x10
+     * anyway, but sending it would re-arm the instant calib ends). */
+    if (g_steer_motor_state.load() == ESTADO_MOTOR_CALIBRANDO) return;
     uint8_t data[4] = { motor_start, 0u, 0u, 0u };
     FDCAN_TxHeaderTypeDef TxHeader = {
         .Identifier          = CAN_ID_STEER_MOTOR,
@@ -550,8 +588,30 @@ static void sendSteeringMotorCmd(uint8_t motor_start)
 void sendSteeringStart() { sendSteeringMotorCmd(1u); }
 void sendSteeringStop()  { sendSteeringMotorCmd(0u); }
 
+/* #113 end-stop calibration command (0x30, FDCAN3): cmd 1=start, 2=abort. The
+ * steering only accepts it with the motor idle. Deliberately NOT gated by the
+ * steering-drive stub or the CALIBRANDO guard — calibration is exactly how an
+ * uncalibrated steering is brought up, so it must always be able to TX. */
+void sendSteeringCalib(uint8_t cmd)
+{
+    uint8_t data[1] = { cmd };
+    FDCAN_TxHeaderTypeDef TxHeader = {
+        .Identifier          = CAN_ID_STEER_CALIB,
+        .IdType              = FDCAN_STANDARD_ID,
+        .TxFrameType         = FDCAN_DATA_FRAME,
+        .DataLength          = FDCAN_DLC_BYTES_1,
+        .ErrorStateIndicator = FDCAN_ESI_ACTIVE,
+        .BitRateSwitch       = FDCAN_BRS_OFF,
+        .FDFormat            = FDCAN_CLASSIC_CAN,
+        .TxEventFifoControl  = FDCAN_NO_TX_EVENTS,
+        .MessageMarker       = 0,
+    };
+    (void)HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan3, &TxHeader, data);
+}
+
 void sendSteeringAngle(float angle_deg)
 {
+    if (g_steer_motor_state.load() == ESTADO_MOTOR_CALIBRANDO) return;  /* #113 */
     /* Scale: int32 LE in 0.01-deg units (matches dev's steering_angle_cmd) */
     int32_t scaled = (int32_t)(angle_deg * 100.0f);
     uint8_t data[4];
