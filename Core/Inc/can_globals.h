@@ -92,6 +92,11 @@ enum SteerMotorState : int8_t {
 };
 extern std::atomic<int8_t>   g_steer_motor_state;
 
+/* Steering power-on zero-cal result (byte 6 of 0x528). 1 = the steering
+ * confirmed the LWS re-zero at its power-up (wheel centred → 0 deg valid);
+ * 0 = failed or not yet done. Broadcast continuously at 100 Hz. */
+extern std::atomic<uint8_t>  g_steer_cal_arranque_ok;
+
 /* Steering end-stop calibration status (0x529 from the steering, FDCAN3, #113).
  * phase: 0 idle, 1-2 capture end-stops, 3 return-to-center, 4-8 sweep, 9 OK,
  * 10 FAIL. err: 0 none,1 LWS,2 timeout,3 range,4 center,5 flash,6 divergence,
@@ -139,6 +144,7 @@ float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);
 float    can_c_get_steer_angle_motor(void);
 int8_t   can_c_get_steer_motor_state(void); /* ESTADO_MOTOR_* (byte 5 of 0x528) */
+uint8_t  can_c_get_steer_cal_arranque_ok(void); /* power-on zero-cal OK (byte 6 of 0x528) */
 uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
 
 #ifdef __cplusplus
