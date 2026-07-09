@@ -41,6 +41,12 @@ uint16_t ros_get_state_signals(void);
 /* Raw EBSInitState (see ebs_manager.hpp): Start=0 .. Failed=7, Done=8. */
 uint8_t ros_get_ebs_init_state(void);
 
+/* EBS air-tank storage pressures in deci-bar (bar x10, signed), clamped to
+ * int16. AppTask samples the real ADC; valid even when BENCH_STUB_EBS_SENSORS
+ * fakes the pass/fail gate. */
+int16_t ros_get_ebs_pressure1_dbar(void);
+int16_t ros_get_ebs_pressure2_dbar(void);
+
 #ifdef __cplusplus
 }
 #endif

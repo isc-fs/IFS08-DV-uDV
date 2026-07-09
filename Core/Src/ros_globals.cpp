@@ -29,6 +29,8 @@ std::atomic<bool>    g_telemetry_mission_selected{false};
 std::atomic<bool>    g_telemetry_mission_finished{false};
 std::atomic<bool>    g_telemetry_abs_checks_ok{false};
 std::atomic<bool>    g_telemetry_ebs_activated{false};
+std::atomic<float>   g_telemetry_ebs_pressure1_bar{0.0f};
+std::atomic<float>   g_telemetry_ebs_pressure2_bar{0.0f};
 
 // IMU drop counter — incremented by imu_task whenever osMessageQueuePut
 // to imuQueueHandle returns non-OK (queue full), read by ros_interface
@@ -67,6 +69,24 @@ extern "C" uint16_t ros_get_state_signals(void)
 extern "C" uint8_t ros_get_ebs_init_state(void)
 {
     return g_telemetry_ebs_init_state.load();
+}
+
+static int16_t bar_to_dbar(float bar)
+{
+    float d = bar * 10.0f + (bar >= 0.0f ? 0.5f : -0.5f);
+    if (d >  32767.0f) d =  32767.0f;
+    if (d < -32768.0f) d = -32768.0f;
+    return static_cast<int16_t>(d);
+}
+
+extern "C" int16_t ros_get_ebs_pressure1_dbar(void)
+{
+    return bar_to_dbar(g_telemetry_ebs_pressure1_bar.load());
+}
+
+extern "C" int16_t ros_get_ebs_pressure2_dbar(void)
+{
+    return bar_to_dbar(g_telemetry_ebs_pressure2_bar.load());
 }
 
 // --- Stock-typed pipeline interface bridge (see dv_interface.h) ---

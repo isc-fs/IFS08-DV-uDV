@@ -276,6 +276,29 @@ static void send_calib_dbg(void)
     tx8(CAN_ID_PITDIAG_CALIBDBG, d);
 }
 
+/* EBS air-tank storage pressures (A5/A4), so a CAN-only bench can watch the
+ * tanks charge/vent and validate the sensor scaling (PRES_DIVIDER) against a
+ * gauge. AppTask samples the real ADC into the telemetry atomics, so this is
+ * the true pressure even when BENCH_STUB_EBS_SENSORS fakes the pass/fail gate.
+ * ok-bits use the same 1.0 bar (10 dbar) ACTUATOR_STORAGE_THRESHOLD the EBS
+ * self-check applies. */
+static void send_ebs(void)
+{
+    int16_t p1 = ros_get_ebs_pressure1_dbar();   /* deci-bar, x0.1 bar */
+    int16_t p2 = ros_get_ebs_pressure2_dbar();
+    uint8_t ok = (uint8_t)(((p1 > 10) ? 0x01u : 0u) |   /* tank1 > 1.0 bar */
+                           ((p2 > 10) ? 0x02u : 0u));   /* tank2 > 1.0 bar */
+    uint8_t d[8] = {
+        (uint8_t)(p1 & 0xFFu), (uint8_t)((uint16_t)p1 >> 8),  /* [0-1] tank1 dbar LE */
+        (uint8_t)(p2 & 0xFFu), (uint8_t)((uint16_t)p2 >> 8),  /* [2-3] tank2 dbar LE */
+        ros_get_ebs_init_state(),   /* [4] EBS init state (Start=0 .. Failed=7 Done=8) */
+        stub_mask(),                /* [5] stub mask (bit2=EBS_SENSORS -> gate faked)  */
+        ok,                         /* [6] b0=tank1>1bar b1=tank2>1bar (CheckPressure) */
+        0u,                         /* [7] spare                                       */
+    };
+    tx8(CAN_ID_PITDIAG_EBS, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -294,6 +317,7 @@ void pit_diag_service(uint32_t now_ms)
         send_calib();
         send_steer();
         send_calib_dbg();
+        send_ebs();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;
