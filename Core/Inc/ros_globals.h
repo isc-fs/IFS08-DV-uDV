@@ -37,6 +37,11 @@ extern std::atomic<bool>    g_telemetry_mission_selected;
 extern std::atomic<bool>    g_telemetry_mission_finished;
 extern std::atomic<bool>    g_telemetry_abs_checks_ok;
 extern std::atomic<bool>    g_telemetry_ebs_activated;
+// EBS air-tank storage pressures (bar), sampled by AppTask (sole ADC owner) so
+// pit-diag/ros can publish them without racing hadc3. Real sensor reading even
+// when BENCH_STUB_EBS_SENSORS fakes the gate — so the bench sees true pressure.
+extern std::atomic<float>   g_telemetry_ebs_pressure1_bar;
+extern std::atomic<float>   g_telemetry_ebs_pressure2_bar;
 
 // Counts IMU samples the imu_task tried to enqueue but couldn't (queue
 // full because the ros_task is back-pressured by USB CDC).  Published

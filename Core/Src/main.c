@@ -110,6 +110,16 @@ int main(void)
   MX_USART10_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  /* ADC3 self-calibration (single-ended offset). Mandatory on the H7 before any
+   * conversion or the EBS tank-pressure reads (PRES_1/2_IN) carry a raw
+   * offset/gain error. Done here while the ADC is still disabled (pre-scheduler,
+   * before any HAL_ADC_Start). Non-fatal: a failed calibration must not brick
+   * boot — the safety FSM still comes up and holds EBS engaged. */
+  if (HAL_ADCEx_Calibration_Start(&hadc3, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED) != HAL_OK)
+  {
+    /* leave uncalibrated rather than hang; pressure reads will be less accurate */
+  }
+
   /* Reboot reset-cause detection (idea from fix/17). A reset caused by
    * the IWDG means a prior fatal hang/lockup. Immediately assert the
    * safe state — EBS fired + SDC open (confirmed polarity: LOW = fire,

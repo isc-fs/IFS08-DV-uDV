@@ -184,6 +184,11 @@ static void sync_state_telemetry(const StateManager& state_mgr,
     g_telemetry_mission_finished.store(signals.mission_finished);
     g_telemetry_abs_checks_ok.store(signals.abs_checks_ok);
     g_telemetry_ebs_activated.store(signals.ebs_activated);
+    /* Sample the EBS air-tank pressures here so AppTask stays the SOLE reader of
+     * hadc3 (the pit-diag/ros publishers only touch the atomics). Real ADC even
+     * under BENCH_STUB_EBS_SENSORS, so the bench sees true tank pressure. */
+    g_telemetry_ebs_pressure1_bar.store(hardware_io_read_actuator1_storage_pressure());
+    g_telemetry_ebs_pressure2_bar.store(hardware_io_read_actuator2_storage_pressure());
 }
 
 /**

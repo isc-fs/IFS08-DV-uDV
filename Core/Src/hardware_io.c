@@ -9,9 +9,22 @@
 #include "main.h"
 #include "iwdg.h"
 
-/* ADC conversion buffer and calibration constants */
-static float adc_scale_factor = 1.0f;  // Can be calibrated based on ADC reference
+/* ADC conversion constants */
 static const uint32_t adc_digital_threshold = 2048U;
+
+/* --- Festo SPAN air-tank pressure sensors (PRES_1/2_IN -> A5 ch10 / A4 ch6) ---
+ * Output configured 1-5 V over 0-10 bar, linear: 1 V = 0 bar, 5 V = 10 bar
+ * (SPAN datasheet, docs/SPAN_operating-instr_*.pdf). The 1-5 V swing is above
+ * the 3.3 V ADC rail, so PRES_x_IN is divided on the PCB before the ADC pin.
+ * PRES_DIVIDER = Vsensor / Vadc (the inverse divider gain). Confirmed from
+ * 06_MicroDV/PCB DV.kicad_sch: R1/R3 = 10k in series from the sensor to the
+ * ADC tap, R30/R31 = 5k tap-to-GND => Vadc = Vsensor·5k/(10k+5k) = Vsensor/3,
+ * so PRES_DIVIDER = (10k+5k)/5k = 3. (5 V full-scale -> 1.67 V at the pin.) */
+static const float ADC_VREF_V     = 3.3f;     /* ADC3 reference               */
+static const float ADC_FULL_SCALE = 4095.0f;  /* 12-bit                       */
+static const float PRES_DIVIDER   = 3.0f;     /* 10k/5k divider: Vadc = Vsensor/3 */
+static const float SPAN_V_AT_ZERO = 1.0f;     /* sensor output at 0 bar       */
+static const float SPAN_BAR_PER_V = 2.5f;     /* 10 bar / (5 V - 1 V)         */
 
 static uint32_t hardware_io_read_adc_raw(uint32_t channel)
 {
@@ -98,18 +111,28 @@ bool hardware_io_read_sdc_res_open(void)
 
 /* Analog Inputs (Pressure Sensors via ADC) */
 
+/* Raw ADC count -> tank pressure (bar) for the SPAN 1-5 V / 0-10 bar sensor
+ * behind the PCB divider. Sub-1 V (open / short / empty line) yields a negative
+ * result and is clamped to 0 bar, so a disconnected sensor reads 0 and correctly
+ * FAILS the >1 bar CheckPressure gate (the old scale=1.0 passed on any noise). */
+static float hardware_io_adc_to_bar(uint32_t raw)
+{
+    const float v_adc    = ((float)raw / ADC_FULL_SCALE) * ADC_VREF_V;
+    const float v_sensor = v_adc * PRES_DIVIDER;
+    const float bar      = (v_sensor - SPAN_V_AT_ZERO) * SPAN_BAR_PER_V;
+    return (bar < 0.0f) ? 0.0f : bar;
+}
+
 float hardware_io_read_actuator1_storage_pressure(void)
 {
     // Actuator1 -> A5 -> ADC3_INP10 -> ADC channel 10
-    uint32_t adc_val = hardware_io_read_adc_raw(ADC_CHANNEL_10);
-    return (float)adc_val * adc_scale_factor;
+    return hardware_io_adc_to_bar(hardware_io_read_adc_raw(ADC_CHANNEL_10));
 }
 
 float hardware_io_read_actuator2_storage_pressure(void)
 {
     // Actuator2 -> A4 -> ADC3_INP6 -> ADC channel 6
-    uint32_t adc_val = hardware_io_read_adc_raw(ADC_CHANNEL_6);
-    return (float)adc_val * adc_scale_factor;
+    return hardware_io_adc_to_bar(hardware_io_read_adc_raw(ADC_CHANNEL_6));
 }
 
 /* Time Helpers */
