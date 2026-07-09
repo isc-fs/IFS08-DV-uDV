@@ -23,6 +23,11 @@ extern std::atomic<bool>  g_set_mission_ready;
 extern std::atomic<uint8_t>  g_dv_status;           // latest dv/status byte
 extern std::atomic<uint32_t> g_dv_status_stamp_ms;  // its arrival tick (0 = never)
 extern std::atomic<uint32_t> g_ctrl_cmd_stamp_ms;   // last ctrl/cmd tick (0 = never)
+// /service_brake latched Bool: mission_control asserts it to command the
+// finish service brake — while DRIVING the uDV engages the brakes (engageBrakes,
+// SDC stays CLOSED, AS stays Driving) and holds zero torque. Cleared on leaving
+// DRIVING / teardown. Read by AppTask.
+extern std::atomic<bool>     g_service_brake_req;
 
 // State telemetry snapshot, owned by AppTask and published by RosTask
 extern std::atomic<uint8_t> g_telemetry_as_state;

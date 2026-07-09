@@ -141,6 +141,7 @@ static void reset_ros_globals(void)
     g_dv_status.store(DV_STATUS_IDLE);
     g_dv_status_stamp_ms.store(0);
     g_ctrl_cmd_stamp_ms.store(0);
+    g_service_brake_req.store(false);
 }
 
 /**
@@ -456,6 +457,9 @@ extern "C" void StartAppTask(void *argument)
         if (previous_as_state == ASState::DRIVING && as_state != ASState::DRIVING)
         {
             active_mission = nullptr;
+            // Drop any latched finish service-brake request so a new run never
+            // inherits it (the terminal state holds its own brakes anyway).
+            g_service_brake_req.store(false);
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -623,12 +627,20 @@ extern "C" void StartAppTask(void *argument)
                      * release the brakes — DRIVING is the only moving state. */
                     const bool in_start_standstill =
                         ((uint32_t)(now_ms - mission_time) < DRIVING_STANDSTILL_MS);
-                    if (in_start_standstill)
+                    /* Finish service brake: mission_control asserts /service_brake
+                     * to bring the car to a heavy controlled stop at mission end.
+                     * Same actuation as the start standstill — engage the EBS
+                     * actuators (SDC stays CLOSED, AS stays Driving) and hold zero
+                     * torque — so the car stops WITHOUT opening the SDC, reaching
+                     * a standstill from which the pipeline declares FINISHED. */
+                    const bool service_brake = g_service_brake_req.load();
+                    const bool hold_braked   = in_start_standstill || service_brake;
+                    if (hold_braked)
                     {
                         ebs.engageBrakes();           // brakes on, SDC closed
                         if (torque_tx_due)
                         {
-                            Can::sendAccel(0.0f);     // no drivetrain torque yet
+                            Can::sendAccel(0.0f);     // no drivetrain torque
                         }
                     }
                     else
@@ -686,11 +698,11 @@ extern "C" void StartAppTask(void *argument)
                     // command). active_mission is non-null for the whole DRIVING
                     // span (set on the GO edge, which mission_valid only allows for
                     // a real mission); the guard is defensive.
-                    // Skip all mission actuation during the start standstill:
-                    // the car is held braked with zero torque until
-                    // DRIVING_STANDSTILL_MS elapses, so no mission may command
-                    // the drivetrain (or self-complete) yet.
-                    if (!in_start_standstill && active_mission != nullptr)
+                    // Skip all mission actuation while held braked (start
+                    // standstill or finish service brake): the car is braked with
+                    // zero torque, so no mission may command the drivetrain (or
+                    // self-complete) during it.
+                    if (!hold_braked && active_mission != nullptr)
                     {
                         MissionCtx ctx = app_build_mission_ctx(now_ms, now_ms - mission_time);
                         if (active_mission->on_tick != nullptr)

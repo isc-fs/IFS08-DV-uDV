@@ -17,6 +17,13 @@
  *     dv/status     std_msgs/UInt8        pipeline lifecycle byte (below)
  *     ctrl/cmd      geometry_msgs/Twist   linear.x = throttle  [-1, 1]
  *                                         angular.z = steering [-1, 1]
+ *     service_brake std_msgs/Bool         finish service-brake request. While
+ *                                         DRIVING, true engages the EBS actuators
+ *                                         (brakes on) WITHOUT opening the SDC and
+ *                                         holds zero torque, so the car makes a
+ *                                         heavy controlled stop and stays in AS
+ *                                         Driving until standstill. A topic (not
+ *                                         a service) because MAX_SERVICES is full.
  *     force_ebs     std_srvs/SetBool      emergency-brake request (served
  *                                         by the uDV; see force_ebs_callback)
  *
@@ -31,6 +38,7 @@
 #define DV_INTERFACE_H
 
 #include <stdint.h>
+#include <stdbool.h>   /* bool in the ros_set_service_brake() prototype */
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +70,7 @@ extern "C" {
 #define DV_TOPIC_AMI_MISSION  "ami/mission"
 #define DV_TOPIC_DV_STATUS    "dv/status"
 #define DV_TOPIC_CTRL_CMD     "ctrl/cmd"
+#define DV_TOPIC_SERVICE_BRAKE "service_brake"
 #define DV_SERVICE_FORCE_EBS  "force_ebs"
 
 /* Liveness windows (ms). dv/status is published at ~10 Hz (100 ms period),
@@ -114,6 +123,10 @@ uint8_t ros_get_dv_status(void);
  * force_ebs service callback. Routes to EbsManager::activateEBS() so the
  * single-source EBS/SDC policy governs the emergency, not raw GPIO writes. */
 void    ebs_force_safe_state(void);
+
+/* Store the latest /service_brake request (the finish service-brake command).
+ * AppTask reads g_service_brake_req while DRIVING. */
+void    ros_set_service_brake(bool on);
 
 #ifdef __cplusplus
 }

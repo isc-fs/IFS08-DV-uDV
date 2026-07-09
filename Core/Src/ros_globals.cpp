@@ -15,6 +15,7 @@ std::atomic<bool>  g_set_mission_ready{false};
 std::atomic<uint8_t>  g_dv_status{DV_STATUS_IDLE};
 std::atomic<uint32_t> g_dv_status_stamp_ms{0};
 std::atomic<uint32_t> g_ctrl_cmd_stamp_ms{0};
+std::atomic<bool>     g_service_brake_req{false};
 
 // State telemetry snapshot, owned by AppTask and published by RosTask
 std::atomic<uint8_t> g_telemetry_as_state{0};
@@ -96,4 +97,9 @@ extern "C" void ros_set_dv_status(uint8_t status, uint32_t now_ms)
 extern "C" uint8_t ros_get_dv_status(void)
 {
     return g_dv_status.load();
+}
+
+extern "C" void ros_set_service_brake(bool on)
+{
+    g_service_brake_req.store(on);
 }
