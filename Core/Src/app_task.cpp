@@ -64,6 +64,9 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
                          ((now_ms - stamp) < DV_CTRL_CMD_STALE_MS);
     ctx.ctrl_accel = g_accel_cmd.load();
     ctx.ctrl_steer = g_steer_cmd.load();
+    /* ECU DV R2D confirm (0x511). A requests_r2d mission gates its torque on
+     * this — no drivetrain command until the ECU is actually in DV mode. */
+    ctx.r2d_confirmed = g_can_r2d.load();
     return ctx;
 }
 
