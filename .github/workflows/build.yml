@@ -10,10 +10,20 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Cancel a superseded run (new push / re-run on the same ref) instead of
+# leaving it queued for a scarce runner — those stale in-progress jobs would
+# otherwise linger ~15 min and surface as spurious "cancelled/failed" checks.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: arm-none-eabi-gcc 14.3 / STM32H733XG (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The build finishes in ~1 min once a runner is assigned; bound the job so a
+    # runner-scarcity stall fails fast instead of hanging ~15 min.
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
@@ -72,6 +82,7 @@ jobs:
   build-cmake:
     name: arm-none-eabi-gcc 14.3 / STM32H733XG / CMake (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
