@@ -72,7 +72,7 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
 /* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
- * controller takes an absolute angle on 0x020 (0.01 deg units). Full-lock
+ * controller takes an absolute angle on 0x521 (0.01 deg units). Full-lock
  * span for the conversion, kept UNDER the steering controller's 70 deg
  * cutoff (PIPELINE_INTERFACE.md G3) with margin.
  * TODO(commission, #71): measure the real full-lock angle + steering ratio
@@ -87,12 +87,12 @@ static constexpr uint32_t READY_DWELL_MS           = 5000u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
- *  - send_steer_angle: absolute 0x020 steering angle at the mission's own
+ *  - send_steer_angle: absolute 0x521 steering angle at the mission's own
  *    cadence (inspection sweep / EBS-test hold).
  *  - send_accel / send_steer: the pipeline drive, paced by drive_tx_due to the
- *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x020
+ *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x521
  *    angle = norm * STEER_FULL_LOCK_DEG. They are separate so a stale link can
- *    zero the torque WITHOUT commanding steering — a 0x020 zero would snap the
+ *    zero the torque WITHOUT commanding steering — a 0x521 zero would snap the
  *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
 static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
 {
@@ -329,7 +329,7 @@ extern "C" void StartAppTask(void *argument)
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
-        /* Steering stepper-driver grave fault (byte 5 of 0x500). EMERGENCIA is
+        /* Steering stepper-driver grave fault (byte 5 of 0x528). EMERGENCIA is
          * an absolute cut-off requiring a physical reset — a dead steering
          * motor means the car can't steer, so treat it like an RES e-stop. */
         bool steer_emergency =
@@ -525,8 +525,8 @@ extern "C" void StartAppTask(void *argument)
             }
 
             /* Zero torque when not driving (safety). No steering command
-             * outside DRIVING: the steering motor is stopped (0x010), and a
-             * 0x020 frame would command the wheel to CENTER, not "hold". */
+             * outside DRIVING: the steering motor is stopped (0x520), and a
+             * 0x521 frame would command the wheel to CENTER, not "hold". */
             if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
@@ -592,10 +592,10 @@ extern "C" void StartAppTask(void *argument)
 
                     /* Keep the steering motor armed while DRIVING. The steering
                      * board runs the motor only while it keeps receiving
-                     * motor_start (0x010=1) and cuts out on a command-timeout;
+                     * motor_start (0x520=1) and cuts out on a command-timeout;
                      * a single start on the GO edge was NOT enough on the car
                      * (feat/18-ebs, car-proven). Re-send it, paced to the 20 ms
-                     * torque clock to avoid flooding 0x010 (feat/18-ebs sent it
+                     * torque clock to avoid flooding 0x520 (feat/18-ebs sent it
                      * every ~1 ms tick). Homing runs once on the board (guarded
                      * by !arrancado), so repeats do not re-home. The GO-edge
                      * start above still arms it immediately. */

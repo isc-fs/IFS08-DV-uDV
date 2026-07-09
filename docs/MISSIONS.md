@@ -39,7 +39,7 @@ struct Mission {
 | Type | Fields |
 |------|--------|
 | `MissionCtx` (in) | `now_ms`, `mission_elapsed_ms` (since the GO edge), `ctrl_cmd_fresh`, `ctrl_accel`, `ctrl_steer` (latest normalised `/ctrl/cmd`) |
-| `MissionCommand` (out) | Direct-angle channel: `send_steer_angle` + `steer_angle_deg` (absolute `0x020` angle, mission-paced — inspection/EBS). Pipeline channels (app_task paces to the ECU's 20 ms cycle): `send_accel` + `accel_norm` (`0x507` torque) and `send_steer` + `steer_norm` (applied as `norm × STEER_FULL_LOCK_DEG` on `0x020`). Default-init = emit nothing. A mission uses the direct-angle channel **or** the pipeline channels, never both. |
+| `MissionCommand` (out) | Direct-angle channel: `send_steer_angle` + `steer_angle_deg` (absolute `0x521` angle, mission-paced — inspection/EBS). Pipeline channels (app_task paces to the ECU's 20 ms cycle): `send_accel` + `accel_norm` (`0x507` torque) and `send_steer` + `steer_norm` (applied as `norm × STEER_FULL_LOCK_DEG` on `0x521`). Default-init = emit nothing. A mission uses the direct-angle channel **or** the pipeline channels, never both. |
 
 `needs_pipeline` is a **field, not a call**, because the AS transition reads it in
 READY to gate GO and to arm the lost-heartbeat rule — it must be known *before*
@@ -65,12 +65,12 @@ Per tick, `app_task`:
 2. feeds the transition two mission facts — `mission_needs_pipeline` and
    **`mission_valid`** (`mission != nullptr`);
 3. on the **READY→DRIVING (GO) edge**: captures `active_mission = mission`, sends
-   the steering-motor start (0x010), (re)starts the mission clock, and calls
+   the steering-motor start (0x520), (re)starts the mission clock, and calls
    `on_enter`;
 4. in **DRIVING**: builds a `MissionCtx`, calls `active_mission->on_tick` and
    applies the returned `MissionCommand`, then polls `is_complete` (which latches
    `mission_complete → FINISHED` next tick);
-5. on the **→FINISHED edge**: sends the steering-motor stop (0x010=0) and calls
+5. on the **→FINISHED edge**: sends the steering-motor stop (0x520=0) and calls
    `on_exit`.
 
 Two safety properties are enforced here, not in the missions:
@@ -123,7 +123,7 @@ Say you are adding mission code **N** (must match the AMI `missions[]` index).
    namespace {
    MissionCommand my_on_tick(const MissionCtx* ctx) {
        MissionCommand cmd = {};                 // default: emit nothing
-       // ... set cmd.send_steer_angle (0x020) OR cmd.send_accel/cmd.send_steer ...
+       // ... set cmd.send_steer_angle (0x521) OR cmd.send_accel/cmd.send_steer ...
        return cmd;
    }
    bool my_is_complete(const MissionCtx* ctx) { return ctx->mission_elapsed_ms >= 12000u; }
@@ -171,15 +171,15 @@ new TU, the two manifests, and the tests.
 
 ## Missions today
 
-- **Inspection** (6) — open-loop steering sweep: ±90° at 0.3 Hz, one 0x020 angle
+- **Inspection** (6) — open-loop steering sweep: ±90° at 0.3 Hz, one 0x521 angle
   command per 200 ms, self-finishes after 30 s. The 90° amplitude intentionally
   saturates the steering firmware's ±60° clamp. The first tick of a run always
   commands (independent of the tick-counter value).
 - **Pipeline** (1-4, incl. **trackdrive**) — relays the pipeline's latest
   normalised `/ctrl/cmd`: throttle → `0x507` ECU torque (`send_accel`), steering →
-  `0x020` absolute angle (`send_steer`, applied as `norm × STEER_FULL_LOCK_DEG`).
+  `0x521` absolute angle (`send_steer`, applied as `norm × STEER_FULL_LOCK_DEG`).
   On a stale `/ctrl/cmd` the torque is zeroed but **no** steering is sent (a
-  `0x020` zero would center the wheel mid-corner). The mission's `on_tick` runs
+  `0x521` zero would center the wheel mid-corner). The mission's `on_tick` runs
   every loop tick; `app_task` paces both channels to the ECU's 20 ms cycle
   (`TORQUE_TX_PERIOD_MS`) and, while DRIVING a pipeline mission, drives the DV
   ready-to-drive handshake (`0x510` → `0x511`) until the ECU confirms.
@@ -189,7 +189,7 @@ new TU, the two manifests, and the tests.
 ### Open items (on-car)
 
 - Trackdrive actuation: `0x507` torque is confirmed against the ECU `.def` (int32
-  percent, paced 20 ms). Steering goes over `0x020` as `norm × STEER_FULL_LOCK_DEG`
+  percent, paced 20 ms). Steering goes over `0x521` as `norm × STEER_FULL_LOCK_DEG`
   (65°, under the steering controller's 70° cutoff); the full-lock span, steering
   ratio and sign are commissioning items (#71). The old `0x508` normalised-steer
   frame was retired (no ECU consumer).
