@@ -102,10 +102,12 @@ static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_d
     }
     if (drive_tx_due)
     {
-        if (cmd.send_accel)
-        {
-            Can::sendAccel(cmd.accel_norm);
-        }
+        /* Keep the 0x507 torque stream alive at the ECU's 20 ms cadence in
+         * DRIVING even when the mission commands no torque (inspection): send
+         * the commanded accel, or an explicit 0. That holds the ECU's DV mode
+         * with a fresh zero rather than letting the stream go stale (the ECU
+         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true). */
+        Can::sendAccel(cmd.send_accel ? cmd.accel_norm : 0.0f);
         if (cmd.send_steer)
         {
             Can::sendSteeringAngle(cmd.steer_norm * STEER_FULL_LOCK_DEG);
@@ -533,14 +535,15 @@ extern "C" void StartAppTask(void *argument)
             }
 
             /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a
-             * pipeline mission without the ECU's confirm (g_can_r2d, from
-             * 0x511), re-request periodically. The ECU only honours it while
-             * its own brake sensor confirms the EBS holding (0x505 verdict)
+             * mission that requests_r2d, without the ECU's confirm (g_can_r2d,
+             * from 0x511), re-request periodically. The ECU only honours it
+             * while its own brake sensor confirms the EBS holding (0x505 verdict)
              * and latches the edge for the drive cycle — once confirmed,
-             * requesting stops. Standalone missions skip this: they command
-             * no torque, so the ECU stays out of DV mode. */
+             * requesting stops. Gated on requests_r2d (not needs_pipeline) so
+             * inspection also enters DV mode (it commands zero torque but still
+             * drives the handshake); EBS-test leaves it false. */
             if (as_state == ASState::DRIVING &&
-                active_mission != nullptr && active_mission->needs_pipeline &&
+                active_mission != nullptr && active_mission->requests_r2d &&
                 !g_can_r2d.load())
             {
                 static uint32_t last_r2d_req_ms = 0;

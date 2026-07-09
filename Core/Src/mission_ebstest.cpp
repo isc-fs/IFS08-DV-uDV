@@ -39,4 +39,5 @@ extern const Mission mission_ebstest = {
     ebstest_on_tick,     /* on_tick        */
     nullptr,             /* is_complete    */
     nullptr,             /* on_exit        */
+    false,               /* requests_r2d — EBS test must NOT enable the inverter */
 };
