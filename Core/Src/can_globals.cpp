@@ -11,14 +11,14 @@ std::atomic<int32_t> g_can_motor_rpm{0};
 std::atomic<bool> g_can_sdc_res_open{false};
 std::atomic<bool> g_reset_cmd{false};
 
-// Steering controller feedback (FDCAN3 0x500)
+// Steering controller feedback (FDCAN3 0x528)
 std::atomic<float> g_steer_angle_actual{0.0f};
 std::atomic<float> g_steer_angle_target{0.0f};
 std::atomic<float> g_steer_angle_motor{0.0f};
-// Default OFF (not EMERGENCIA) so an absent 0x500 never fabricates an emergency.
+// Default OFF (not EMERGENCIA) so an absent 0x528 never fabricates an emergency.
 std::atomic<int8_t> g_steer_motor_state{ESTADO_MOTOR_OFF};
 
-// Steering end-stop calibration status (0x510, FDCAN3, #113)
+// Steering end-stop calibration status (0x529, FDCAN3, #113)
 std::atomic<uint8_t>  g_steer_calib_phase{0};
 std::atomic<uint8_t>  g_steer_calib_error{0};
 std::atomic<int16_t>  g_steer_calib_center{0};

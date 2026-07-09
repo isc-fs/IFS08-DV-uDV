@@ -749,8 +749,8 @@ void ros_task_run(void)
 
       // --- Steering angle + motor RPM + steering feedback at 100 Hz ---
       // (every 4 IMU samples). All feed the pipeline EKF and all share the
-      // 0x500/0x506 CAN sources, which run at 100 Hz (motor rpm 0x506 @10 ms;
-      // steering 0x500 @10 ms once STEERING fix/dyn1-100hz lands), so
+      // 0x528/0x506 CAN sources, which run at 100 Hz (motor rpm 0x506 @10 ms;
+      // steering 0x528 @10 ms once STEERING fix/dyn1-100hz lands), so
       // publishing here at 100 Hz carries fresh measurements, not repeats.
       if (++fast_pub_counter >= FAST_PUB_INTERVAL)
       {

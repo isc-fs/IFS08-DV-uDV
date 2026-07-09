@@ -3,8 +3,8 @@
 
 #include "main.h"
 
-#define CAN_ID_MOTOR_CTRL   0x10
-#define CAN_ID_ANGULO_CMD   0x20
+#define CAN_ID_MOTOR_CTRL   0x520
+#define CAN_ID_ANGULO_CMD   0x521
 
 typedef struct {
     uint8_t  motor_start;

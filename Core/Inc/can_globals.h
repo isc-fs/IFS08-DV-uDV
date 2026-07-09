@@ -67,7 +67,7 @@ extern std::atomic<int8_t>   g_steering_speed_raw;
 extern std::atomic<uint8_t>  g_steering_status;
 extern std::atomic<uint32_t> g_steering_last_rx_tick;
 
-/* Steering controller feedback (FDCAN3 ID 0x500 DV_DRIVING_DYNAMICS_1, 20 Hz;
+/* Steering controller feedback (FDCAN3 ID 0x528 DV_DRIVING_DYNAMICS_1, 100 Hz;
  * this is steering's "FDCAN1" — the same physical AMI+steering bus). Byte
  * layout mirrors IFS08-DV-STEERING comunicacion_direccion.c:
  *   [0..1] reserved (0)
@@ -80,7 +80,7 @@ extern std::atomic<uint32_t> g_steering_last_rx_tick;
 extern std::atomic<float>    g_steer_angle_actual;
 extern std::atomic<float>    g_steer_angle_target;
 extern std::atomic<float>    g_steer_angle_motor;
-/* Steering stepper-driver state (byte 5 of 0x500). Mirrors the steering
+/* Steering stepper-driver state (byte 5 of 0x528). Mirrors the steering
  * firmware's enum. EMERGENCIA is a grave fault ("corte absoluto, requiere
  * reset físico") — the AS state machine treats it as an emergency trigger. */
 enum SteerMotorState : int8_t {
@@ -92,7 +92,7 @@ enum SteerMotorState : int8_t {
 };
 extern std::atomic<int8_t>   g_steer_motor_state;
 
-/* Steering end-stop calibration status (0x510 from the steering, FDCAN3, #113).
+/* Steering end-stop calibration status (0x529 from the steering, FDCAN3, #113).
  * phase: 0 idle, 1-2 capture end-stops, 3 return-to-center, 4-8 sweep, 9 OK,
  * 10 FAIL. err: 0 none,1 LWS,2 timeout,3 range,4 center,5 flash,6 divergence,
  * 7 aborted,8 emergency. center/half-range/limit are int16 ×0.1 deg. */
@@ -104,10 +104,10 @@ extern std::atomic<int16_t>  g_steer_calib_limit;
 extern std::atomic<uint32_t> g_steer_calib_last_rx_tick;
 
 /* Calibration RELAY diag (uDV side, #113 / steering #21): prove the 0x7DF trigger
- * (FDCAN2) reaches us and that we emit 0x30 (FDCAN3) to the steering. */
+ * (FDCAN2) reaches us and that we emit 0x522 (FDCAN3) to the steering. */
 extern std::atomic<uint16_t> g_calib_trigger_rx_count; /* 0x7DF frames seen on FDCAN2 */
-extern std::atomic<uint16_t> g_calib_relay_count;      /* 0x30 frames we TX'd on FDCAN3 */
-extern std::atomic<uint8_t>  g_calib_last_cmd;         /* last 0x30 cmd relayed (1/2)   */
+extern std::atomic<uint16_t> g_calib_relay_count;      /* 0x522 frames we TX'd on FDCAN3 */
+extern std::atomic<uint8_t>  g_calib_last_cmd;         /* last 0x522 cmd relayed (1/2)   */
 
 /* RES CANopen status (FDCAN1 ID 0x191 PDO).  See res_rx_dispatch in
  * can_interface.cpp for the bit layout — same as dev's res_service.
@@ -138,7 +138,7 @@ uint8_t  can_c_get_go_signal(void);
 float    can_c_get_steer_angle_actual(void);
 float    can_c_get_steer_angle_target(void);
 float    can_c_get_steer_angle_motor(void);
-int8_t   can_c_get_steer_motor_state(void); /* ESTADO_MOTOR_* (byte 5 of 0x500) */
+int8_t   can_c_get_steer_motor_state(void); /* ESTADO_MOTOR_* (byte 5 of 0x528) */
 uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
 
 #ifdef __cplusplus
