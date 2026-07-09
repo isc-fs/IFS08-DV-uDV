@@ -54,6 +54,9 @@ struct MissionCtx {
     bool     ctrl_cmd_fresh;     /**< /ctrl/cmd seen within DV_CTRL_CMD_STALE_MS  */
     float    ctrl_accel;         /**< latest normalised throttle  [-1, 1]        */
     float    ctrl_steer;         /**< latest normalised steering  [-1, 1]        */
+    bool     r2d_confirmed;      /**< ECU latched DV R2D (0x511, g_can_r2d) — a
+                                      requests_r2d mission may only command torque
+                                      once this is true (inspection torque test)  */
 };
 
 /**

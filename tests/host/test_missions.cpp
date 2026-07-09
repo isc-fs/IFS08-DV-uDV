@@ -60,6 +60,7 @@ static MissionCtx ctx_make(uint32_t now_ms, uint32_t elapsed_ms,
     c.ctrl_cmd_fresh     = fresh;
     c.ctrl_accel         = accel;
     c.ctrl_steer         = steer;
+    c.r2d_confirmed      = false;   /* default: pre-R2D (no torque). Set explicitly per test. */
     return c;
 }
 
@@ -147,8 +148,8 @@ static void test_inspection_cadence(void)
     // First DRIVING tick emits immediately (now >> DT).
     MissionCommand a = tick(&mission_inspection, 1000, 0, false, 0, 0);
     CHECK(a.send_steer_angle);
-    CHECK(!a.send_accel);            // inspection never uses the drive channels
-    CHECK(!a.send_steer);
+    CHECK(!a.send_accel);            // no torque before DV R2D is confirmed (ctx default)
+    CHECK(!a.send_steer);            // inspection never uses the pipeline steer channel
 
     // +100 ms (< DT): no new command.
     MissionCommand b = tick(&mission_inspection, 1100, 100, false, 0, 0);
@@ -165,6 +166,25 @@ static void test_inspection_cadence(void)
     // Exactly DT: command.
     MissionCommand e = tick(&mission_inspection, 1400, 400, false, 0, 0);
     CHECK(e.send_steer_angle);
+}
+
+static void test_inspection_r2d_torque(void)
+{
+    enter(&mission_inspection, 0);
+
+    // Before the ECU confirms DV R2D: NO torque (steering only).
+    MissionCtx pre = ctx_make(1000, 0, false, 0, 0);   // r2d_confirmed = false
+    MissionCommand a = mission_inspection.on_tick(&pre);
+    CHECK(!a.send_accel);
+
+    // Once R2D is confirmed: command a steady 15% torque, and never the pipeline
+    // steer channel.
+    MissionCtx post = ctx_make(1000, 0, false, 0, 0);
+    post.r2d_confirmed = true;
+    MissionCommand b = mission_inspection.on_tick(&post);
+    CHECK(b.send_accel);
+    CHECK_NEAR(b.accel_norm, 0.15f, 1e-6f);
+    CHECK(!b.send_steer);
 }
 
 static void test_inspection_first_emit_guarantee(void)
@@ -373,6 +393,7 @@ int main(void)
 {
     test_registry_mapping();
     test_inspection_cadence();
+    test_inspection_r2d_torque();
     test_inspection_first_emit_guarantee();
     test_inspection_sweep_math();
     test_inspection_self_finish();
