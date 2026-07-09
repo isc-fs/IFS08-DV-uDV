@@ -40,7 +40,7 @@ Rules basis: FS-Rules 2026 T15.3.2 (continuous monitoring), T15.3.4/5
 `Core/Src/state_manager.cpp` (AS Off/Ready/Driving/Emergency/Finished per
 T14.8), `ebs_manager.cpp` (EBS init sequence + ASB checks), `app_task.cpp`
 (the loop), `hardware_io.c`, `ros_globals.cpp`. Driven by CAN inputs
-(`/0x503` mission, `0x504` TS, `0x505` brake, `0x506` SDC, `0x509` R2D —
+(`/0x503` mission, `0x504` TS, `0x505` brake, `0x506` SDC, `0x511` R2D confirm —
 ported into `rx_dispatch`) and the ADC/GPIO hardware lines.
 
 **Reconciliations applied vs `fix/17`** (his branch was orphaned dead code
