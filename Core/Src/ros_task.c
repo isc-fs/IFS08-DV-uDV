@@ -199,14 +199,14 @@ static void dv_status_callback(const void *msgin)
   ros_set_dv_status(m->data, osKernelGetTickCount());
 }
 
-/* /service_brake (std_msgs/Bool): the finish service-brake request. AppTask
+/* /finish_brake (std_msgs/Bool): the finish service-brake request. AppTask
  * engages the EBS actuators (SDC stays closed, AS stays Driving) + holds zero
  * torque while this is true during DRIVING. Latched publisher on the pipeline
  * side, so this reader is RELIABLE (init_default). */
-static void service_brake_callback(const void *msgin)
+static void finish_brake_callback(const void *msgin)
 {
   const std_msgs__msg__Bool *m = (const std_msgs__msg__Bool *)msgin;
-  ros_set_service_brake(m->data);
+  ros_set_finish_brake(m->data);
 }
 
 /* Map raw ASState (see as_state.h: OFF=0 READY=1 DRIVING=2 EMERGENCY=3
@@ -545,15 +545,15 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
     DV_TOPIC_CTRL_CMD));
 
-  // /service_brake subscriber — finish service-brake request. RELIABLE
+  // /finish_brake subscriber — finish service-brake request. RELIABLE
   // (init_default) to match the pipeline's latched RELIABLE+TRANSIENT_LOCAL
   // publisher, so we never miss the brake-on/off edge.
-  rcl_subscription_t service_brake_sub;
-  std_msgs__msg__Bool service_brake_msg;
+  rcl_subscription_t finish_brake_sub;
+  std_msgs__msg__Bool finish_brake_msg;
   UROS_TRY(rclc_subscription_init_default(
-    &service_brake_sub, &node,
+    &finish_brake_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
-    DV_TOPIC_SERVICE_BRAKE));
+    DV_TOPIC_FINISH_BRAKE));
 
   // --- SERVICIOS ---
   rcl_service_t Activate_stearing;
@@ -578,7 +578,7 @@ void ros_task_run(void)
 
   // --- Executor ---
   // One handle per subscription + service: cmd_test, dv/status, ctrl/cmd,
-  // service_brake, activate_steering, force_ebs = 6.
+  // finish_brake, activate_steering, force_ebs = 6.
   rclc_executor_t executor;
   if (RCL_RET_OK != rclc_executor_init(&executor, &support.context, 6, &allocator)) {
     (void)rcl_node_fini(&node);
@@ -600,8 +600,8 @@ void ros_task_run(void)
     &ctrl_cmd_callback, ON_NEW_DATA));
 
   UROS_TRY(rclc_executor_add_subscription(
-    &executor, &service_brake_sub, &service_brake_msg,
-    &service_brake_callback, ON_NEW_DATA));
+    &executor, &finish_brake_sub, &finish_brake_msg,
+    &finish_brake_callback, ON_NEW_DATA));
 
   UROS_TRY(rclc_executor_add_service(
     &executor, &Activate_stearing, &act_steer_srv_req, &act_steer_srv_res,
@@ -872,7 +872,7 @@ void ros_task_run(void)
   (void)rclc_executor_fini(&executor);
   (void)rcl_service_fini(&Force_EBS, &node);
   (void)rcl_service_fini(&Activate_stearing, &node);
-  (void)rcl_subscription_fini(&service_brake_sub, &node);
+  (void)rcl_subscription_fini(&finish_brake_sub, &node);
   (void)rcl_subscription_fini(&ctrl_cmd_sub, &node);
   (void)rcl_subscription_fini(&dv_status_sub, &node);
   (void)rcl_subscription_fini(&cmd_test_sub, &node);

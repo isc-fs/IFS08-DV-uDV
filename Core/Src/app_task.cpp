@@ -141,7 +141,7 @@ static void reset_ros_globals(void)
     g_dv_status.store(DV_STATUS_IDLE);
     g_dv_status_stamp_ms.store(0);
     g_ctrl_cmd_stamp_ms.store(0);
-    g_service_brake_req.store(false);
+    g_finish_brake_req.store(false);
 }
 
 /**
@@ -459,7 +459,7 @@ extern "C" void StartAppTask(void *argument)
             active_mission = nullptr;
             // Drop any latched finish service-brake request so a new run never
             // inherits it (the terminal state holds its own brakes anyway).
-            g_service_brake_req.store(false);
+            g_finish_brake_req.store(false);
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -627,14 +627,14 @@ extern "C" void StartAppTask(void *argument)
                      * release the brakes — DRIVING is the only moving state. */
                     const bool in_start_standstill =
                         ((uint32_t)(now_ms - mission_time) < DRIVING_STANDSTILL_MS);
-                    /* Finish service brake: mission_control asserts /service_brake
+                    /* Finish service brake: mission_control asserts /finish_brake
                      * to bring the car to a heavy controlled stop at mission end.
                      * Same actuation as the start standstill — engage the EBS
                      * actuators (SDC stays CLOSED, AS stays Driving) and hold zero
                      * torque — so the car stops WITHOUT opening the SDC, reaching
                      * a standstill from which the pipeline declares FINISHED. */
-                    const bool service_brake = g_service_brake_req.load();
-                    const bool hold_braked   = in_start_standstill || service_brake;
+                    const bool finish_brake = g_finish_brake_req.load();
+                    const bool hold_braked   = in_start_standstill || finish_brake;
                     if (hold_braked)
                     {
                         ebs.engageBrakes();           // brakes on, SDC closed
