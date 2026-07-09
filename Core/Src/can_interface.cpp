@@ -305,43 +305,35 @@ void sendIMU(const bmi088_scaled_t &imu)
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 {
+    /* Bus tag + target queue are per-peripheral — compute once, reuse per frame.
+     *   FDCAN1 = RES CANopen → resRxQueueHandle
+     *   else   = AMI + steering (FDCAN3) / ACU (FDCAN2) → canRxQueueHandle */
+    uint8_t bus = (hfdcan->Instance == FDCAN1) ? 1u :
+                  (hfdcan->Instance == FDCAN2) ? 2u :
+                  (hfdcan->Instance == FDCAN3) ? 3u : 0u;
+    osMessageQueueId_t q = (bus == 1u) ? resRxQueueHandle : canRxQueueHandle;
+
     FDCAN_RxHeaderTypeDef rxh;
     uint8_t rxdata[8];
 
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) != HAL_OK)
-        return;
-
-    can_msg_t msg;
-    msg.id  = rxh.Identifier;
-    /* HAL_FDCAN_GetRxMessage returns DataLength as the DLC code (1..8 for the
-     * classic frames this bus uses) — already the byte count, NOT a value that
-     * needs the old >>16 unshift. The stale `>> 16` made msg.dlc read 0 on
-     * every frame, so every `if (msg->dlc < N) break;` guard tripped: the AMI
-     * mission (0x503) was dropped (no store, no 0x50A ACK), steering feedback
-     * (0x528) and the e-stop decode never ran. */
-    msg.dlc = (uint8_t)rxh.DataLength;
-    memcpy(msg.data, rxdata, 8);
-    /* Tag the message with its source FDCAN bus so downstream dispatch
-     * can distinguish messages from multiple CAN peripherals. */
-    if (hfdcan->Instance == FDCAN1) {
-        msg.bus = 1;
-    } else if (hfdcan->Instance == FDCAN2) {
-        msg.bus = 2;
-    } else if (hfdcan->Instance == FDCAN3) {
-        msg.bus = 3;
-    } else {
-        msg.bus = 0;
-    }
-
-    /* Route to the per-bus queue:
-     *   FDCAN1 = RES CANopen → resRxQueueHandle
-     *   else   = AMI + steering bus → canRxQueueHandle */
-    if (msg.bus == 1) {
-        if (resRxQueueHandle != NULL) {
-            osMessageQueuePut(resRxQueueHandle, &msg, 0, 0);
+    /* Drain EVERY frame pending in the hardware RX FIFO0 on each interrupt.
+     * A single GetRxMessage per IRQ let the 16-deep FIFO overrun under steering
+     * load (accept-all filter → all of 0x520-0x529 + LWS queued here), silently
+     * dropping the low-rate AMI 0x503 → no mission stored, no 0x50A ACK. The
+     * loop empties the FIFO so a burst can't overrun between interrupts. */
+    while (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) == HAL_OK)
+    {
+        can_msg_t msg;
+        msg.id  = rxh.Identifier;
+        /* HAL DataLength is already the byte count (1..8) for these classic
+         * frames — NOT a value needing the old >>16 unshift (that stale shift
+         * made dlc read 0 and tripped every `dlc < N` guard). */
+        msg.dlc = (uint8_t)rxh.DataLength;
+        memcpy(msg.data, rxdata, 8);
+        msg.bus = bus;
+        if (q != NULL) {
+            osMessageQueuePut(q, &msg, 0, 0);
         }
-    } else {
-        osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
     }
 }
 
