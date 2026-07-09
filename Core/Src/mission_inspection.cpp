@@ -89,4 +89,5 @@ extern const Mission mission_inspection = {
     inspection_on_tick,      /* on_tick        */
     inspection_is_complete,  /* is_complete    */
     nullptr,                 /* on_exit        */
+    true,                    /* requests_r2d — exercise the ECU DV R2D handshake */
 };

@@ -94,6 +94,13 @@ struct Mission {
     MissionCommand (*on_tick)(const MissionCtx* ctx);
     bool           (*is_complete)(const MissionCtx* ctx);
     void           (*on_exit)(const MissionCtx* ctx);
+    /* Request DV ready-to-drive (0x510) from the ECU while DRIVING, independent
+     * of the pipeline. Pipeline missions AND inspection want the ECU in DV mode
+     * — inspection commands zero torque but still exercises the R2D handshake;
+     * EBS-test leaves it false so the inverter is never enabled during a brake
+     * test. Trailing field: an initializer that omits it defaults to false
+     * (safe — no R2D request). */
+    bool           requests_r2d;
 };
 
 /**
