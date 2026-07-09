@@ -352,6 +352,12 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
          * grave fault — app_task folds it into the AS emergency trigger.
          * CALIBRANDO (2) is non-operative-but-healthy (never an emergency). */
         g_steer_motor_state.store((int8_t)msg->data[5]);
+        /* Byte 6: power-on zero-cal result (1 = the steering confirmed its LWS
+         * re-zero at power-up). Only present on 8-byte frames; a short (6-7 B)
+         * frame leaves the last value untouched. */
+        if (msg->dlc >= 7U) {
+            g_steer_cal_arranque_ok.store(msg->data[6] ? 1U : 0U);
+        }
         break;
 
     case CAN_ID_STEER_CALIB_STATUS: {    /* 0x529 (FDCAN3) — end-stop calib status (#113) */
@@ -762,6 +768,11 @@ extern "C" float can_c_get_steer_angle_motor(void)
 extern "C" int8_t can_c_get_steer_motor_state(void)
 {
     return g_steer_motor_state.load();
+}
+
+extern "C" uint8_t can_c_get_steer_cal_arranque_ok(void)
+{
+    return g_steer_cal_arranque_ok.load();
 }
 
 extern "C" float can_c_get_steering_angle_deg(void)
