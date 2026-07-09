@@ -110,6 +110,11 @@ void    ros_set_dv_status(uint8_t status, uint32_t now_ms);
 /* Latest dv/status byte (raw; caller checks freshness separately). */
 uint8_t ros_get_dv_status(void);
 
+/* Drive the EBS to the rules safe state (brakes fired + SDC open) from the C
+ * force_ebs service callback. Routes to EbsManager::activateEBS() so the
+ * single-source EBS/SDC policy governs the emergency, not raw GPIO writes. */
+void    ebs_force_safe_state(void);
+
 #ifdef __cplusplus
 }
 #endif

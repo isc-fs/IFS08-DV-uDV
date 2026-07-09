@@ -151,16 +151,19 @@ void force_ebs_callback(const void * req, void * res)
 
   char srv_msg[128];
 
-  // request->data == true  -> fire the EBS (pipeline emergency request).
-  // EBS polarity (confirmed): LOW = fire, HIGH = release (fail-safe).
+  // request->data == true -> drive the rules safe state: brakes fired AND
+  // SDC open. Routed through ebs_force_safe_state() -> EbsManager::activateEBS()
+  // so the single EBS/SDC policy governs it (D1/D2 LOW + D4 LOW) instead of raw
+  // GPIO writes here.
   if (request->data) {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando frenada EBS (fire)");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_RESET); // fire EBS
-    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET); // fire EBS
+    snprintf(srv_msg, sizeof(srv_msg), "debug: Forzando frenada EBS (safe state)");
+    ebs_force_safe_state();
   } else {
-    snprintf(srv_msg, sizeof(srv_msg), "debug: Liberando EBS (release)");
-    HAL_GPIO_WritePin(D1_GPIO_Port, D1_Pin, GPIO_PIN_SET);   // release EBS
-    HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);   // release EBS
+    // No-op by design. Nothing ever calls force_ebs(false): mission_control is
+    // the sole caller and only ever sends true. Re-closing the SDC after an
+    // emergency is NOT a casual service action — it needs the EBS init pressure
+    // sequence — so "releasing" here would be unsafe. Do nothing.
+    snprintf(srv_msg, sizeof(srv_msg), "debug: force_ebs(false) ignored (no-op)");
   }
 
   // Enviamos el mensaje al queue de debug

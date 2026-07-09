@@ -5,6 +5,7 @@
 
 #include "ebs_manager.hpp"
 #include "bench_stubs.h"
+#include "dv_interface.h"   /* ebs_force_safe_state() C bridge prototype (self-guards extern "C") */
 #include <atomic>
 
 extern std::atomic<bool> g_can_brake_over_limit;
@@ -161,20 +162,52 @@ bool EbsManager::SafeManual()
 
 // EBS polarity (confirmed): LOW = fire the brake, HIGH = release. LOW is
 // the power-on/reset level, so the brake is fail-safe on reset/power loss.
-void EbsManager::activateEBS()
+//
+// The four methods are orthogonal so every brake x SDC intent maps to one
+// call: engage/disengageBrakes touch ONLY the actuators (D1/D2); activate/
+// deactivateEBS pair the brakes with the AS's SDC line (D4). See the header.
+
+void EbsManager::engageBrakes()
 {
     hardware_io_enable_ebs_actuator_1(false);   // fire (LOW)
     hardware_io_enable_ebs_actuator_2(false);   // fire (LOW)
 }
 
-void EbsManager::deactivateEBS()
+void EbsManager::disengageBrakes()
 {
     hardware_io_enable_ebs_actuator_1(true);    // release (HIGH)
     hardware_io_enable_ebs_actuator_2(true);    // release (HIGH)
 }
 
+void EbsManager::activateEBS()
+{
+    // Rules safe state: brakes fired AND SDC open (FS-Rules T15.3.5/T11.9.5).
+    engageBrakes();
+    hardware_io_set_as_close_sdc(false);        // open the SDC (D4 LOW)
+}
+
+void EbsManager::deactivateEBS()
+{
+    // AS stands down on the brake system: release the brakes and close the
+    // AS's own SDC contribution (D4 HIGH). Other sources may still open the
+    // loop, but the AS is never the cause.
+    disengageBrakes();
+    hardware_io_set_as_close_sdc(true);         // close the AS's SDC part (D4 HIGH)
+}
+
 void EbsManager::reset()
 {
+    // Re-run the init sequence, which OWNS the SDC line from here (it drives
+    // D4 as part of the pressure/close handshake). So only release the brake
+    // actuators — do NOT touch D4 (deactivateEBS would fight the re-init).
     init_state_ = EBSInitState::Start;
-    deactivateEBS();
+    disengageBrakes();
+}
+
+// C-callable bridge for the force_ebs service callback (ros_task.c, compiled
+// as C): route the emergency request through activateEBS() so the single
+// EBS/SDC policy governs it (brakes fired + SDC open) rather than raw GPIO.
+extern "C" void ebs_force_safe_state(void)
+{
+    EbsManager::getInstance().activateEBS();
 }

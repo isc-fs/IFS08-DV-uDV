@@ -87,6 +87,11 @@ static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
 /* Mandated minimum time in AS READY before a RES GO may be honoured
  * (FS-Rules AS-Ready dwell). Gates READY->DRIVING via as_in.ready_dwell_elapsed. */
 static constexpr uint32_t READY_DWELL_MS           = 5000u;
+/* Mandated stationary period at the START of AS DRIVING (FS-Rules): after GO,
+ * the car must hold still with the brakes engaged for at least this long
+ * before it may move. Enforced in the DRIVING case (brakes engaged + 0 torque
+ * for the first DRIVING_STANDSTILL_MS from the GO edge / mission_time). */
+static constexpr uint32_t DRIVING_STANDSTILL_MS    = 3000u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
@@ -487,7 +492,21 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
-        if (asms_on)
+        /* Watchdog-vs-app_task arbitration on the shared EBS/SDC pins. When
+         * safety_monitor has LATCHED the safe state it drives D1/D2 LOW + D4 LOW
+         * every cycle (safety_enter_safe_state) and emits ASSI EMERGENCY on CAN.
+         * app_task now also writes those pins (activate/deactivateEBS/engage/
+         * disengageBrakes), so it MUST yield: while latched, skip all actuation
+         * so we never re-close the SDC or release the brakes the watchdog is
+         * holding. The latch always wins. Telemetry + the heartbeat above still
+         * run every tick, and the 0x507 torque stream simply goes stale (ECU
+         * treats stale as 0). */
+        const bool wd_latched = (safety_diag_latched() != 0u);
+        if (wd_latched)
+        {
+            // Latched safe-state owned by safety_monitor — no app_task actuation.
+        }
+        else if (asms_on)
         {
             // Autonomous mode enabled
 
@@ -562,21 +581,25 @@ extern "C" void StartAppTask(void *argument)
             {
                 case ASState::OFF:
                     // Run the EBS init / ASB self-check; once it completes (or
-                    // fails) hold the brakes ENGAGED. EBS is engaged in every
-                    // AS state except DRIVING (req #4 / FS-Rules: the car is
-                    // immobilised whenever it is not autonomously driving).
+                    // fails) hold the brakes ENGAGED. Brakes-only: the SDC (D4)
+                    // is owned by the init sequence here and is already closed —
+                    // engageBrakes() must not disturb it (activateEBS would
+                    // re-OPEN it and strand the following READY).
                     if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
                     {
                         ebs_state = ebs.initSequenceStep();
                     }
                     else
                     {
-                        ebs.activateEBS();
+                        ebs.engageBrakes();
                     }
                     break;
 
                 case ASState::READY:
-                    ebs.activateEBS();   // held engaged in READY (req #4)
+                    ebs.engageBrakes();  // brakes engaged, SDC stays CLOSED
+                                         // (init closed it) — the car is armed
+                                         // and must be able to progress to
+                                         // DRIVING, so we must NOT open the SDC.
                     /* Stamp the READY-entry time; the mandated dwell is enforced
                      * on the transition via as_in.ready_dwell_elapsed (built
                      * above from this timestamp). g_can_listen_go mirrors the
@@ -593,8 +616,25 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
-                    ebs.deactivateEBS();  // release: DRIVING is the ONLY state
-                                          // with the brakes off (req #4)
+                    /* FS-Rules driving-start standstill: after GO, hold the car
+                     * still (brakes engaged, SDC stays CLOSED) with zero torque
+                     * for the first DRIVING_STANDSTILL_MS before it may move.
+                     * mission_time is stamped on the GO edge. After it elapses,
+                     * release the brakes — DRIVING is the only moving state. */
+                    const bool in_start_standstill =
+                        ((uint32_t)(now_ms - mission_time) < DRIVING_STANDSTILL_MS);
+                    if (in_start_standstill)
+                    {
+                        ebs.engageBrakes();           // brakes on, SDC closed
+                        if (torque_tx_due)
+                        {
+                            Can::sendAccel(0.0f);     // no drivetrain torque yet
+                        }
+                    }
+                    else
+                    {
+                        ebs.deactivateEBS();          // release brakes; SDC stays closed
+                    }
 
                     /* Keep the steering motor armed while DRIVING. The steering
                      * board runs the motor only while it keeps receiving
@@ -646,7 +686,11 @@ extern "C" void StartAppTask(void *argument)
                     // command). active_mission is non-null for the whole DRIVING
                     // span (set on the GO edge, which mission_valid only allows for
                     // a real mission); the guard is defensive.
-                    if (active_mission != nullptr)
+                    // Skip all mission actuation during the start standstill:
+                    // the car is held braked with zero torque until
+                    // DRIVING_STANDSTILL_MS elapses, so no mission may command
+                    // the drivetrain (or self-complete) yet.
+                    if (!in_start_standstill && active_mission != nullptr)
                     {
                         MissionCtx ctx = app_build_mission_ctx(now_ms, now_ms - mission_time);
                         if (active_mission->on_tick != nullptr)
@@ -666,7 +710,8 @@ extern "C" void StartAppTask(void *argument)
                 }
 
                 case ASState::EMERGENCY:
-                    // EBS should already be active, but ensure it is
+                    // Rules safe state: brakes engaged + SDC open. Re-assert it
+                    // every cycle (it may already be held by safety_monitor).
                     ebs.activateEBS();
 
                     // Cancel any active mission
@@ -682,8 +727,11 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
-                    ebs.activateEBS();   // held engaged in FINISHED (req #4):
-                                         // car braked at standstill, mission done
+                    ebs.activateEBS();   // rules safe state: brakes engaged +
+                                         // SDC open. Car braked at standstill,
+                                         // mission done. (The RES has NOT opened
+                                         // the SDC, so state_manager still reads
+                                         // this as FINISHED, not EMERGENCY.)
                     // Mission complete - ensure any mission is cancelled
                     if (g_set_mission_in_progress.load())
                     {
@@ -699,11 +747,14 @@ extern "C" void StartAppTask(void *argument)
         }
         else
         {
-            // Manual mode (ASMS off): verify the actuator tanks are safe for
-            // manual handling, then hold the brakes ENGAGED — EBS is released
-            // only in DRIVING (req #4).
+            // Manual mode (ASMS off): the human driver owns the brakes, so the
+            // AS must NOT command brake pressure (FS-Rules: manual braking must
+            // always dominate). Release the actuators and close the AS's own SDC
+            // contribution (D4 HIGH) so the AS is never the reason the loop is
+            // open — other sources (RES, etc.) may still open it. SafeManual()
+            // keeps the tank-safety check. (deactivateEBS = disengageBrakes + close SDC.)
             ebs.SafeManual();
-            ebs.activateEBS();
+            ebs.deactivateEBS();
         }
 
         // Small delay to prevent CPU hogging (safety monitor expects our

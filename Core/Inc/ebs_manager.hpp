@@ -42,7 +42,18 @@ public:
     bool ASBChecksOK();
     bool SafeManual();
 
-    // Activation/deactivation
+    // Brake actuators only (D1/D2) — SDC (D4) left untouched.
+    void engageBrakes();     // fire    (D1/D2 LOW)
+    void disengageBrakes();  // release (D1/D2 HIGH)
+
+    // Full AS brake state = brakes AND the AS's SDC contribution together.
+    //   activateEBS()   = engageBrakes()    + open  SDC (D4 LOW)  — the rules
+    //                     safe state (FS-Rules T15.3.5/T11.9.5: brakes fired
+    //                     AND SDC open).
+    //   deactivateEBS() = disengageBrakes() + close SDC (D4 HIGH) — the AS
+    //                     stands down: brakes released and the AS closes its
+    //                     own SDC part (the loop may still be opened elsewhere).
+    // Anyone needing the SDC alone calls hardware_io_set_as_close_sdc() directly.
     void activateEBS();
     void deactivateEBS();
     void reset();
