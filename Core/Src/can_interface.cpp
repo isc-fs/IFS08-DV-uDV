@@ -43,28 +43,28 @@ static constexpr uint32_t CAN_ID_IMU               = 0x512u; /* uDV->ECU: ax/ay/
 static constexpr int32_t  RPM_STANDSTILL           = 10;
 /* Steering — LWS sensor → controller → uDV (RX), uDV → controller (TX) */
 static constexpr uint32_t CAN_ID_STEERING          = 0x2B0u;
-static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x010u;
-static constexpr uint32_t CAN_ID_STEER_CMD         = 0x020u;
-/* Steering controller → uDV feedback (RX, FDCAN3): DrivingDynamics1 @20 Hz.
- * Numerically 0x500 (same as the FDCAN1 data-logger DYN1 TX frame), but a
- * distinct frame on a different bus — keep its own name so the two never
- * read as the same message. See CAN_ID_DL_DYN1 for the TX counterpart. */
-static constexpr uint32_t CAN_ID_STEER_FEEDBACK    = 0x500u;
+static constexpr uint32_t CAN_ID_STEER_MOTOR       = 0x520u;
+static constexpr uint32_t CAN_ID_STEER_CMD         = 0x521u;
+/* Steering controller → uDV feedback (RX, FDCAN3): DrivingDynamics1 layout
+ * @100 Hz. Renumbered 0x500→0x528 (steering fix/6): the whole steering block
+ * 0x520-0x529 sits deliberately ABOVE the AMI frames (0x503/0x50A) so the
+ * steering always loses CAN arbitration to the AMI, and no longer aliases
+ * the FDCAN1 data-logger DYN1 TX frame (CAN_ID_DL_DYN1, still 0x500). */
+static constexpr uint32_t CAN_ID_STEER_FEEDBACK    = 0x528u;
 /* End-stop calibration (#113, steering PR #16), FDCAN3:
- *  0x30  uDV -> steering: byte0 1=start / 2=abort (only when motor idle)
- *  0x510 steering -> uDV: 8B calib status (phase/err/center/half-range/limit).
- * ⚠ 0x510 numerically == CAN_ID_R2D_REQUEST, but that is a uDV->ECU TX on
- *   FDCAN2 — this is a steering->uDV RX on FDCAN3, so no runtime clash. Flagged
- *   for the steering PR #16 to renumber if a cleaner map is wanted. */
-static constexpr uint32_t CAN_ID_STEER_CALIB        = 0x30u;
-static constexpr uint32_t CAN_ID_STEER_CALIB_STATUS = 0x510u;
+ *  0x522 uDV -> steering: byte0 1=start / 2=abort (only when motor idle)
+ *  0x529 steering -> uDV: 8B calib status (phase/err/center/half-range/limit).
+ * Renumbered from 0x30/0x510 (steering fix/6): below AMI priority, and the
+ * old 0x510 no longer aliases CAN_ID_R2D_REQUEST (uDV->ECU on FDCAN2). */
+static constexpr uint32_t CAN_ID_STEER_CALIB        = 0x522u;
+static constexpr uint32_t CAN_ID_STEER_CALIB_STATUS = 0x529u;
 
 /* CAN IDs — FDCAN1 (RES CANopen + DataLogger TX) */
 static constexpr uint32_t RES_NODE_ID              = 0x11u;
 static constexpr uint32_t CAN_ID_NMT               = 0x000u;
 static constexpr uint32_t CAN_ID_RES_PDO_TX        = 0x180u + RES_NODE_ID; /* 0x191 */
 static constexpr uint32_t CAN_ID_RES_BOOTUP        = 0x700u + RES_NODE_ID; /* 0x711 */
-static constexpr uint32_t CAN_ID_DL_DYN1           = 0x500u; /* uDV → data logger TX (see CAN_ID_STEER_FEEDBACK for the 0x500 RX frame) */
+static constexpr uint32_t CAN_ID_DL_DYN1           = 0x500u; /* uDV → data logger TX (FDCAN1; the steering feedback RX moved to 0x528) */
 static constexpr uint32_t CAN_ID_DL_DYN2           = 0x501u;
 static constexpr uint32_t CAN_ID_DL_STATUS         = 0x502u;
 
@@ -305,43 +305,35 @@ void sendIMU(const bmi088_scaled_t &imu)
 
 void isr_push_rx(FDCAN_HandleTypeDef *hfdcan)
 {
+    /* Bus tag + target queue are per-peripheral — compute once, reuse per frame.
+     *   FDCAN1 = RES CANopen → resRxQueueHandle
+     *   else   = AMI + steering (FDCAN3) / ACU (FDCAN2) → canRxQueueHandle */
+    uint8_t bus = (hfdcan->Instance == FDCAN1) ? 1u :
+                  (hfdcan->Instance == FDCAN2) ? 2u :
+                  (hfdcan->Instance == FDCAN3) ? 3u : 0u;
+    osMessageQueueId_t q = (bus == 1u) ? resRxQueueHandle : canRxQueueHandle;
+
     FDCAN_RxHeaderTypeDef rxh;
     uint8_t rxdata[8];
 
-    if (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) != HAL_OK)
-        return;
-
-    can_msg_t msg;
-    msg.id  = rxh.Identifier;
-    /* HAL_FDCAN_GetRxMessage returns DataLength as the DLC code (1..8 for the
-     * classic frames this bus uses) — already the byte count, NOT a value that
-     * needs the old >>16 unshift. The stale `>> 16` made msg.dlc read 0 on
-     * every frame, so every `if (msg->dlc < N) break;` guard tripped: the AMI
-     * mission (0x503) was dropped (no store, no 0x50A ACK), steering feedback
-     * (0x500) and the e-stop decode never ran. */
-    msg.dlc = (uint8_t)rxh.DataLength;
-    memcpy(msg.data, rxdata, 8);
-    /* Tag the message with its source FDCAN bus so downstream dispatch
-     * can distinguish messages from multiple CAN peripherals. */
-    if (hfdcan->Instance == FDCAN1) {
-        msg.bus = 1;
-    } else if (hfdcan->Instance == FDCAN2) {
-        msg.bus = 2;
-    } else if (hfdcan->Instance == FDCAN3) {
-        msg.bus = 3;
-    } else {
-        msg.bus = 0;
-    }
-
-    /* Route to the per-bus queue:
-     *   FDCAN1 = RES CANopen → resRxQueueHandle
-     *   else   = AMI + steering bus → canRxQueueHandle */
-    if (msg.bus == 1) {
-        if (resRxQueueHandle != NULL) {
-            osMessageQueuePut(resRxQueueHandle, &msg, 0, 0);
+    /* Drain EVERY frame pending in the hardware RX FIFO0 on each interrupt.
+     * A single GetRxMessage per IRQ let the 16-deep FIFO overrun under steering
+     * load (accept-all filter → all of 0x520-0x529 + LWS queued here), silently
+     * dropping the low-rate AMI 0x503 → no mission stored, no 0x50A ACK. The
+     * loop empties the FIFO so a burst can't overrun between interrupts. */
+    while (HAL_FDCAN_GetRxMessage(hfdcan, FDCAN_RX_FIFO0, &rxh, rxdata) == HAL_OK)
+    {
+        can_msg_t msg;
+        msg.id  = rxh.Identifier;
+        /* HAL DataLength is already the byte count (1..8) for these classic
+         * frames — NOT a value needing the old >>16 unshift (that stale shift
+         * made dlc read 0 and tripped every `dlc < N` guard). */
+        msg.dlc = (uint8_t)rxh.DataLength;
+        memcpy(msg.data, rxdata, 8);
+        msg.bus = bus;
+        if (q != NULL) {
+            osMessageQueuePut(q, &msg, 0, 0);
         }
-    } else {
-        osMessageQueuePut(canRxQueueHandle, &msg, 0, 0);
     }
 }
 
@@ -350,7 +342,7 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     HAL_GPIO_WritePin(OK_STATUS_GPIO_Port, OK_STATUS_Pin, GPIO_PIN_SET);
     switch (msg->id)
     {
-    case CAN_ID_STEER_FEEDBACK: /* 0x500 DV_DRIVING_DYNAMICS_1 — steering feedback,
+    case CAN_ID_STEER_FEEDBACK: /* 0x528 DV_DRIVING_DYNAMICS_1 — steering feedback,
                           * 20 Hz on the AMI+steering bus (steering's FDCAN1). */
         if (msg->dlc < 6U) break;   /* need bytes [2..5]; short frame = ignore */
         g_steer_angle_actual.store((int8_t)msg->data[2] * 0.5f);
@@ -360,9 +352,15 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
          * grave fault — app_task folds it into the AS emergency trigger.
          * CALIBRANDO (2) is non-operative-but-healthy (never an emergency). */
         g_steer_motor_state.store((int8_t)msg->data[5]);
+        /* Byte 6: power-on zero-cal result (1 = the steering confirmed its LWS
+         * re-zero at power-up). Only present on 8-byte frames; a short (6-7 B)
+         * frame leaves the last value untouched. */
+        if (msg->dlc >= 7U) {
+            g_steer_cal_arranque_ok.store(msg->data[6] ? 1U : 0U);
+        }
         break;
 
-    case CAN_ID_STEER_CALIB_STATUS: {    /* 0x510 (FDCAN3) — end-stop calib status (#113) */
+    case CAN_ID_STEER_CALIB_STATUS: {    /* 0x529 (FDCAN3) — end-stop calib status (#113) */
         if (msg->dlc < 8U) break;
         g_steer_calib_phase.store(msg->data[0]);
         g_steer_calib_error.store(msg->data[1]);
@@ -445,7 +443,7 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
          * actually reached the uDV on FDCAN2 vs never arriving (diag 0x7A8). */
         g_calib_trigger_rx_count.fetch_add(1, std::memory_order_relaxed);
         /* Only honoured while pit-diag is armed (deliberate, MingoCAN-gated),
-         * and only for the two valid commands. Relays 0x30 to the steering. */
+         * and only for the two valid commands. Relays 0x522 to the steering. */
         if (msg->dlc >= 1U && pit_diag_is_armed() &&
             (msg->data[0] == 1U || msg->data[0] == 2U)) {
             sendSteeringCalib(msg->data[0]);
@@ -560,18 +558,18 @@ void sendNmtSetOperational()
     g_nmt_sent_count.fetch_add(1, std::memory_order_relaxed);  /* pit-diag 0x7A5 */
 }
 
-/* 0x010 motor control, 4-byte payload: byte[0] is motor_start (rest 0).
+/* 0x520 motor control, 4-byte payload: byte[0] is motor_start (rest 0).
  * The steering controller reads only data[0] (len>=1) and runs the motor
  * ONLY when data[0] == MOTOR_CMD_ON (1); any other value is a clean stop
- * (re-homes on the next 0x10=1). See IFS08-DV-STEERING@fix/2-can-timing-ram-
+ * (re-homes on the next 0x520=1). See IFS08-DV-STEERING@fix/2-can-timing-ram-
  * safety: comunicacion_direccion.c `motor_start = data[0]` + main.c
  * `if(motor_start != MOTOR_CMD_ON)`. So start=1, stop=0 (0 = the natural off,
  * matching DIR_INACTIVO). */
 static void sendSteeringMotorCmd(uint8_t motor_start)
 {
-    if (BENCH_STUB_STEERING) return;   /* bench: never command the steering (0x010) */
+    if (BENCH_STUB_STEERING) return;   /* bench: never command the steering (0x520) */
     /* #113: calibration and normal operation are mutually exclusive — never
-     * command the motor while the steering is calibrating (it ignores 0x10
+     * command the motor while the steering is calibrating (it ignores 0x520
      * anyway, but sending it would re-arm the instant calib ends). */
     if (g_steer_motor_state.load() == ESTADO_MOTOR_CALIBRANDO) return;
     uint8_t data[4] = { motor_start, 0u, 0u, 0u };
@@ -592,7 +590,7 @@ static void sendSteeringMotorCmd(uint8_t motor_start)
 void sendSteeringStart() { sendSteeringMotorCmd(1u); }
 void sendSteeringStop()  { sendSteeringMotorCmd(0u); }
 
-/* #113 end-stop calibration command (0x30, FDCAN3): cmd 1=start, 2=abort. The
+/* #113 end-stop calibration command (0x522, FDCAN3): cmd 1=start, 2=abort. The
  * steering only accepts it with the motor idle. Deliberately NOT gated by the
  * steering-drive stub or the CALIBRANDO guard — calibration is exactly how an
  * uncalibrated steering is brought up, so it must always be able to TX. */
@@ -617,7 +615,7 @@ void sendSteeringCalib(uint8_t cmd)
 
 void sendSteeringAngle(float angle_deg)
 {
-    if (BENCH_STUB_STEERING) return;   /* bench: never send a steering angle (0x020) */
+    if (BENCH_STUB_STEERING) return;   /* bench: never send a steering angle (0x521) */
     if (g_steer_motor_state.load() == ESTADO_MOTOR_CALIBRANDO) return;  /* #113 */
     /* Scale: int32 LE in 0.01-deg units (matches dev's steering_angle_cmd) */
     int32_t scaled = (int32_t)(angle_deg * 100.0f);
@@ -770,6 +768,11 @@ extern "C" float can_c_get_steer_angle_motor(void)
 extern "C" int8_t can_c_get_steer_motor_state(void)
 {
     return g_steer_motor_state.load();
+}
+
+extern "C" uint8_t can_c_get_steer_cal_arranque_ok(void)
+{
+    return g_steer_cal_arranque_ok.load();
 }
 
 extern "C" float can_c_get_steering_angle_deg(void)

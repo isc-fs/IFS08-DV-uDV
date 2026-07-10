@@ -217,7 +217,7 @@ static void send_canhealth(void)
 }
 
 /* Steering end-stop calibration status relay (#113): forwards the steering's
- * 0x510 (received on FDCAN3) to the pit tool on FDCAN2, so MingoCAN can show
+ * 0x529 (received on FDCAN3) to the pit tool on FDCAN2, so MingoCAN can show
  * calibration progress without tapping the steering bus. */
 static void send_calib(void)
 {
@@ -240,11 +240,11 @@ static void send_calib(void)
 /* Live steering angle relay so a CAN-only pit (MingoCAN on FDCAN2) can SEE what
  * the LWS is measuring — essential during manual end-stop calibration, where the
  * operator turns the wheel to the stops and needs the live angle (the raw LWS
- * 0x2B0 and the 0x500 feedback are on FDCAN3, invisible to the pit otherwise). */
+ * 0x2B0 and the 0x528 feedback are on FDCAN3, invisible to the pit otherwise). */
 static void send_steer(void)
 {
     int16_t lws_raw = g_steering_angle_raw.load();           /* 0x2B0, x0.1 deg    */
-    int16_t act = (int16_t)(g_steer_angle_actual.load() * 10.0f);  /* 0x500, ->x0.1 */
+    int16_t act = (int16_t)(g_steer_angle_actual.load() * 10.0f);  /* 0x528, ->x0.1 */
     int16_t tgt = (int16_t)(g_steer_angle_target.load() * 10.0f);
     uint8_t d[8] = {
         (uint8_t)(lws_raw & 0xFFu), (uint8_t)((uint16_t)lws_raw >> 8), /* [0-1] LWS raw x0.1deg */
@@ -256,9 +256,9 @@ static void send_steer(void)
     tx8(CAN_ID_PITDIAG_STEER, d);
 }
 
-/* Calibration RELAY diag (uDV side): closes the loop on the 0x7DF->0x30 path so
+/* Calibration RELAY diag (uDV side): closes the loop on the 0x7DF->0x522 path so
  * the bench can tell where a stuck calibration is. rx_count = 0x7DF frames seen
- * on FDCAN2 (reached the uDV); relay_count = 0x30 frames TX'd on FDCAN3 (uDV
+ * on FDCAN2 (reached the uDV); relay_count = 0x522 frames TX'd on FDCAN3 (uDV
  * commanded the steering). Read: rx=0 -> trigger never arrived (wrong bus / not
  * armed-tool / not sent); rx>0 & relay=0 -> received but not relayed (armed=0 or
  * bad cmd); relay>0 but steering idle -> it's the steering (steering #21). */
@@ -268,12 +268,35 @@ static void send_calib_dbg(void)
     uint16_t rly = g_calib_relay_count.load();
     uint8_t d[8] = {
         (uint8_t)(rx & 0xFFu),  (uint8_t)(rx >> 8),   /* [0-1] 0x7DF rx count (FDCAN2) LE */
-        (uint8_t)(rly & 0xFFu), (uint8_t)(rly >> 8),  /* [2-3] 0x30 relay count (FDCAN3) LE */
+        (uint8_t)(rly & 0xFFu), (uint8_t)(rly >> 8),  /* [2-3] 0x522 relay count (FDCAN3) LE */
         g_calib_last_cmd.load(),      /* [4] last cmd relayed (1 start / 2 abort) */
         pit_diag_is_armed(),          /* [5] armed gate (0x7DF ignored if 0)      */
         0u, 0u,
     };
     tx8(CAN_ID_PITDIAG_CALIBDBG, d);
+}
+
+/* EBS air-tank storage pressures (A5/A4), so a CAN-only bench can watch the
+ * tanks charge/vent and validate the sensor scaling (PRES_DIVIDER) against a
+ * gauge. AppTask samples the real ADC into the telemetry atomics, so this is
+ * the true pressure even when BENCH_STUB_EBS_SENSORS fakes the pass/fail gate.
+ * ok-bits use the same 1.0 bar (10 dbar) ACTUATOR_STORAGE_THRESHOLD the EBS
+ * self-check applies. */
+static void send_ebs(void)
+{
+    int16_t p1 = ros_get_ebs_pressure1_dbar();   /* deci-bar, x0.1 bar */
+    int16_t p2 = ros_get_ebs_pressure2_dbar();
+    uint8_t ok = (uint8_t)(((p1 > 10) ? 0x01u : 0u) |   /* tank1 > 1.0 bar */
+                           ((p2 > 10) ? 0x02u : 0u));   /* tank2 > 1.0 bar */
+    uint8_t d[8] = {
+        (uint8_t)(p1 & 0xFFu), (uint8_t)((uint16_t)p1 >> 8),  /* [0-1] tank1 dbar LE */
+        (uint8_t)(p2 & 0xFFu), (uint8_t)((uint16_t)p2 >> 8),  /* [2-3] tank2 dbar LE */
+        ros_get_ebs_init_state(),   /* [4] EBS init state (Start=0 .. Failed=7 Done=8) */
+        stub_mask(),                /* [5] stub mask (bit2=EBS_SENSORS -> gate faked)  */
+        ok,                         /* [6] b0=tank1>1bar b1=tank2>1bar (CheckPressure) */
+        0u,                         /* [7] spare                                       */
+    };
+    tx8(CAN_ID_PITDIAG_EBS, d);
 }
 
 /* ---- cadence ------------------------------------------------------------ */
@@ -294,6 +317,7 @@ void pit_diag_service(uint32_t now_ms)
         send_calib();
         send_steer();
         send_calib_dbg();
+        send_ebs();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;

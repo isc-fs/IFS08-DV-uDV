@@ -77,15 +77,17 @@ extern "C" void StartCanTask(void *argument)
 
             can_msg_t rx_msg;
 
-        // FDCAN3 (AMI + steering) — non-blocking
-        if (osMessageQueueGet(canRxQueueHandle, &rx_msg, NULL, 0) == osOK)
+        // FDCAN3 (AMI + steering) + FDCAN2 (ACU) — drain the WHOLE queue each
+        // loop. Servicing one frame per 5 ms tick (~200 fps) let the 32-deep
+        // queue back up under steering load and drop the rare AMI 0x503.
+        while (osMessageQueueGet(canRxQueueHandle, &rx_msg, NULL, 0) == osOK)
         {
             Can::rx_dispatch(&rx_msg);
         }
 
-        // FDCAN1 (RES CANopen) — non-blocking
-        if (resRxQueueHandle != NULL &&
-            osMessageQueueGet(resRxQueueHandle, &rx_msg, NULL, 0) == osOK)
+        // FDCAN1 (RES CANopen) — drain all pending
+        while (resRxQueueHandle != NULL &&
+               osMessageQueueGet(resRxQueueHandle, &rx_msg, NULL, 0) == osOK)
         {
             Can::resRxDispatch(&rx_msg);
         }

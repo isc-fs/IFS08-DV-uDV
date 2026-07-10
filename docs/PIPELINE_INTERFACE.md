@@ -82,7 +82,7 @@ cap for detecting a lost safety-critical message.
 - **Actuation scaling `[G2/G3, SAFETY]`.** `ctrl/cmd` is normalised and
   clamped on receive. Throttle: `Can::sendAccel` → ECU `0x507` (int32 LE
   percent, confirmed against the ECU `.def`). Steering: routed to the
-  steering controller on `0x020` as `norm × STEER_FULL_LOCK_DEG` (65°,
+  steering controller on `0x521` as `norm × STEER_FULL_LOCK_DEG` (65°,
   under STEERING's 70° cutoff; the old consumer-less `0x508` is gone).
   Still to commission (#71): real full-lock angle, steering ratio, and the
   sign convention (ROS `+z` = CCW/left) on the car.

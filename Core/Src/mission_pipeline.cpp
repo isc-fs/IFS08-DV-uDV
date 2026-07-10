@@ -66,4 +66,5 @@ extern const Mission mission_pipeline = {
     pipeline_on_tick,    /* on_tick        */
     nullptr,             /* is_complete    */
     nullptr,             /* on_exit        */
+    true,                /* requests_r2d — pipeline drives, needs DV mode */
 };

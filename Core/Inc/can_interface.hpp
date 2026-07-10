@@ -35,17 +35,17 @@ void sendAssiStatus(uint8_t status);
 void sendNmtSetOperational();
 
 /* Steering controller TX (FDCAN3)
- *  sendSteeringStart/Stop: 0x010 motor control — byte[0] motor_start,
+ *  sendSteeringStart/Stop: 0x520 motor control — byte[0] motor_start,
  *                          1=start / 0=stop, 4-byte payload. The steering
  *                          controller runs the motor only when byte[0] ==
  *                          MOTOR_CMD_ON (1); any other value is a clean stop
  *                          (see IFS08-DV-STEERING comunicacion_direccion.c).
- *  sendSteeringAngle:      0x020 — int32 LE in 0.01-deg units, 4-byte payload
+ *  sendSteeringAngle:      0x521 — int32 LE in 0.01-deg units, 4-byte payload
  */
 void sendSteeringStart();
 void sendSteeringStop();
 void sendSteeringAngle(float angle_deg);
-void sendSteeringCalib(uint8_t cmd);   /* #113: 0x30 end-stop calib — 1=start, 2=abort */
+void sendSteeringCalib(uint8_t cmd);   /* #113: 0x522 end-stop calib — 1=start, 2=abort */
 
 /* DataLogger TX (FDCAN1) per FS-DV spec DS 2.2 — emits 0x500/0x501/0x502.
  * Intended to be called periodically (~10 Hz) from can_task. */

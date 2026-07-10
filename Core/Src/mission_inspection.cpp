@@ -1,6 +1,9 @@
 /**
  * @file    mission_inspection.cpp
- * @brief   Standalone INSPECTION mission (AMI code 6) — open-loop steering demo.
+ * @brief   Standalone INSPECTION mission (AMI code 6) — open-loop steering +
+ *          drivetrain (torque) test. Requests DV R2D and, once the ECU confirms
+ *          (0x511), commands a steady 15% torque — so it exercises the full
+ *          uDV->ECU->inverter chain (wheels-up/bench: real torque flows).
  *
  * Proves the steering chain end-to-end with no pipeline: sweep the steering
  * ±INSPECTION_STEER_AMP_DEG at INSPECTION_STEER_FREQ_HZ, one 0x020 angle
@@ -29,6 +32,7 @@ constexpr float    INSPECTION_STEER_AMP_DEG = 90.0f;   /* sweep amplitude (deg) 
 constexpr float    INSPECTION_STEER_FREQ_HZ = 0.3f;    /* sweep frequency (Hz)  */
 constexpr uint32_t INSPECTION_STEER_DT_MS   = 200u;    /* one command per 200 ms */
 constexpr uint32_t INSPECTION_DURATION_MS   = 30000u;  /* 30 s, then FINISHED   */
+constexpr float    INSPECTION_TORQUE_NORM   = 0.15f;   /* 15% torque once DV R2D confirmed */
 
 /* Open-loop sweep angle at a given mission-elapsed time. Phase derives from the
  * elapsed time so each run starts clean at 0°. */
@@ -68,6 +72,16 @@ MissionCommand inspection_on_tick(const MissionCtx* ctx)
         s_last_emit_ms       = ctx->now_ms;
         s_first_emit         = false;
     }
+
+    /* Torque test: once the ECU confirms DV R2D (0x511), command a steady 15%.
+     * Before confirm this stays 0, and app_task keeps the 0x507 stream alive at
+     * 0 — so torque only flows after DV mode is actually latched. app_task paces
+     * the 0x507 TX to the ECU's 20 ms cycle. */
+    if (ctx->r2d_confirmed)
+    {
+        cmd.send_accel = true;
+        cmd.accel_norm = INSPECTION_TORQUE_NORM;
+    }
     return cmd;
 }
 
@@ -89,4 +103,5 @@ extern const Mission mission_inspection = {
     inspection_on_tick,      /* on_tick        */
     inspection_is_complete,  /* is_complete    */
     nullptr,                 /* on_exit        */
+    true,                    /* requests_r2d — exercise the ECU DV R2D handshake */
 };

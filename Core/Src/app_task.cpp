@@ -25,6 +25,7 @@ extern "C" {
 
 #include "state_manager.hpp"
 #include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
+#include "as_actuation.hpp"    /* pure safe-state actuation decision (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -64,6 +65,9 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
                          ((now_ms - stamp) < DV_CTRL_CMD_STALE_MS);
     ctx.ctrl_accel = g_accel_cmd.load();
     ctx.ctrl_steer = g_steer_cmd.load();
+    /* ECU DV R2D confirm (0x511). A requests_r2d mission gates its torque on
+     * this — no drivetrain command until the ECU is actually in DV mode. */
+    ctx.r2d_confirmed = g_can_r2d.load();
     return ctx;
 }
 
@@ -72,7 +76,7 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
 /* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
- * controller takes an absolute angle on 0x020 (0.01 deg units). Full-lock
+ * controller takes an absolute angle on 0x521 (0.01 deg units). Full-lock
  * span for the conversion, kept UNDER the steering controller's 70 deg
  * cutoff (PIPELINE_INTERFACE.md G3) with margin.
  * TODO(commission, #71): measure the real full-lock angle + steering ratio
@@ -87,12 +91,12 @@ static constexpr uint32_t READY_DWELL_MS           = 5000u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
- *  - send_steer_angle: absolute 0x020 steering angle at the mission's own
+ *  - send_steer_angle: absolute 0x521 steering angle at the mission's own
  *    cadence (inspection sweep / EBS-test hold).
  *  - send_accel / send_steer: the pipeline drive, paced by drive_tx_due to the
- *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x020
+ *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x521
  *    angle = norm * STEER_FULL_LOCK_DEG. They are separate so a stale link can
- *    zero the torque WITHOUT commanding steering — a 0x020 zero would snap the
+ *    zero the torque WITHOUT commanding steering — a 0x521 zero would snap the
  *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
 static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
 {
@@ -102,10 +106,12 @@ static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_d
     }
     if (drive_tx_due)
     {
-        if (cmd.send_accel)
-        {
-            Can::sendAccel(cmd.accel_norm);
-        }
+        /* Keep the 0x507 torque stream alive at the ECU's 20 ms cadence in
+         * DRIVING even when the mission commands no torque (inspection): send
+         * the commanded accel, or an explicit 0. That holds the ECU's DV mode
+         * with a fresh zero rather than letting the stream go stale (the ECU
+         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true). */
+        Can::sendAccel(cmd.send_accel ? cmd.accel_norm : 0.0f);
         if (cmd.send_steer)
         {
             Can::sendSteeringAngle(cmd.steer_norm * STEER_FULL_LOCK_DEG);
@@ -179,6 +185,11 @@ static void sync_state_telemetry(const StateManager& state_mgr,
     g_telemetry_mission_finished.store(signals.mission_finished);
     g_telemetry_abs_checks_ok.store(signals.abs_checks_ok);
     g_telemetry_ebs_activated.store(signals.ebs_activated);
+    /* Sample the EBS air-tank pressures here so AppTask stays the SOLE reader of
+     * hadc3 (the pit-diag/ros publishers only touch the atomics). Real ADC even
+     * under BENCH_STUB_EBS_SENSORS, so the bench sees true tank pressure. */
+    g_telemetry_ebs_pressure1_bar.store(hardware_io_read_actuator1_storage_pressure());
+    g_telemetry_ebs_pressure2_bar.store(hardware_io_read_actuator2_storage_pressure());
 }
 
 /**
@@ -293,11 +304,13 @@ extern "C" void StartAppTask(void *argument)
         //1. cuando asms esta off siempre retornar a la AS_off
         //2. Si asms on, ts on y RES ok (es decir res 0 mira la funcion can_c_get_res_status()). transicion a AS_ready
         //3. Si RES E-stop en cualquier momento transicionar a AS_emergency
-        //4. EBS engaged (brakes on, D1/D2 LOW = fire) in EVERY state except
-        //   AS_driving; released (D1/D2 HIGH) only in AS_driving. The car is
-        //   immobilised whenever it is not autonomously driving. IMPLEMENTED
-        //   below: OFF (after init) / READY / FINISHED / EMERGENCY / manual ->
-        //   ebs.activateEBS(); DRIVING -> ebs.deactivateEBS().
+        //4. EBS engaged (brakes on, D1/D2 LOW = fire) in every AS state except
+        //   DRIVING; released (D1/D2 HIGH) in DRIVING (autonomous) and in
+        //   manual/ASMS-off handling. The AS SDC is opened (D4 LOW) in the
+        //   terminal safe states FINISHED / EMERGENCY (TS off / TSAL green +
+        //   fail-safe EBS). IMPLEMENTED below: OFF (after init) / READY /
+        //   FINISHED / EMERGENCY -> ebs.activateEBS(); DRIVING & manual ->
+        //   ebs.deactivateEBS().
         //5. transicinar de AS_ready a AS_driving cuando se reciba el comando de start del RES
         //6. transicionar a emergency si el RES esta bien y el TS pasa a esta off.
         //7. configura para que la mision por defecto sea INSPECTION
@@ -329,7 +342,7 @@ extern "C" void StartAppTask(void *argument)
         bool res_go = (res_status == 2);
         bool res_estop = (res_status == 1);
 
-        /* Steering stepper-driver grave fault (byte 5 of 0x500). EMERGENCIA is
+        /* Steering stepper-driver grave fault (byte 5 of 0x528). EMERGENCIA is
          * an absolute cut-off requiring a physical reset — a dead steering
          * motor means the car can't steer, so treat it like an RES e-stop. */
         bool steer_emergency =
@@ -482,6 +495,43 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
+        /* ---- Centralised safe-state actuation (EBS + AS SDC) ----
+         * The per-state release/fire + SDC-open rule is the pure, host-tested
+         * as_actuation() (see as_actuation.hpp / tests/host/test_as_actuation.cpp)
+         * — the single source of truth, applied here for every state including
+         * manual (ASMS off). Exception: OFF drives the actuators through its EBS
+         * init self-test (T15.2) until it completes; once Done/Failed OFF uses
+         * the steady rule like every other state. */
+        {
+            const AsActuation act = as_actuation(as_state, asms_on);
+            const bool off_init_running =
+                asms_on && (as_state == ASState::OFF) &&
+                (ebs_state != EBSInitState::Done) &&
+                (ebs_state != EBSInitState::Failed);
+            if (off_init_running)
+            {
+                ebs_state = ebs.initSequenceStep();   // ASB self-check (T15.2)
+            }
+            else if (act.ebs_release)
+            {
+                ebs.deactivateEBS();   // released: DRIVING (autonomous) or manual
+            }
+            else
+            {
+                ebs.activateEBS();     // fired: every other AS state (req #4)
+            }
+            if (act.sdc_open)
+            {
+                // Terminal safe state: open the AS SDC (D4 LOW) -> TS off / TSAL
+                // green + EBS via the fail-safe path. Mirrors safety_monitor.c.
+                hardware_io_set_as_close_sdc(false);
+            }
+            if (!asms_on)
+            {
+                ebs.SafeManual();   // manual handling: verify actuator tanks vented
+            }
+        }
+
         if (asms_on)
         {
             // Autonomous mode enabled
@@ -525,22 +575,23 @@ extern "C" void StartAppTask(void *argument)
             }
 
             /* Zero torque when not driving (safety). No steering command
-             * outside DRIVING: the steering motor is stopped (0x010), and a
-             * 0x020 frame would command the wheel to CENTER, not "hold". */
+             * outside DRIVING: the steering motor is stopped (0x520), and a
+             * 0x521 frame would command the wheel to CENTER, not "hold". */
             if (as_state != ASState::DRIVING && torque_tx_due)
             {
                 Can::sendAccel(0.0f);
             }
 
             /* DV ready-to-drive handshake (0x510 -> 0x511): while DRIVING a
-             * pipeline mission without the ECU's confirm (g_can_r2d, from
-             * 0x511), re-request periodically. The ECU only honours it while
-             * its own brake sensor confirms the EBS holding (0x505 verdict)
+             * mission that requests_r2d, without the ECU's confirm (g_can_r2d,
+             * from 0x511), re-request periodically. The ECU only honours it
+             * while its own brake sensor confirms the EBS holding (0x505 verdict)
              * and latches the edge for the drive cycle — once confirmed,
-             * requesting stops. Standalone missions skip this: they command
-             * no torque, so the ECU stays out of DV mode. */
+             * requesting stops. Gated on requests_r2d (not needs_pipeline) so
+             * inspection also enters DV mode (it commands zero torque but still
+             * drives the handshake); EBS-test leaves it false. */
             if (as_state == ASState::DRIVING &&
-                active_mission != nullptr && active_mission->needs_pipeline &&
+                active_mission != nullptr && active_mission->requests_r2d &&
                 !g_can_r2d.load())
             {
                 static uint32_t last_r2d_req_ms = 0;
@@ -555,23 +606,14 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
-                    // Run the EBS init / ASB self-check; once it completes (or
-                    // fails) hold the brakes ENGAGED. EBS is engaged in every
-                    // AS state except DRIVING (req #4 / FS-Rules: the car is
-                    // immobilised whenever it is not autonomously driving).
-                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
-                    {
-                        ebs_state = ebs.initSequenceStep();
-                    }
-                    else
-                    {
-                        ebs.activateEBS();
-                    }
+                    /* EBS actuation (init self-test while arming, else engage)
+                     * is handled by the centralised as_actuation() block above.
+                     * Nothing state-specific here. */
                     break;
 
                 case ASState::READY:
-                    ebs.activateEBS();   // held engaged in READY (req #4)
-                    /* Stamp the READY-entry time; the mandated dwell is enforced
+                    /* EBS engaged centrally above (as_actuation).
+                     * Stamp the READY-entry time; the mandated dwell is enforced
                      * on the transition via as_in.ready_dwell_elapsed (built
                      * above from this timestamp). g_can_listen_go mirrors the
                      * same >= READY_DWELL_MS condition for telemetry (pit_diag). */
@@ -587,15 +629,13 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
-                    ebs.deactivateEBS();  // release: DRIVING is the ONLY state
-                                          // with the brakes off (req #4)
-
-                    /* Keep the steering motor armed while DRIVING. The steering
+                    /* EBS released centrally above (as_actuation).
+                     * Keep the steering motor armed while DRIVING. The steering
                      * board runs the motor only while it keeps receiving
-                     * motor_start (0x010=1) and cuts out on a command-timeout;
+                     * motor_start (0x520=1) and cuts out on a command-timeout;
                      * a single start on the GO edge was NOT enough on the car
                      * (feat/18-ebs, car-proven). Re-send it, paced to the 20 ms
-                     * torque clock to avoid flooding 0x010 (feat/18-ebs sent it
+                     * torque clock to avoid flooding 0x520 (feat/18-ebs sent it
                      * every ~1 ms tick). Homing runs once on the board (guarded
                      * by !arrancado), so repeats do not re-home. The GO-edge
                      * start above still arms it immediately. */
@@ -660,9 +700,7 @@ extern "C" void StartAppTask(void *argument)
                 }
 
                 case ASState::EMERGENCY:
-                    // EBS should already be active, but ensure it is
-                    ebs.activateEBS();
-
+                    /* EBS fired + AS SDC opened centrally above (as_actuation). */
                     // Cancel any active mission
                     if (g_set_mission_in_progress.load())
                     {
@@ -676,8 +714,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
-                    ebs.activateEBS();   // held engaged in FINISHED (req #4):
-                                         // car braked at standstill, mission done
+                    /* EBS fired + AS SDC opened centrally above (as_actuation).
+                     * FINISHED latches until ASMS-off; the SDC stays open until a
+                     * reset/power-cycle re-runs the EBS init (re-closes it). */
                     // Mission complete - ensure any mission is cancelled
                     if (g_set_mission_in_progress.load())
                     {
@@ -691,14 +730,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
             }
         }
-        else
-        {
-            // Manual mode (ASMS off): verify the actuator tanks are safe for
-            // manual handling, then hold the brakes ENGAGED — EBS is released
-            // only in DRIVING (req #4).
-            ebs.SafeManual();
-            ebs.activateEBS();
-        }
+        /* Manual mode (ASMS off): the EBS release + SafeManual() are applied by
+         * the centralised as_actuation() block above; no autonomous per-state
+         * logic runs when ASMS is off. */
 
         // Small delay to prevent CPU hogging (safety monitor expects our
         // heartbeat within its 100 ms deadline)

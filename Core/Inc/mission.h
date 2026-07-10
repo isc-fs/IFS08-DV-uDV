@@ -54,6 +54,9 @@ struct MissionCtx {
     bool     ctrl_cmd_fresh;     /**< /ctrl/cmd seen within DV_CTRL_CMD_STALE_MS  */
     float    ctrl_accel;         /**< latest normalised throttle  [-1, 1]        */
     float    ctrl_steer;         /**< latest normalised steering  [-1, 1]        */
+    bool     r2d_confirmed;      /**< ECU latched DV R2D (0x511, g_can_r2d) — a
+                                      requests_r2d mission may only command torque
+                                      once this is true (inspection torque test)  */
 };
 
 /**
@@ -94,6 +97,13 @@ struct Mission {
     MissionCommand (*on_tick)(const MissionCtx* ctx);
     bool           (*is_complete)(const MissionCtx* ctx);
     void           (*on_exit)(const MissionCtx* ctx);
+    /* Request DV ready-to-drive (0x510) from the ECU while DRIVING, independent
+     * of the pipeline. Pipeline missions AND inspection want the ECU in DV mode
+     * — inspection commands zero torque but still exercises the R2D handshake;
+     * EBS-test leaves it false so the inverter is never enabled during a brake
+     * test. Trailing field: an initializer that omits it defaults to false
+     * (safe — no R2D request). */
+    bool           requests_r2d;
 };
 
 /**

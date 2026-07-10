@@ -748,15 +748,30 @@ void ros_task_run(void)
       }
 
       // --- Steering angle + motor RPM + steering feedback at 100 Hz ---
-      // (every 4 IMU samples). All feed the pipeline EKF and all share the
-      // 0x500/0x506 CAN sources, which run at 100 Hz (motor rpm 0x506 @10 ms;
-      // steering 0x500 @10 ms once STEERING fix/dyn1-100hz lands), so
-      // publishing here at 100 Hz carries fresh measurements, not repeats.
+      // (every 4 IMU samples). These have DIFFERENT CAN sources and, for the
+      // two steering topics, DIFFERENT sign conventions -- do not assume they
+      // agree:
+      //   /steering_angle    <- raw LWS 0x2B0 (can_c_get_steering_angle_deg);
+      //                         the ONLY one the pipeline EKF consumes.
+      //   /steering/feedback <- steering-board telemetry 0x528 (actual/target/
+      //                         motor); debug/telemetry only, no pipeline sub.
+      //   /motor_rpm         <- ECU 0x506.
+      // SIGN CONVENTION (they disagree BY DESIGN, don't "fix" it):
+      //   * /steering_angle is the raw sensor = LEFT-positive = REP-103 delta
+      //     (+delta = wheel left = CCW yaw), exactly what the EKF bicycle model
+      //     wants. Leave it as-is; it does NOT pass through the steering
+      //     firmware's sign flip.
+      //   * /steering/feedback comes from 0x528, which the steering firmware
+      //     now emits in the intuitive RIGHT-positive operator/dashboard
+      //     convention (IFS08-DV-STEERING SENTIDO_DIRECCION at the CAN edge).
+      // All three run at 100 Hz on the wire, so publishing here at 100 Hz
+      // carries fresh measurements, not repeats.
       if (++fast_pub_counter >= FAST_PUB_INTERVAL)
       {
         fast_pub_counter = 0;
 
-        // Front-wheel steering angle (rad)
+        // Front-wheel steering angle (rad). Raw LWS (0x2B0) = LEFT-positive
+        // (REP-103), for the EKF; NOT the steering firmware's flipped 0x528.
         steering_msg.data = can_c_get_steering_angle_deg()
                             * (float)(M_PI / 180.0)
                             / STEERING_RATIO;
@@ -766,7 +781,10 @@ void ros_task_run(void)
         motor_rpm_msg.data = (float)can_c_get_motor_rpm();
         (void)rcl_publish(&motor_rpm_pub, &motor_rpm_msg, NULL);
 
-        // Steering feedback array: actual / target / motor angle (deg)
+        // Steering feedback array: actual / target / motor angle (deg). From
+        // 0x528 = RIGHT-positive (intuitive/dashboard convention, post steering
+        // SENTIDO_DIRECCION); debug/telemetry only -- opposite sign to
+        // /steering_angle above, by design.
         steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
         steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
         steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
