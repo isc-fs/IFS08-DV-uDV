@@ -25,15 +25,17 @@
  * invariant), so roll/pitch — derived from the rotated accel — come out about
  * the car's axes for free.
  *
- * Default 0.0 = board aligned with the car (flight-clean; folds to a no-op).
- * Set it WITHOUT editing this file, the same way as a bench toggle — pass it
- * as a build define so flight source and the override stay separate:
- *     make CONFIG="-DIMU_YAW_OFFSET_DEG=12.5"      (Make, production)
- *     cmake ... -DIMU_YAW_OFFSET_DEG=12.5          (CMake / IDE)
- * Because the macro is #ifndef-guarded, a -D wins and this 0.0 default is
- * skipped. Measure the angle once at commissioning (board vs chassis, or by
- * comparing heading while driving a straight line); a non-zero value announces
- * itself on /debug at boot so the flashed offset can be verified in the pit.
+ * >>> THE OFFSET IS SET IN EXACTLY ONE PLACE: the IMU_YAW_OFFSET_DEG #define
+ *     below. Change that one line if the board is remounted, rebuild, reflash.
+ *     Nothing else in the tree carries the value. <<<
+ * It is currently 101.0 deg (the board's present mounting). 0.0 would mean a
+ * perfectly square mount. The active value announces itself on /debug at boot
+ * so it can be verified in the pit. To re-measure after a remount: board vs
+ * chassis with a protractor, or compare heading while driving a straight line.
+ *
+ * SIGN CHECK: 101 assumes the convention above (CCW car->IMU). If a straight-
+ * line test drive shows the corrected heading/accel is mirrored, the board is
+ * rotated the other way — flip the sign to -101 (one character).
  */
 #ifndef IMU_ALIGN_H
 #define IMU_ALIGN_H
@@ -44,11 +46,15 @@
 extern "C" {
 #endif
 
-/* Yaw mounting offset in DEGREES (see convention above). #ifndef-guarded so a
- * -D override at build time wins and this flight default of 0 is skipped. */
+/* ======================= THE ONE PLACE TO SET IT =======================
+ * IMU->car yaw mounting offset in DEGREES (see convention + sign check above).
+ * This single line is the source of truth for the whole firmware; edit it when
+ * the board is remounted. Currently 101 deg = the board's present mounting.
+ * (#ifndef-guarded only so the host unit test can exercise other angles.) */
 #ifndef IMU_YAW_OFFSET_DEG
-#define IMU_YAW_OFFSET_DEG 0.0f
+#define IMU_YAW_OFFSET_DEG 101.0f
 #endif
+/* ======================================================================= */
 
 typedef struct {
   float cos_yaw;   /* precomputed cos(offset) — set by imu_align_init */

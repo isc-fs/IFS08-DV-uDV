@@ -94,10 +94,12 @@ TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle`
 to the scaled sample the instant it leaves the driver — before the attitude
 filter and before it fans out — so roll/pitch, the CAN `0x512` broadcast and
 ROS `/imu` all see one consistent car-frame sample. The offset is the
-compile-time constant `IMU_YAW_OFFSET_DEG` (default 0 = aligned, flight-clean),
-overridden without a source edit via `make CONFIG="-DIMU_YAW_OFFSET_DEG=<deg>"`
-(CMake: `-DIMU_YAW_OFFSET_DEG=<deg>`); a non-zero value announces itself on
-`/debug` at boot. See [imu_align.h](Core/Inc/imu_align.h) for the sign convention.
+compile-time constant `IMU_YAW_OFFSET_DEG` — **set in exactly one place**, that
+`#define` in [imu_align.h](Core/Inc/imu_align.h) (currently 101° for this
+board's mounting; 0 = square). Change that one line if the board is remounted,
+rebuild, reflash — nothing else in the tree carries the value. The active
+offset announces itself on `/debug` at boot; see the header for the sign
+convention and how to re-measure.
 
 Timestamps use DWT cycle counter (sub-microsecond) with NTP-like sync via `rmw_uros_sync_session`. Re-sync happens every ~10 s (4000 samples).
 

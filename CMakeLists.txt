@@ -17,15 +17,6 @@ add_compile_definitions(
     STM32_THREAD_SAFE_STRATEGY=4
 )
 
-# IMU mounting yaw offset (deg), see Core/Inc/imu_align.h. Default 0 (aligned).
-# CMake/IDE counterpart of the Makefile CONFIG knob; leave empty for a flight
-# build, or override at configure time:
-#   cmake ... -DIMU_YAW_OFFSET_DEG=12.5   (Make: make CONFIG="-DIMU_YAW_OFFSET_DEG=12.5")
-set(IMU_YAW_OFFSET_DEG "" CACHE STRING "IMU->car yaw mount offset in degrees")
-if(NOT IMU_YAW_OFFSET_DEG STREQUAL "")
-    add_compile_definitions(IMU_YAW_OFFSET_DEG=${IMU_YAW_OFFSET_DEG})
-endif()
-
 # C sources
 set(C_SOURCES
     Core/Src/main.c
