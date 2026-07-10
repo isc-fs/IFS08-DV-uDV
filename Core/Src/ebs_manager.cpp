@@ -31,26 +31,22 @@ EBSInitState EbsManager::initSequenceStep()
     switch (init_state_)
     {
         case EBSInitState::Start:
-            /* SDC-ready gate. BENCH_STUB_SDC / EBS_SENSORS fake it (on this PCB
-             * the read is A1=RES_1_IN, not a true SDC signal) so we advance
-             * without real SDC feedback — actuation further down still runs for
-             * real, and the D4 SDC drive is unaffected. Folds away on a car build. */
-            if (BENCH_STUB_SDC || BENCH_STUB_EBS_SENSORS || hardware_io_read_sdc_is_ready())
-            {
-                init_state_ = EBSInitState::WaitLow;
-                start_time_ = hardware_io_now_ms();
-            }
+            /* The former SDC-ready gate read hardware_io_read_sdc_is_ready() (A1),
+             * but A1 physically carries RES_1_IN — a dead/mislabeled signal, NOT
+             * an AS-SDC-ready feedback (docs/STATE_MACHINE_INPUTS.md "Cleanup
+             * noted"). There is no valid SDC-ready input (D4 is output-only), so
+             * the gate is REMOVED: it can never pass on the real car and blocked
+             * the whole self-check unless a bench stub bypassed it. Advance to the
+             * real first check. Kept as a distinct state so the 0x7A9 / pit-diag
+             * init-state numbering is unchanged. */
+            init_state_ = EBSInitState::WaitLow;
             break;
 
         case EBSInitState::WaitLow:
-            if (BENCH_STUB_SDC || BENCH_STUB_EBS_SENSORS || !hardware_io_read_sdc_is_ready())
-            {
-                init_state_ = EBSInitState::CheckPressure;
-            }
-            else if (hardware_io_now_ms() - start_time_ > GENERAL_TIMEOUT_MS)
-            {
-                init_state_ = EBSInitState::Failed;
-            }
+            /* Formerly required that same dead read to fall LOW within 5 s or it
+             * Failed — impossible for a steady signal. Gate removed; go straight
+             * to the tank-pressure check (which is what actually closes the SDC). */
+            init_state_ = EBSInitState::CheckPressure;
             break;
 
         case EBSInitState::CheckPressure:
