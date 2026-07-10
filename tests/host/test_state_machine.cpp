@@ -105,9 +105,9 @@ static void reset_world(void)
 /* Step the EBS init FSM all the way to Done with nominal hardware. */
 static void drive_ebs_to_done(EbsManager& ebs)
 {
-    s_sdc_ready = true;  ebs.initSequenceStep();   // Start -> WaitLow
-    s_sdc_ready = false; ebs.initSequenceStep();   // WaitLow -> CheckPressure
-    s_pressure1 = 2.0f; s_pressure2 = 2.0f;
+    ebs.initSequenceStep();                        // Start -> WaitLow (unconditional)
+    ebs.initSequenceStep();                        // WaitLow -> CheckPressure
+    s_pressure1 = 5.0f; s_pressure2 = 5.0f;        // both tanks > 3 bar
     ebs.initSequenceStep();                        // CheckPressure -> WaitTS (closes SDC)
     s_asms_on = true; s_tsms_on = true;            // TS = ASMS(A3) && TSMS(A6)
     ebs.initSequenceStep();                        // WaitTS -> CheckActuator1 (A1 on)
@@ -154,9 +154,11 @@ static void test_ebs_happy_path(void)
     EbsManager& ebs = EbsManager::getInstance();
     CHECK(ebs.getInitState() == EBSInitState::Start);
 
-    s_sdc_ready = true;  CHECK(ebs.initSequenceStep() == EBSInitState::WaitLow);
-    s_sdc_ready = false; CHECK(ebs.initSequenceStep() == EBSInitState::CheckPressure);
-    s_pressure1 = 2.0f; s_pressure2 = 2.0f;
+    /* Start/WaitLow now advance unconditionally (the dead RES_1_IN "SDC-ready"
+     * gate was removed); CheckPressure is the first real gate. */
+    CHECK(ebs.initSequenceStep() == EBSInitState::WaitLow);
+    CHECK(ebs.initSequenceStep() == EBSInitState::CheckPressure);
+    s_pressure1 = 5.0f; s_pressure2 = 5.0f;      // both tanks > 3 bar
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitTS);
     CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
     s_asms_on = true; s_tsms_on = true;          // TS = ASMS(A3) && TSMS(A6)
@@ -173,24 +175,13 @@ static void test_ebs_happy_path(void)
     CHECK(ebs.ASBChecksOK() == true);
 }
 
-static void test_ebs_waitlow_timeout(void)
-{
-    reset_world();
-    EbsManager& ebs = EbsManager::getInstance();
-    s_sdc_ready = true; ebs.initSequenceStep();          // -> WaitLow
-    /* SDC never drops; advance past the 5 s timeout. */
-    s_now_ms += 5001;
-    CHECK(ebs.initSequenceStep() == EBSInitState::Failed);
-    CHECK(ebs.ASBChecksOK() == false);
-}
-
 static void test_ebs_pressure_failure(void)
 {
     reset_world();
     EbsManager& ebs = EbsManager::getInstance();
-    s_sdc_ready = true;  ebs.initSequenceStep();          // -> WaitLow
-    s_sdc_ready = false; ebs.initSequenceStep();          // -> CheckPressure
-    s_pressure1 = 0.5f; s_pressure2 = 0.5f;               // below threshold
+    ebs.initSequenceStep();                               // Start -> WaitLow
+    ebs.initSequenceStep();                               // WaitLow -> CheckPressure
+    s_pressure1 = 0.5f; s_pressure2 = 0.5f;               // below the 3 bar threshold
     CHECK(ebs.initSequenceStep() == EBSInitState::Failed);
 }
 #else  /* BENCH_STUB_EBS_INIT */
@@ -205,7 +196,7 @@ static void test_ebs_stub_short_circuits(void)
     CHECK(ebs.initSequenceStep() == EBSInitState::Done);
     s_pressure1 = 0.5f; s_pressure2 = 0.5f;   // tanks below threshold
     CHECK(ebs.ASBChecksOK() == false);        // still gated on pressure
-    s_pressure1 = 2.0f; s_pressure2 = 2.0f;   // tanks OK
+    s_pressure1 = 5.0f; s_pressure2 = 5.0f;   // tanks OK (> 3 bar)
     CHECK(ebs.ASBChecksOK() == true);
 }
 #endif /* BENCH_STUB_EBS_INIT */
@@ -365,7 +356,6 @@ int main(void)
 
 #if !BENCH_STUB_EBS_INIT
     test_ebs_happy_path();
-    test_ebs_waitlow_timeout();
     test_ebs_pressure_failure();
 #else
     test_ebs_stub_short_circuits();
