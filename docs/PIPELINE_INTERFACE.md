@@ -17,7 +17,8 @@ react to the other's — the two old micro-ROS actions (`SetMission`,
 | uDV→DVPC | `ami/mission` | `std_msgs/Int32` | best-effort, ~10 Hz | publish (raw AMI index) |
 | DVPC→uDV | `dv/status` | `std_msgs/UInt8` | reliable (matches latched pub) | **subscribe** |
 | DVPC→uDV | `ctrl/cmd` | `geometry_msgs/Twist` | **best-effort (required)** | **subscribe** |
-| DVPC→uDV | `force_ebs` | `std_srvs/SetBool` | service | serve |
+| DVPC→uDV | `force_ebs` | `std_srvs/SetBool` | service | serve (emergency brake) |
+| DVPC→uDV | `activate_steering` | `std_srvs/SetBool` | service | serve (enable steering motor) |
 
 Byte values: AS `OFF=0 EMERGENCY=1 READY=2 DRIVING=3 FINISHED=4`;
 DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6`.
@@ -67,14 +68,17 @@ cap for detecting a lost safety-critical message.
   /imu/data_raw` car remap was dropped in `bringup/topic_contract.py`). Both
   sides are canonical `/imu`, so the EKF gets IMU on the car. Bench-verify
   with `ros2 topic hz /imu` (expect ~400 Hz) once flashed.
-- **`libmicroros.a` rebuild (`MAX_SERVICES`).** The firmware creates **two**
-  service servers (`activate_steering`, `force_ebs`) but the committed lib
-  was built with `RMW_UXRCE_MAX_SERVICES=1`, so `force_ebs` (the 2nd) may be
-  **silently failing to register** on the currently-linked library — i.e.
-  the pipeline's emergency-brake call would do nothing. `colcon.meta` is now
-  bumped to `SERVICES=2`, `SUBSCRIPTIONS=6`; **rebuild the static library**
-  (see CLAUDE.md → "Rebuild micro-ROS static library") and reflash. The two
-  new *subscriptions* fit the existing limit (5) and need no rebuild.
+- **`libmicroros.a` rebuild (`MAX_PUBLISHERS` / `MAX_SERVICES`).** The
+  firmware creates **two** service servers (`activate_steering`, `force_ebs`)
+  and **12** publishers, but the committed lib was built with
+  `RMW_UXRCE_MAX_SERVICES=1` and `RMW_UXRCE_MAX_PUBLISHERS=10` — so the 2nd
+  service (`force_ebs`) and the 11th/12th publishers **silently fail to
+  register** on the currently-linked library (the pipeline's emergency-brake
+  call would do nothing). `colcon.meta` is now bumped to `SERVICES=2` and
+  `PUBLISHERS=20` (headroom for future publishers); **rebuild the static
+  library** (see CLAUDE.md → "Rebuild micro-ROS static library") and reflash
+  for it to take effect. `SUBSCRIPTIONS=5` is unchanged — the 3 subscribers
+  fit the existing limit.
 - **Actuation scaling `[G2/G3, SAFETY]`.** `ctrl/cmd` is normalised and
   clamped on receive. Throttle: `Can::sendAccel` → ECU `0x507` (int32 LE
   percent, confirmed against the ECU `.def`). Steering: routed to the
@@ -100,14 +104,18 @@ the current season's FS Driverless rules before a track run. Listed here so
 they aren't lost.
 
 1. **5 s Ready dwell vs. the Driving transition.** The READY→DRIVING
-   transition fires on the raw RES go bit (`can_c_get_res_status()==2`),
+   transition fires on the raw RES go bit (`in.res_go`, from
+   `can_c_get_res_status()==2`; [as_transition.hpp:102](../Core/Inc/as_transition.hpp)),
    which is **not** gated by the firmware's 5 s Ready timer. `g_can_listen_go`
-   (set true after 5 s in Ready, [app_task.cpp:363](../Core/Src/app_task.cpp))
-   only gates the separate `0x509` R2D frame
-   ([can_interface.cpp:241](../Core/Src/can_interface.cpp)). If the rules
-   require ≥5 s in AS Ready before Driving and the RES does not enforce it
-   itself, add `&& g_can_listen_go.load()` to the Driving transition.
-   *Fix is one clause; my `dv_ready` gate already sits alongside it.*
+   is still set true after 5 s in Ready
+   ([app_task.cpp:584](../Core/Src/app_task.cpp)) but is now **write-only**
+   for gating — only pit-diag reads it — so the 5 s dwell currently gates
+   nothing (the old `0x509` R2D frame it once guarded is gone; the DV R2D
+   request is now the `0x510` `sendR2dRequest`, gated on the ECU's `0x511`
+   confirm via `!g_can_r2d`). If the rules require ≥5 s in AS Ready before
+   Driving and the RES does not enforce it itself, add
+   `&& g_can_listen_go.load()` to the Driving transition.
+   *Fix is one clause; the `dv_ready` gate already sits alongside it.*
 
 2. **Mission-selected precondition for AS Ready.** The chain enters READY on
    `res_ok && ts_on` without explicitly checking a mission is selected; today

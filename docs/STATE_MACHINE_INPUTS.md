@@ -32,7 +32,11 @@ Board input map (J8 → STM32 pin → ADC ch → schematic net):
 ## ⏳ Deferred — DO NOT LOSE
 
 ### `r2d` — needs rework (left as-is for now)
-- **Current:** `g_can_r2d` (CAN `0x509`, gated by `g_can_listen_go`).
+- **Current:** `g_can_r2d` is the ECU's R2D **confirm** (CAN `0x511`); the uDV's
+  R2D **request** is `0x510` (`sendR2dRequest`, gated on `!g_can_r2d`). The old
+  `0x509` R2D frame and the `g_can_listen_go` gate are gone. Note the live AS
+  transition runs through `as_next_state()` on the RES **GO** (`res_go`), not
+  `r2d`; `updateState()`'s `r2d` gate below is vestigial (dead for AS decisions).
 - **Important distinction:** `R2D` ≠ `GO`. The **GO** signal comes from the **RES**
   (CAN, and also hardwired on **A2 = `GO_RES`**). **R2D is given _to_ the ECU.**
 - **Consequence to revisit:** `updateState()` currently gates `OFF→DRIVING` on
@@ -41,7 +45,11 @@ Board input map (J8 → STM32 pin → ADC ch → schematic net):
   Revisit the direction of this signal — do not assume the current `r2d` input is right.
 
 ### `r2d` direction is the only remaining open item (left as-is for now)
-- **Current:** `g_can_r2d` (CAN `0x509`, gated by `g_can_listen_go`).
+- **Current:** `g_can_r2d` is the ECU's R2D **confirm** (CAN `0x511`); the uDV's
+  R2D **request** is `0x510` (`sendR2dRequest`, gated on `!g_can_r2d`). The old
+  `0x509` R2D frame and the `g_can_listen_go` gate are gone. Note the live AS
+  transition runs through `as_next_state()` on the RES **GO** (`res_go`), not
+  `r2d`; `updateState()`'s `r2d` gate below is vestigial (dead for AS decisions).
 - **Important distinction:** `R2D` ≠ `GO`. The **GO** signal comes from the **RES**
   (via CAN; also hardwired on **A2 = `GO_RES`**). **R2D is given _to_ the ECU.**
 - **Consequence to revisit:** `updateState()` gates `OFF→DRIVING` on `signals_.r2d`.

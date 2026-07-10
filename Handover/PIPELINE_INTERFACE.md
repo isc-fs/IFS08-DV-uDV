@@ -17,7 +17,8 @@ react to the other's — the two old micro-ROS actions (`SetMission`,
 | uDV→DVPC | `ami/mission` | `std_msgs/Int32` | best-effort, ~10 Hz | publish (raw AMI index) |
 | DVPC→uDV | `dv/status` | `std_msgs/UInt8` | reliable (matches latched pub) | **subscribe** |
 | DVPC→uDV | `ctrl/cmd` | `geometry_msgs/Twist` | **best-effort (required)** | **subscribe** |
-| DVPC→uDV | `force_ebs` | `std_srvs/SetBool` | service | serve |
+| DVPC→uDV | `force_ebs` | `std_srvs/SetBool` | service | serve (emergency brake) |
+| DVPC→uDV | `activate_steering` | `std_srvs/SetBool` | service | serve (enable steering motor) |
 
 Byte values: AS `OFF=0 EMERGENCY=1 READY=2 DRIVING=3 FINISHED=4`;
 DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6`.
