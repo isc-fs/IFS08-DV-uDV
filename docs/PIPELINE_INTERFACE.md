@@ -73,8 +73,11 @@ cap for detecting a lost safety-critical message.
   and **12** publishers, but the committed lib was built with
   `RMW_UXRCE_MAX_SERVICES=1` and `RMW_UXRCE_MAX_PUBLISHERS=10` — so the 2nd
   service (`force_ebs`) and the 11th/12th publishers **silently fail to
-  register** on the currently-linked library (the pipeline's emergency-brake
-  call would do nothing). `colcon.meta` is now bumped to `SERVICES=2` and
+  register** on the currently-linked library. This is a *correctness* gap,
+  **not a braking one** — `force_ebs` is a redundant/bench actuator hook; the
+  emergency brake is driven by `dv/status = EMERGENCY` → AS Emergency →
+  `as_actuation()`, a subscriber path unaffected by the service cap.
+  `colcon.meta` is now bumped to `SERVICES=2` and
   `PUBLISHERS=20` (headroom for future publishers); **rebuild the static
   library** (see CLAUDE.md → "Rebuild micro-ROS static library") and reflash
   for it to take effect. `SUBSCRIPTIONS=5` is unchanged — the 3 subscribers
@@ -129,7 +132,12 @@ they aren't lost.
    Confirm a controlled stop in AS Finished meets the rules (service brake vs.
    EBS-hold), or add an explicit brake in the FINISHED case.
 
-4. **`/force_ebs` service registration (safety-critical).** Covered above:
-   until `libmicroros.a` is rebuilt with `MAX_SERVICES=2`, the pipeline's
-   emergency-brake service may be unregistered — which would itself be a
-   safety-rule failure. Close this before any track test.
+4. **`/force_ebs` service registration (correctness, not safety-critical).**
+   Until `libmicroros.a` is rebuilt with `MAX_SERVICES=2` the service is
+   unregistered — but emergency **braking is unaffected**: the pipeline also
+   drives `dv/status = EMERGENCY`, which latches AS Emergency + EBS via
+   `as_actuation()` (a subscriber, not the service). `force_ebs` is a
+   redundant/bench actuator path — its callback does a bare GPIO write that the
+   ~1 ms `as_actuation()` loop overwrites, so it does **not** latch. Rebuild to
+   restore the redundant channel (and `activate_steering` + the `/as_state`
+   publisher), but it is not a braking dependency.
