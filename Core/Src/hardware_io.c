@@ -32,7 +32,15 @@ static uint32_t hardware_io_read_adc_raw(uint32_t channel)
 
     sConfig.Channel = channel;
     sConfig.Rank = ADC_REGULAR_RANK_1;
-    sConfig.SamplingTime = ADC3_SAMPLETIME_2CYCLES_5;
+    /* Max sample time (640.5 cyc). ADC3 runs at the full kernel clock
+     * (ADC_CLOCK_ASYNC_DIV1), and every channel here is high-impedance: the
+     * pressure taps sit behind a 10k/5k divider (~3.3k Thevenin), the digital
+     * levels behind their own dividers. The old 2.5-cycle sample was far too
+     * short to charge the sample cap through that, so each conversion kept
+     * residual charge from the PREVIOUS channel -> ch10/ch6 read low/high for
+     * the SAME pressure (0.5 vs 6.7 bar at a true 5 bar). All these signals are
+     * DC, so a long sample costs nothing. */
+    sConfig.SamplingTime = ADC3_SAMPLETIME_640CYCLES_5;
     sConfig.SingleDiff = ADC_SINGLE_ENDED;
     sConfig.OffsetNumber = ADC_OFFSET_NONE;
     sConfig.Offset = 0;
