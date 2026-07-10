@@ -214,10 +214,10 @@ static void test_ebs_checks(void)
 {
     reset_world();
     EbsManager& ebs = EbsManager::getInstance();
-    /* checkStoragePressures: strictly > 1.0 on BOTH tanks. */
-    s_pressure1 = 1.0f; s_pressure2 = 2.0f; CHECK(ebs.checkStoragePressures() == false);
-    s_pressure1 = 1.1f; s_pressure2 = 1.1f; CHECK(ebs.checkStoragePressures() == true);
-    s_pressure1 = 2.0f; s_pressure2 = 0.9f; CHECK(ebs.checkStoragePressures() == false);
+    /* checkStoragePressures: strictly > 3.0 on BOTH tanks. */
+    s_pressure1 = 3.0f; s_pressure2 = 4.0f; CHECK(ebs.checkStoragePressures() == false);
+    s_pressure1 = 3.1f; s_pressure2 = 3.1f; CHECK(ebs.checkStoragePressures() == true);
+    s_pressure1 = 4.0f; s_pressure2 = 2.9f; CHECK(ebs.checkStoragePressures() == false);
     /* checkBrakeLinePressure: mirrors the ECU 0x505 over-limit verdict. */
     g_can_brake_over_limit.store(false); CHECK(ebs.checkBrakeLinePressure() == false);
     g_can_brake_over_limit.store(true);  CHECK(ebs.checkBrakeLinePressure() == true);
