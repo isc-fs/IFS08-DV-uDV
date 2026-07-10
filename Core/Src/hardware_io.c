@@ -16,13 +16,14 @@ static const uint32_t adc_digital_threshold = 2048U;
  * Output configured 1-5 V over 0-10 bar, linear: 1 V = 0 bar, 5 V = 10 bar
  * (SPAN datasheet, docs/SPAN_operating-instr_*.pdf). The 1-5 V swing is above
  * the 3.3 V ADC rail, so PRES_x_IN is divided on the PCB before the ADC pin.
- * PRES_DIVIDER = Vsensor / Vadc (the inverse divider gain). Confirmed from
- * 06_MicroDV/PCB DV.kicad_sch: R1/R3 = 10k in series from the sensor to the
- * ADC tap, R30/R31 = 5k tap-to-GND => Vadc = Vsensor·5k/(10k+5k) = Vsensor/3,
- * so PRES_DIVIDER = (10k+5k)/5k = 3. (5 V full-scale -> 1.67 V at the pin.) */
-static const float ADC_VREF_V     = 3.3f;     /* ADC3 reference               */
-static const float ADC_FULL_SCALE = 4095.0f;  /* 12-bit                       */
-static const float PRES_DIVIDER   = 3.0f;     /* 10k/5k divider: Vadc = Vsensor/3 */
+ * PRES_DIVIDER = Vsensor / Vadc (the inverse divider gain). Per
+ * 06_MicroDV/PCB DV.kicad_sch: R1/R3 = 10k series from the sensor to the ADC
+ * tap, R30/R31 = 1k tap-to-GND (was 5k) => Vadc = Vsensor·1k/(10k+1k) =
+ * Vsensor/11, so PRES_DIVIDER = (10k+1k)/1k = 11. (5 V full-scale -> 0.45 V at
+ * the pin; the 1-5 V sensor now uses only ~0.09-0.45 V of the ADC range.) */
+static const float ADC_VREF_V     = 3.3f;     /* ADC3 reference                */
+static const float ADC_FULL_SCALE = 4095.0f;  /* 12-bit                        */
+static const float PRES_DIVIDER   = 11.0f;    /* 10k/1k divider: Vadc = Vsensor/11 */
 static const float SPAN_V_AT_ZERO = 1.0f;     /* sensor output at 0 bar       */
 static const float SPAN_BAR_PER_V = 2.5f;     /* 10 bar / (5 V - 1 V)         */
 
@@ -34,7 +35,7 @@ static uint32_t hardware_io_read_adc_raw(uint32_t channel)
     sConfig.Rank = ADC_REGULAR_RANK_1;
     /* Max sample time (640.5 cyc). ADC3 runs at the full kernel clock
      * (ADC_CLOCK_ASYNC_DIV1), and every channel here is high-impedance: the
-     * pressure taps sit behind a 10k/5k divider (~3.3k Thevenin), the digital
+     * pressure taps sit behind a 10k/1k divider (~0.9k Thevenin), the digital
      * levels behind their own dividers. The old 2.5-cycle sample was far too
      * short to charge the sample cap through that, so each conversion kept
      * residual charge from the PREVIOUS channel -> ch10/ch6 read low/high for
