@@ -89,6 +89,16 @@ Inter-task communication uses FreeRTOS message queues:
 ### IMU Pipeline
 TIM2 fires at 400 Hz → `HAL_TIM_PeriodElapsedCallback` releases `imuSemHandle` → `imuTask` reads BMI088 via I2C2 with software bitbang recovery ([Core/Src/i2c_utils.c](Core/Src/i2c_utils.c)) → computes roll/pitch via CORDIC hardware ([Core/Src/attitude.c](Core/Src/attitude.c), complementary filter) → pushes `imu_sample_t` with DWT cycle-counter timestamp → `defaultTask` publishes to `/imu` (canonical on both sides — see the IMU topic note below).
 
+**IMU→car alignment**: the BMI088 need not be mounted square with the chassis.
+`imu_service_step` applies a fixed yaw mounting rotation ([imu_align.c](Core/Src/imu_align.c))
+to the scaled sample the instant it leaves the driver — before the attitude
+filter and before it fans out — so roll/pitch, the CAN `0x512` broadcast and
+ROS `/imu` all see one consistent car-frame sample. The offset is the
+compile-time constant `IMU_YAW_OFFSET_DEG` (default 0 = aligned, flight-clean),
+overridden without a source edit via `make CONFIG="-DIMU_YAW_OFFSET_DEG=<deg>"`
+(CMake: `-DIMU_YAW_OFFSET_DEG=<deg>`); a non-zero value announces itself on
+`/debug` at boot. See [imu_align.h](Core/Inc/imu_align.h) for the sign convention.
+
 Timestamps use DWT cycle counter (sub-microsecond) with NTP-like sync via `rmw_uros_sync_session`. Re-sync happens every ~10 s (4000 samples).
 
 ### CAN Bus Layout

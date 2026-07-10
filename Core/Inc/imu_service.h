@@ -3,11 +3,13 @@
 #include "bmi088.h"
 #include "i2c_utils.h"
 #include "attitude.h"
+#include "imu_align.h"
 
 typedef struct {
   bmi088_t bmi;
   I2C_Utils_t i2c_utils;
   attitude_t att;
+  imu_align_t align;   /* fixed IMU->car yaw mount rotation (imu_align.h) */
   CORDIC_HandleTypeDef *cordic;
 } imu_service_t;
 

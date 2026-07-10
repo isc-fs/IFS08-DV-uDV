@@ -19,6 +19,7 @@
 #                           sweep/cadence/self-finish, pipeline relay, ebs stub)
 #   test_attitude         — complementary-filter roll/pitch (attitude.c) [ex-dev]
 #   test_bmi088_convert   — BMI088 raw->scaled + bind validation (bmi088.c) [ex-dev]
+#   test_imu_align        — IMU->car yaw mount rotation (imu_align.c)
 
 CORE_INC := ../../Core/Inc
 CORE_SRC := ../../Core/Src
@@ -53,7 +54,7 @@ SENS_CFLAGS := -std=c11 -I$(MOCKS) -I$(CORE_INC) -Wall -Wextra -g -O0
 
 BINS := test_safety_eval test_state_machine test_rules_compliance \
         test_as_transition test_as_actuation test_missions test_attitude \
-        test_bmi088_convert
+        test_bmi088_convert test_imu_align
 
 # Mission suite — pure mission bodies + registry, no HAL/RTOS/CAN. Strict flags
 # (-Werror): new dependency-free code, held to the same bar as safety_eval.
@@ -109,6 +110,13 @@ test_bmi088_convert: test_bmi088_convert.c $(CORE_SRC)/bmi088.c mocks/hal_stubs.
 	$(CC) $(SENS_CFLAGS) -o $@ test_bmi088_convert.c $(CORE_SRC)/bmi088.c \
 	      mocks/hal_stubs.c mocks/i2c_utils_stubs.c -lm
 
+# ---- suite 7: IMU->car yaw mount alignment (pure rotation math) ----------
+# Links the real Core/Src/imu_align.c; bmi088.h pulls the HAL mock, so use the
+# same mock include path + stubs as the other sensor suites. Needs libm (trig).
+test_imu_align: test_imu_align.c $(CORE_SRC)/imu_align.c mocks/hal_stubs.c mocks/i2c_utils_stubs.c
+	$(CC) $(SENS_CFLAGS) -o $@ test_imu_align.c $(CORE_SRC)/imu_align.c \
+	      mocks/hal_stubs.c mocks/i2c_utils_stubs.c -lm
+
 test: $(BINS)
 	@echo "=== build_integrity ===";       sh ./check_build_integrity.sh
 	@echo "=== test_safety_eval ===";      ./test_safety_eval
@@ -119,6 +127,7 @@ test: $(BINS)
 	@echo "=== test_missions ===";         ./test_missions
 	@echo "=== test_attitude ===";         ./test_attitude
 	@echo "=== test_bmi088_convert ===";   ./test_bmi088_convert
+	@echo "=== test_imu_align ===";        ./test_imu_align
 
 clean:
 	rm -rf $(BINS) *.o *.dSYM

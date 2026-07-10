@@ -47,6 +47,7 @@ Core/Src/usart.c \
 Core/Src/bmi088.c \
 Core/Src/i2c_utils.c \
 Core/Src/imu_service.c \
+Core/Src/imu_align.c \
 Core/Src/imu_task.c \
 Core/Src/ws2812.c \
 Core/Src/assi_task.c \
@@ -233,11 +234,18 @@ C_INCLUDES =  \
 # Forwarded into C and C++ compiles; overrides the 0 defaults in bench_stubs.h.
 BENCH ?=
 
+# Flight CONFIG overrides — real per-car flight constants, NOT bench stubs.
+# Kept separate from BENCH so a flight build is never mistaken for a stubbed one.
+# Forwarded into C and C++ compiles; overrides the header defaults via -D, e.g.
+# the IMU mounting yaw offset (imu_align.h):
+#   make CONFIG="-DIMU_YAW_OFFSET_DEG=12.5"
+CONFIG ?=
+
 ASFLAGS = $(MCU) $(AS_DEFS) $(AS_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections
 
-CFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) $(BENCH) -Wall -fdata-sections -ffunction-sections
+CFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) $(BENCH) $(CONFIG) -Wall -fdata-sections -ffunction-sections
 
-CXXFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) $(BENCH) -std=c++11 -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti
+CXXFLAGS += $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) $(BENCH) $(CONFIG) -std=c++11 -Wall -fdata-sections -ffunction-sections -fno-exceptions -fno-rtti
 
 ifeq ($(DEBUG), 1)
 CFLAGS += -g -gdwarf-2

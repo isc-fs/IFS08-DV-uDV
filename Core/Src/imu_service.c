@@ -11,6 +11,7 @@ void imu_service_init(imu_service_t *s,
   bmi088_bind(&s->bmi, &s->i2c_utils, BMI088_ACC_ADDR_7B, BMI088_GYR_ADDR_7B);
   s->cordic = cordic;
   attitude_init(&s->att, alpha);
+  imu_align_init(&s->align, IMU_YAW_OFFSET_DEG);
 }
 
 bmi088_status_t imu_service_start(imu_service_t *s)
@@ -25,6 +26,11 @@ bmi088_status_t imu_service_step(imu_service_t *s, imu_sample_t *out)
   bmi088_scaled_t meas;
   bmi088_status_t st = bmi088_read_scaled(&s->bmi, &meas);
   if (st != BMI088_OK) return st;
+
+  /* Rotate the raw sensor sample into the car frame ONCE, before anyone reads
+   * it: the attitude filter below AND out->imu (CAN 0x512 + ROS /imu) then all
+   * see one consistent car-frame sample. No-op when IMU_YAW_OFFSET_DEG == 0. */
+  imu_align_apply(&s->align, &meas);
 
   attitude_update_cordic(&s->att, s->cordic,
                          meas.ax_g, meas.ay_g, meas.az_g,
