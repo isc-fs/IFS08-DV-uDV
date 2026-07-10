@@ -59,7 +59,7 @@ private:
 
     // Pressure thresholds (bar). Brake-line has no local threshold — the
     // ECU sends the 0x505 over-limit verdict against its own BrakeDvHardRaw.
-    static constexpr float ACTUATOR_STORAGE_THRESHOLD = 1.0f;
+    static constexpr float ACTUATOR_STORAGE_THRESHOLD = 3.0f;
     static constexpr float EMPTY_ACTUATOR_STORAGE_THRESHOLD = 0.1f;
 
     // Timing constants (ms)
