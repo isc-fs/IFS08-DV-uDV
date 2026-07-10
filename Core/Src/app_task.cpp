@@ -293,11 +293,13 @@ extern "C" void StartAppTask(void *argument)
         //1. cuando asms esta off siempre retornar a la AS_off
         //2. Si asms on, ts on y RES ok (es decir res 0 mira la funcion can_c_get_res_status()). transicion a AS_ready
         //3. Si RES E-stop en cualquier momento transicionar a AS_emergency
-        //4. EBS engaged (brakes on, D1/D2 LOW = fire) in EVERY state except
-        //   AS_driving; released (D1/D2 HIGH) only in AS_driving. The car is
-        //   immobilised whenever it is not autonomously driving. IMPLEMENTED
-        //   below: OFF (after init) / READY / FINISHED / EMERGENCY / manual ->
-        //   ebs.activateEBS(); DRIVING -> ebs.deactivateEBS().
+        //4. EBS engaged (brakes on, D1/D2 LOW = fire) in every AS state except
+        //   DRIVING; released (D1/D2 HIGH) in DRIVING (autonomous) and in
+        //   manual/ASMS-off handling. The AS SDC is opened (D4 LOW) in the
+        //   terminal safe states FINISHED / EMERGENCY (TS off / TSAL green +
+        //   fail-safe EBS). IMPLEMENTED below: OFF (after init) / READY /
+        //   FINISHED / EMERGENCY -> ebs.activateEBS(); DRIVING & manual ->
+        //   ebs.deactivateEBS().
         //5. transicinar de AS_ready a AS_driving cuando se reciba el comando de start del RES
         //6. transicionar a emergency si el RES esta bien y el TS pasa a esta off.
         //7. configura para que la mision por defecto sea INSPECTION
@@ -587,8 +589,9 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
-                    ebs.deactivateEBS();  // release: DRIVING is the ONLY state
-                                          // with the brakes off (req #4)
+                    ebs.deactivateEBS();  // release: the only AS state with the
+                                          // brakes off (req #4). Manual/ASMS-off
+                                          // also releases (see the else branch).
 
                     /* Keep the steering motor armed while DRIVING. The steering
                      * board runs the motor only while it keeps receiving
@@ -708,11 +711,15 @@ extern "C" void StartAppTask(void *argument)
         }
         else
         {
-            // Manual mode (ASMS off): verify the actuator tanks are safe for
-            // manual handling, then hold the brakes ENGAGED — EBS is released
-            // only in DRIVING (req #4).
+            // Manual mode (ASMS off): the AS is disabled, so RELEASE the EBS —
+            // the car must be drivable / handleable manually, not autonomously
+            // braked. EBS is held engaged in every AS state except DRIVING;
+            // released in DRIVING (autonomous) and here (manual). SafeManual()
+            // checks the actuator tanks are vented for safe manual handling.
+            // Fail-safe is preserved: on power loss D1/D2 revert to their LOW
+            // power-on level and the EBS re-fires.
             ebs.SafeManual();
-            ebs.activateEBS();
+            ebs.deactivateEBS();
         }
 
         // Small delay to prevent CPU hogging (safety monitor expects our
