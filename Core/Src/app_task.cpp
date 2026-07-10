@@ -662,6 +662,14 @@ extern "C" void StartAppTask(void *argument)
                 case ASState::EMERGENCY:
                     // EBS should already be active, but ensure it is
                     ebs.activateEBS();
+                    /* Terminal safe state: open the AS SDC (D4 LOW) -> TS off
+                     * (TSAL returns to green) and the EBS fires via the fail-safe
+                     * path. For a RES e-stop the SDC is already opened in hardware;
+                     * this also covers the firmware-only emergency triggers
+                     * (steering grave-fault, TS loss, pipeline emergency / lost
+                     * heartbeat). Mirrors the watchdog safe-state (safety_monitor.c;
+                     * D4 polarity flagged there for EE confirmation). */
+                    hardware_io_set_as_close_sdc(false);
 
                     // Cancel any active mission
                     if (g_set_mission_in_progress.load())
@@ -678,6 +686,13 @@ extern "C" void StartAppTask(void *argument)
                 case ASState::FINISHED:
                     ebs.activateEBS();   // held engaged in FINISHED (req #4):
                                          // car braked at standstill, mission done
+                    /* Terminal safe state: open the AS SDC (D4 LOW) so the
+                     * Tractive System de-energises (TSAL returns to green) and the
+                     * EBS fires via the fail-safe path. Mirrors the watchdog
+                     * safe-state (safety_monitor.c). FINISHED latches until
+                     * ASMS-off; the SDC then stays open until a reset / power-cycle
+                     * re-runs the EBS init (which re-closes it at CheckPressure). */
+                    hardware_io_set_as_close_sdc(false);
                     // Mission complete - ensure any mission is cancelled
                     if (g_set_mission_in_progress.load())
                     {
