@@ -25,6 +25,7 @@ extern "C" {
 
 #include "state_manager.hpp"
 #include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
+#include "as_actuation.hpp"    /* pure safe-state actuation decision (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -484,6 +485,43 @@ extern "C" void StartAppTask(void *argument)
          * false-trip our 100 ms monitor during normal init. */
         safety_heartbeat(SAFETY_TASK_APP);
 
+        /* ---- Centralised safe-state actuation (EBS + AS SDC) ----
+         * The per-state release/fire + SDC-open rule is the pure, host-tested
+         * as_actuation() (see as_actuation.hpp / tests/host/test_as_actuation.cpp)
+         * — the single source of truth, applied here for every state including
+         * manual (ASMS off). Exception: OFF drives the actuators through its EBS
+         * init self-test (T15.2) until it completes; once Done/Failed OFF uses
+         * the steady rule like every other state. */
+        {
+            const AsActuation act = as_actuation(as_state, asms_on);
+            const bool off_init_running =
+                asms_on && (as_state == ASState::OFF) &&
+                (ebs_state != EBSInitState::Done) &&
+                (ebs_state != EBSInitState::Failed);
+            if (off_init_running)
+            {
+                ebs_state = ebs.initSequenceStep();   // ASB self-check (T15.2)
+            }
+            else if (act.ebs_release)
+            {
+                ebs.deactivateEBS();   // released: DRIVING (autonomous) or manual
+            }
+            else
+            {
+                ebs.activateEBS();     // fired: every other AS state (req #4)
+            }
+            if (act.sdc_open)
+            {
+                // Terminal safe state: open the AS SDC (D4 LOW) -> TS off / TSAL
+                // green + EBS via the fail-safe path. Mirrors safety_monitor.c.
+                hardware_io_set_as_close_sdc(false);
+            }
+            if (!asms_on)
+            {
+                ebs.SafeManual();   // manual handling: verify actuator tanks vented
+            }
+        }
+
         if (asms_on)
         {
             // Autonomous mode enabled
@@ -557,23 +595,14 @@ extern "C" void StartAppTask(void *argument)
             switch (as_state)
             {
                 case ASState::OFF:
-                    // Run the EBS init / ASB self-check; once it completes (or
-                    // fails) hold the brakes ENGAGED. EBS is engaged in every
-                    // AS state except DRIVING (req #4 / FS-Rules: the car is
-                    // immobilised whenever it is not autonomously driving).
-                    if (ebs_state != EBSInitState::Done && ebs_state != EBSInitState::Failed)
-                    {
-                        ebs_state = ebs.initSequenceStep();
-                    }
-                    else
-                    {
-                        ebs.activateEBS();
-                    }
+                    /* EBS actuation (init self-test while arming, else engage)
+                     * is handled by the centralised as_actuation() block above.
+                     * Nothing state-specific here. */
                     break;
 
                 case ASState::READY:
-                    ebs.activateEBS();   // held engaged in READY (req #4)
-                    /* Stamp the READY-entry time; the mandated dwell is enforced
+                    /* EBS engaged centrally above (as_actuation).
+                     * Stamp the READY-entry time; the mandated dwell is enforced
                      * on the transition via as_in.ready_dwell_elapsed (built
                      * above from this timestamp). g_can_listen_go mirrors the
                      * same >= READY_DWELL_MS condition for telemetry (pit_diag). */
@@ -589,11 +618,8 @@ extern "C" void StartAppTask(void *argument)
 
                 case ASState::DRIVING:
                 {
-                    ebs.deactivateEBS();  // release: the only AS state with the
-                                          // brakes off (req #4). Manual/ASMS-off
-                                          // also releases (see the else branch).
-
-                    /* Keep the steering motor armed while DRIVING. The steering
+                    /* EBS released centrally above (as_actuation).
+                     * Keep the steering motor armed while DRIVING. The steering
                      * board runs the motor only while it keeps receiving
                      * motor_start (0x010=1) and cuts out on a command-timeout;
                      * a single start on the GO edge was NOT enough on the car
@@ -663,17 +689,7 @@ extern "C" void StartAppTask(void *argument)
                 }
 
                 case ASState::EMERGENCY:
-                    // EBS should already be active, but ensure it is
-                    ebs.activateEBS();
-                    /* Terminal safe state: open the AS SDC (D4 LOW) -> TS off
-                     * (TSAL returns to green) and the EBS fires via the fail-safe
-                     * path. For a RES e-stop the SDC is already opened in hardware;
-                     * this also covers the firmware-only emergency triggers
-                     * (steering grave-fault, TS loss, pipeline emergency / lost
-                     * heartbeat). Mirrors the watchdog safe-state (safety_monitor.c;
-                     * D4 polarity flagged there for EE confirmation). */
-                    hardware_io_set_as_close_sdc(false);
-
+                    /* EBS fired + AS SDC opened centrally above (as_actuation). */
                     // Cancel any active mission
                     if (g_set_mission_in_progress.load())
                     {
@@ -687,15 +703,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
 
                 case ASState::FINISHED:
-                    ebs.activateEBS();   // held engaged in FINISHED (req #4):
-                                         // car braked at standstill, mission done
-                    /* Terminal safe state: open the AS SDC (D4 LOW) so the
-                     * Tractive System de-energises (TSAL returns to green) and the
-                     * EBS fires via the fail-safe path. Mirrors the watchdog
-                     * safe-state (safety_monitor.c). FINISHED latches until
-                     * ASMS-off; the SDC then stays open until a reset / power-cycle
-                     * re-runs the EBS init (which re-closes it at CheckPressure). */
-                    hardware_io_set_as_close_sdc(false);
+                    /* EBS fired + AS SDC opened centrally above (as_actuation).
+                     * FINISHED latches until ASMS-off; the SDC stays open until a
+                     * reset/power-cycle re-runs the EBS init (re-closes it). */
                     // Mission complete - ensure any mission is cancelled
                     if (g_set_mission_in_progress.load())
                     {
@@ -709,18 +719,9 @@ extern "C" void StartAppTask(void *argument)
                     break;
             }
         }
-        else
-        {
-            // Manual mode (ASMS off): the AS is disabled, so RELEASE the EBS —
-            // the car must be drivable / handleable manually, not autonomously
-            // braked. EBS is held engaged in every AS state except DRIVING;
-            // released in DRIVING (autonomous) and here (manual). SafeManual()
-            // checks the actuator tanks are vented for safe manual handling.
-            // Fail-safe is preserved: on power loss D1/D2 revert to their LOW
-            // power-on level and the EBS re-fires.
-            ebs.SafeManual();
-            ebs.deactivateEBS();
-        }
+        /* Manual mode (ASMS off): the EBS release + SafeManual() are applied by
+         * the centralised as_actuation() block above; no autonomous per-state
+         * logic runs when ASMS is off. */
 
         // Small delay to prevent CPU hogging (safety monitor expects our
         // heartbeat within its 100 ms deadline)
