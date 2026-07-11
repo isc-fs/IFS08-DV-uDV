@@ -68,6 +68,17 @@
 #ifndef BENCH_STUBS_H
 #define BENCH_STUBS_H
 
+/* ============================================================================
+ * prerun/ BRANCH ACTIVATION — DO NOT MERGE TO dev. See PRERUN.md.
+ * This is the ONLY functional divergence of prerun/ from dev: it #defines the
+ * IMU-publish stub to 1 ABOVE the guarded defaults below (the documented
+ * "thin bench branch" pattern), so every build on this branch suppresses the
+ * live ROS /imu publish and a replayed rosbag's /imu is the only source.
+ * Everything else stays flight-clean (all other stubs 0). Keep this the sole
+ * source change here so rebasing onto dev stays a 2-line divergence.
+ * ============================================================================ */
+#define BENCH_STUB_IMU_ROS 1
+
 /* ==== flight defaults: ALL 0. Override per bench build via -D (see header). ==== */
 #ifndef BENCH_STUB_EBS_INIT
 #define BENCH_STUB_EBS_INIT    0
