@@ -56,6 +56,14 @@
  *     ESTADO_MOTOR feedback so a latched EMERGENCIA can't trip AS. For an
  *     UNCALIBRATED steering that must not be driven. Calibration (0x30) is NOT
  *     suppressed — that path must still work to bring the steering up.
+ *
+ *   BENCH_STUB_IMU_ROS — suppress ONLY the ROS `/imu` publish (ros_task.c).
+ *     For the `prerun/` branch type: replaying a recorded rosbag ON the car so
+ *     the bag's `/imu` is the only source (else the live publish and the bag
+ *     collide on the same topic). IMU sampling, attitude, and the 0x512 CAN
+ *     IMU broadcast to the ECU all stay LIVE — only the ROS topic is gated,
+ *     and the `/imu` publisher entity is still created so micro-ROS entity
+ *     counts are unchanged (no lib rebuild). See PRERUN.md on the prerun branch.
  */
 #ifndef BENCH_STUBS_H
 #define BENCH_STUBS_H
@@ -78,6 +86,9 @@
 #endif
 #ifndef BENCH_STUB_STEERING
 #define BENCH_STUB_STEERING    0
+#endif
+#ifndef BENCH_STUB_IMU_ROS
+#define BENCH_STUB_IMU_ROS     0
 #endif
 
 /* EBS_INIT skips the whole sequence (no actuation); EBS_SENSORS runs it for real
