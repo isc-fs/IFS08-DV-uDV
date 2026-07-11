@@ -30,6 +30,7 @@ set(C_SOURCES
     Core/Src/bmi088.c
     Core/Src/i2c_utils.c
     Core/Src/imu_service.c
+    Core/Src/imu_align.c
     Core/Src/imu_task.c
     Core/Src/ws2812.c
     Core/Src/assi_task.c

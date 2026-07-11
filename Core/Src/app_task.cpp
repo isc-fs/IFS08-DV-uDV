@@ -17,6 +17,7 @@ extern "C" {
     #include "safety_monitor.h"  /* IWDG safety supervisor: heartbeat/arm */
     #include "assi_task.h"       /* ASSI mode API (UART/Arduino LED bridge) */
     #include "bench_stubs.h"     /* bench stub toggles (all 0 on dev) */
+    #include "imu_align.h"       /* IMU_YAW_OFFSET_DEG — announced at boot */
 
     /* /debug queue (freertos.c) — used to announce active bench stubs. */
     extern osMessageQueueId_t debugQueueHandle;
@@ -296,6 +297,18 @@ extern "C" void StartAppTask(void *argument)
                  BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING,
                  BENCH_STUB_IMU_ROS);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
+    }
+
+    /* A non-zero IMU mounting yaw offset (imu_align.h) is announced once at
+     * boot so the flashed alignment can be verified in the pit against the
+     * board's real orientation. Folds away for a square (0.0) mount. */
+    if (IMU_YAW_OFFSET_DEG != 0.0f)
+    {
+        char yaw_buf[128];   /* debugQueue element size */
+        snprintf(yaw_buf, sizeof(yaw_buf),
+                 "debug: IMU yaw mount offset = %.2f deg (samples rotated to car frame)",
+                 (double)(IMU_YAW_OFFSET_DEG));
+        (void)osMessageQueuePut(debugQueueHandle, &yaw_buf, 0, 0);
     }
 
     // Main control loop
