@@ -45,6 +45,7 @@
 #include "dwt_time.h"         /* dwt_micros */
 #include "imu_task.h"         /* imu_debug_status */
 #include "dv_interface.h"     /* stock-typed pipeline interface: dv/status + ctrl/cmd */
+#include "bench_stubs.h"      /* BENCH_STUB_IMU_ROS (0 on dev — gates the /imu publish) */
 
 #define G_TO_MS2   9.80665f
 #define DPS_TO_RAD (float)(M_PI / 180.0)
@@ -717,7 +718,12 @@ void ros_task_run(void)
       imu_msg.angular_velocity.y = sample.imu.gy_dps * DPS_TO_RAD;
       imu_msg.angular_velocity.z = sample.imu.gz_dps * DPS_TO_RAD;
 
-      (void)rcl_publish(&imu_pub, &imu_msg, NULL);
+      /* Bench stub (bench_stubs.h, 0 on dev — folds away): the prerun/ branch
+       * suppresses the live /imu publish so a replayed rosbag's /imu is the
+       * only source (else the two collide). Sampling/attitude/0x512 stay live;
+       * imu_pub is still created so entity counts are unchanged. */
+      if (!BENCH_STUB_IMU_ROS)
+          (void)rcl_publish(&imu_pub, &imu_msg, NULL);
 
       // --- Full state-machine snapshot -> /debug (grouped one line; on change + ~2 Hz) ---
       uint8_t  as_now  = ros_get_as_state();
