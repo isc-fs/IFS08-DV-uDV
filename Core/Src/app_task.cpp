@@ -550,6 +550,33 @@ extern "C" void StartAppTask(void *argument)
                                           dv_stop_arm);
         const bool dv_stopping = dv_stop_latched;
 
+        /* Diagnostic (salvaged from feat/71, #165): on the EMERGENCY edge, latch
+         * WHICH transition input fired + the received /dv/status age, so /debug
+         * AND the 0x7AA pit-diag frame name the cause instead of guessing by
+         * elimination. Mirrors the exact predicate order inside as_next_state();
+         * purely observational, does NOT influence the state machine. The
+         * EMERG_ASB_LOW branch was added on salvage — the ASB low-pressure trip
+         * did not exist when this diagnostic was first written. */
+        if (as_state == ASState::EMERGENCY && previous_as_state != ASState::EMERGENCY)
+        {
+            const bool armed = (previous_as_state == ASState::DRIVING ||
+                                previous_as_state == ASState::READY);
+            uint8_t reason =
+                !as_in.asms_on                             ? EMERG_ASMS_OFF :
+                as_in.res_estop                            ? EMERG_RES_ESTOP :
+                as_in.steer_emergency                      ? EMERG_STEER_GRAVE :
+                (!as_in.ts_on && armed)                    ? EMERG_TS_LOSS :
+                (!as_in.asb_pressure_ok && armed)          ? EMERG_ASB_LOW :
+                (as_in.dv_emergency && as_in.mission_needs_pipeline && armed)
+                                                           ? EMERG_DV_STATUS_EMERG :
+                (previous_as_state == ASState::DRIVING &&
+                 as_in.mission_needs_pipeline && !as_in.dv_fresh)
+                                                           ? EMERG_DV_LOST_HB :
+                                                             EMERG_UNKNOWN;
+            g_as_emergency_reason.store(reason);
+            g_as_emergency_dv_age_ms.store(now_ms - g_dv_status_stamp_ms.load());
+        }
+
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
          * edges:
          *   READY -> DRIVING (GO): energise the steering, (re)start the mission

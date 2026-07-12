@@ -154,7 +154,29 @@ extern std::atomic<uint8_t>  g_res_raw0;        /* last 0x191 data[0] (pit-diag)
 extern std::atomic<uint16_t> g_res_rx_frame_count; /* total FDCAN1 RES-queue frames drained (pit-diag) */
 extern std::atomic<uint16_t> g_nmt_sent_count;     /* NMT set-operational frames we've TX'd (pit-diag) */
 
+/* Diagnostic (diag/emergency-reason-debug): last AS EMERGENCY cause + the
+ * received /dv/status age at that edge. Written by app_task on the EMERGENCY
+ * edge, read via the can_c_get_* accessors below. Observational only — no
+ * effect on the state machine. */
+extern std::atomic<uint8_t>  g_as_emergency_reason;    /* enum AsEmergencyReason */
+extern std::atomic<uint32_t> g_as_emergency_dv_age_ms; /* now_ms - g_dv_status_stamp_ms at the trip */
+
 #endif /* __cplusplus */
+
+/* Which AS-transition input latched the last EMERGENCY (mirrors as_next_state's
+ * predicate order — see app_task). Plain enum so both the C++ setter and the C
+ * /debug formatter can name it. */
+enum AsEmergencyReason {
+    EMERG_NONE = 0,
+    EMERG_ASMS_OFF,
+    EMERG_RES_ESTOP,
+    EMERG_STEER_GRAVE,
+    EMERG_TS_LOSS,
+    EMERG_ASB_LOW,          /* added on salvage: either ASB tank < 3 bar while armed (#184) */
+    EMERG_DV_STATUS_EMERG,
+    EMERG_DV_LOST_HB,
+    EMERG_UNKNOWN,
+};
 
 /* C-callable accessors — implemented in can_interface.cpp, usable from C files */
 #ifdef __cplusplus
@@ -174,6 +196,11 @@ float    can_c_get_steer_angle_motor(void);
 int8_t   can_c_get_steer_motor_state(void); /* ESTADO_MOTOR_* (byte 5 of 0x528) */
 uint8_t  can_c_get_steer_cal_arranque_ok(void); /* power-on zero-cal OK (byte 6 of 0x528) */
 uint8_t  can_c_get_assi_status_code(void);  /* AS state byte, FS-Rules T14.9 */
+/* diag/emergency-reason-debug — surfaced on /debug by ros_task */
+uint8_t  can_c_get_as_emergency_reason(void);    /* enum AsEmergencyReason */
+uint32_t can_c_get_as_emergency_dv_age_ms(void); /* /dv/status age (ms) at last emergency */
+uint8_t  can_c_get_steer_calib_phase(void);      /* 0x529 phase 0..10 */
+uint8_t  can_c_get_steer_calib_error(void);      /* 0x529 err   0..8  */
 
 #ifdef __cplusplus
 }
