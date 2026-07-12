@@ -33,6 +33,7 @@ extern "C" {
 #include "ros_globals.h"
 #include "can_globals.h"
 #include "mission.h"           /* per-mission dispatch (Mission vtable, registry) */
+#include "emergency_centering.hpp" /* pure emergency steering-centering ramp */
 
 extern "C" {
     #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
@@ -263,6 +264,12 @@ extern "C" void StartAppTask(void *argument)
     bool           mission_complete = false;
     const Mission* active_mission   = nullptr;
 
+    /* Emergency steering-centering ramp state (emergency_centering.hpp). Seeded
+     * from the live steering angle on the EMERGENCY-entry edge, then ramped
+     * toward 0 while the car is still rolling; the ramp itself runs in the
+     * EMERGENCY switch case below. */
+    float          emerg_target_deg = 0.0f;
+
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
 
@@ -461,6 +468,16 @@ extern "C" void StartAppTask(void *argument)
         if (previous_as_state == ASState::DRIVING && as_state != ASState::DRIVING)
         {
             active_mission = nullptr;
+        }
+        /* Seed the emergency-centering ramp from where the wheel actually is on
+         * the EMERGENCY-entry edge, so the first commanded setpoint doesn't jump.
+         * The ramp then runs in the EMERGENCY switch case below. When emergency
+         * is entered from DRIVING the steering motor is already armed, so the
+         * board keeps tracking without re-homing; entered from READY the car is
+         * stationary, so the standstill gate makes centring a no-op. */
+        if (as_state == ASState::EMERGENCY && previous_as_state != ASState::EMERGENCY)
+        {
+            emerg_target_deg = g_steer_angle_actual.load();
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -702,6 +719,7 @@ extern "C" void StartAppTask(void *argument)
                 }
 
                 case ASState::EMERGENCY:
+                {
                     /* EBS fired + AS SDC opened centrally above (as_actuation). */
                     // Cancel any active mission
                     if (g_set_mission_in_progress.load())
@@ -713,7 +731,32 @@ extern "C" void StartAppTask(void *argument)
                     {
                         send_cancel_mission_command();
                     }
+
+                    /* Bring the wheels smoothly back to centre while the car is
+                     * still braking to a stop, then leave them wherever they are
+                     * once at standstill (moving a loaded rack at standstill only
+                     * scrubs the tyres / risks stepper step-loss). The ramp is
+                     * rate-limited (emergency_centering.hpp) and paced to the
+                     * same 20 ms clock as the torque stream — well inside the
+                     * steering board's 600 ms command timeout, so streaming it
+                     * keeps the board armed and tracking (a gap would trip its
+                     * own stale-command cut-off). At standstill / once centred it
+                     * emits a clean stop (0x520=0): the board de-energises and
+                     * holds position, re-armable, NOT its permanent-halt path. */
+                    if (torque_tx_due)
+                    {
+                        EmergCenterIn ci;
+                        ci.target_deg = emerg_target_deg;
+                        ci.standstill = g_imu_vehicle_standstill.load();
+                        ci.dt_s       = (float)TORQUE_TX_PERIOD_MS / 1000.0f;
+                        EmergCenterOut co = emergency_center_step(ci);
+                        emerg_target_deg = co.new_target_deg;
+                        if (co.arm)        Can::sendSteeringStart();
+                        if (co.send_angle) Can::sendSteeringAngle(co.angle_cmd_deg);
+                        if (co.stop)       Can::sendSteeringStop();
+                    }
                     break;
+                }
 
                 case ASState::FINISHED:
                     /* EBS fired + AS SDC opened centrally above (as_actuation).

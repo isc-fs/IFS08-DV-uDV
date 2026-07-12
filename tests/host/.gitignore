@@ -3,8 +3,11 @@ test_safety_eval
 test_state_machine
 test_rules_compliance
 test_as_transition
+test_as_actuation
 test_missions
 test_attitude
 test_bmi088_convert
+test_emergency_centering
+*.exe
 *.o
 *.dSYM/
