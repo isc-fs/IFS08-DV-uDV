@@ -427,6 +427,27 @@ extern "C" void StartAppTask(void *argument)
 
         as_state = as_next_state(previous_as_state, as_in);
 
+        /* Diagnostic (diag/emergency-reason-debug): on the EMERGENCY edge, latch
+         * WHICH transition input fired + the received /dv/status age, so /debug
+         * names the cause instead of us guessing by elimination. This mirrors
+         * the exact predicate order inside as_next_state(); it is purely
+         * observational and does NOT influence the state machine. */
+        if (as_state == ASState::EMERGENCY && previous_as_state != ASState::EMERGENCY)
+        {
+            uint8_t reason =
+                !as_in.asms_on                                           ? EMERG_ASMS_OFF :
+                as_in.res_estop                                          ? EMERG_RES_ESTOP :
+                as_in.steer_emergency                                    ? EMERG_STEER_GRAVE :
+                (!as_in.ts_on && (previous_as_state == ASState::DRIVING ||
+                                  previous_as_state == ASState::READY))  ? EMERG_TS_LOSS :
+                (as_in.dv_emergency && as_in.mission_needs_pipeline)     ? EMERG_DV_STATUS_EMERG :
+                (previous_as_state == ASState::DRIVING &&
+                 as_in.mission_needs_pipeline && !as_in.dv_fresh)        ? EMERG_DV_LOST_HB :
+                                                                           EMERG_UNKNOWN;
+            g_as_emergency_reason.store(reason);
+            g_as_emergency_dv_age_ms.store(now_ms - g_dv_status_stamp_ms.load());
+        }
+
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
          * edges:
          *   READY -> DRIVING (GO): energise the steering, (re)start the mission
