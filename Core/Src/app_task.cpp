@@ -84,8 +84,9 @@ static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
  *
  *   grados = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN
  *
- * STEERING_RATIO (volante:rueda) from the rack (87.9 mm/rev): 360 deg column
- * -> 72.1 deg wheel = 5.0:1 (the 84.5 deg / 4.3:1 geometry is the alternate).
+ * STEERING_RATIO (volante:rueda) from the rack (87.9 mm/rev): the two candidate
+ * geometries are 72.1 deg wheel = 5.0:1 and 84.5 deg wheel = 4.3:1. We take the
+ * MORE CONSERVATIVE 5.0:1 (smaller road-wheel authority: 18.2 vs 21.1 deg ceiling).
  * MOTOR_TO_COLUMN = 1.1 (column:motor 1:1.1) is the stage between DV-STEERING's
  * output shaft and the column that its internal REDUCTORA=20 does NOT model;
  * if that 1.1 is already folded into DV-STEERING's REDUCTORA, set it to 1.0.
@@ -100,8 +101,9 @@ static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
  * norm=1 lands exactly on the clamp (linear across the whole range, no early
  * saturation, reaches the mechanical limit at full command).
  *
+ * Sign convention (ROS +z = CCW/left) is handled in IFS08-DV-STEERING, not here.
+ *
  * OPEN (uDV team, #71):
- *   - sign convention (ROS +z = CCW/left) still to confirm on-car;
  *   - pipeline: control_node max_steer_deg MUST be set to the SAME 18.2 (not 28)
  *     or norm's meaning diverges — the car can't exceed ~18.2 deg road-wheel;
  *   - if MOTOR_TO_COLUMN(1.1) is already folded into DV-STEERING's REDUCTORA,
