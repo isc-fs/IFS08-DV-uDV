@@ -53,6 +53,12 @@
 #define TIME_SYNC_INTERVAL    4000  // re-sync every N samples (~10s at 400Hz)
 #define FAST_PUB_INTERVAL     4     // publish steering_angle/motor_rpm every 4 IMU samples (~100 Hz)
 #define SLOW_PUB_INTERVAL     40    // publish RES/AMI/GO/AS-state every 40 IMU samples (~10 Hz)
+// /steering/feedback is debug/telemetry only (NO pipeline subscriber — the
+// pipeline consumes /steering_angle + /motor_rpm); publish it at 10 Hz, not the
+// 100 Hz fast rate, so its Float32MultiArray frames don't starve the single
+// blocking USB-CDC TX slot the /dv/status delivery needs (issue #166). One
+// publish per STEER_FB_PUB_DIVIDER fast-pub ticks: 100 Hz / 10 = 10 Hz.
+#define STEER_FB_PUB_DIVIDER  10
 // STEERING_RATIO: steering-wheel degrees / front-wheel degrees. Placeholder 1.0
 // until measured on the physical car (EKF over-estimates yaw rate until then).
 #define STEERING_RATIO        1.0f
@@ -512,12 +518,21 @@ void ros_task_run(void)
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
     "cmd_test"));
 
-  // /dv/status subscriber — pipeline lifecycle byte. RELIABLE (default)
-  // matches the pipeline's latched RELIABLE+TRANSIENT_LOCAL publisher and
-  // guarantees we never miss a status transition.
+  // /dv/status subscriber — pipeline lifecycle byte. BEST_EFFORT (issue #166):
+  // a RELIABLE reader forces the agent to use a reliable XRCE stream to the
+  // uDV, so every sample is ACKNACK'd back over the single-in-flight, blocking
+  // USB-CDC TX. Under DRIVING load that ACKNACK round-trip congestion-collapses
+  // and the heartbeat goes stale past DV_STATUS_STALE_MS -> false EMERGENCY
+  // (dv_lost_hb). BEST_EFFORT drops the ACKNACK loop (latest-wins supersedes a
+  // delayed sample instead of head-of-line-blocking). A best-effort reader
+  // still matches the pipeline's reliable writer (DDS RxO: offered >= requested),
+  // so this is connectivity-safe on its own; the pipeline-side flip to
+  // BEST_EFFORT/VOLATILE is a follow-up (must NOT go pipeline-first). Late-join
+  // is covered by the continuous 10 Hz heartbeat, not durability. Same idiom as
+  // /ctrl/cmd below. A genuinely dead link still trips the 400 ms watchdog.
   rcl_subscription_t dv_status_sub;
   std_msgs__msg__UInt8 dv_status_msg;
-  UROS_TRY(rclc_subscription_init_default(
+  UROS_TRY(rclc_subscription_init_best_effort(
     &dv_status_sub, &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, UInt8),
     DV_TOPIC_DV_STATUS));
@@ -621,6 +636,7 @@ void ros_task_run(void)
 
   uint16_t fast_pub_counter    = 0;
   uint16_t slow_pub_counter    = 0;
+  uint16_t steer_fb_pub_counter = 0;  // divides fast-pub 100 Hz -> 10 Hz for /steering/feedback (#166)
 
   /* /assi/state heartbeat pacing + inter-publish gap instrumentation.
      last_assi_pub_ms == 0 also serves as the "no publish yet" sentinel so the
@@ -790,11 +806,16 @@ void ros_task_run(void)
         // Steering feedback array: actual / target / motor angle (deg). From
         // 0x528 = RIGHT-positive (intuitive/dashboard convention, post steering
         // SENTIDO_DIRECCION); debug/telemetry only -- opposite sign to
-        // /steering_angle above, by design.
-        steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
-        steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
-        steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
-        (void)rcl_publish(&steering_fb_pub, &steering_fb_msg, NULL);
+        // /steering_angle above, by design. Gated to 10 Hz (no pipeline
+        // subscriber) to keep the USB-CDC TX slot free for /dv/status (#166).
+        if (++steer_fb_pub_counter >= STEER_FB_PUB_DIVIDER)
+        {
+          steer_fb_pub_counter = 0;
+          steering_fb_data[0] = can_c_get_steer_angle_actual();  // actual (deg)
+          steering_fb_data[1] = can_c_get_steer_angle_target();  // target (deg)
+          steering_fb_data[2] = can_c_get_steer_angle_motor();   // motor stepper (deg)
+          (void)rcl_publish(&steering_fb_pub, &steering_fb_msg, NULL);
+        }
       }
 
       // --- Slow publishers (~10 Hz) ---

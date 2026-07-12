@@ -107,7 +107,7 @@ ROS 2 node `cubemx_node` exposes:
 | `/imu/status` | `std_msgs/Int32` | reliable | ~0.1 |
 | `/steering_angle` (rad) | `std_msgs/Float32` | best-effort | ~10 |
 | `/motor_rpm` | `std_msgs/Float32` | best-effort | ~10 |
-| `/steering/feedback` | `std_msgs/Float32MultiArray` | best-effort | 20 |
+| `/steering/feedback` | `std_msgs/Float32MultiArray` | best-effort | 10 (debug only, no pipeline sub — #166) |
 | `/res/status` | `std_msgs/Int32` | best-effort | ~10 |
 | `/res/go` | `std_msgs/Int32` | best-effort | ~10 |
 | `/ami/mission` | `std_msgs/Int32` | best-effort | ~10 |
@@ -115,7 +115,7 @@ ROS 2 node `cubemx_node` exposes:
 | `/assi/pub_gap_max_ms` | `std_msgs/Int32` | best-effort | 10 |
 | `/as_state` | `std_msgs/UInt8` | best-effort | ~10 |
 | `/debug` | `std_msgs/String` | reliable | ~10 |
-| `/dv/status` (sub) | `std_msgs/UInt8` | reliable | — |
+| `/dv/status` (sub) | `std_msgs/UInt8` | best-effort (#166; was reliable) | — |
 | `/ctrl/cmd` (sub) | `geometry_msgs/Twist` | best-effort | — |
 | `/cmd_test` (sub) | `std_msgs/Int32` | reliable | — |
 | `/activate_steering`, `/force_ebs` (srv) | `std_srvs/SetBool` | — | — |
