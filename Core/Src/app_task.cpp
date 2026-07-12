@@ -75,13 +75,45 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
  * every torque/steer TX to it (the control loop itself runs ~1 kHz and
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
-/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
- * controller takes an absolute angle on 0x521 (0.01 deg units). Full-lock
- * span for the conversion, kept UNDER the steering controller's 70 deg
- * cutoff (PIPELINE_INTERFACE.md G3) with margin.
- * TODO(commission, #71): measure the real full-lock angle + steering ratio
- * and the sign convention (ROS +z = CCW/left) on the car. */
-static constexpr float    STEER_FULL_LOCK_DEG      = 65.0f;
+/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1], where +/-1 is
+ * the pipeline's max road-wheel angle (control_node max_steer_deg). The DV
+ * steering controller (0x521) takes an absolute angle in degrees in its own
+ * output-shaft frame ("grados" -> Ir_a_Grados in IFS08-DV-STEERING), which it
+ * clamps to +/-60 (angulo_limite_motor; emergency shutoff +/-70). Convert the
+ * normalised road-wheel command through the real IFS-08 steering kinematics:
+ *
+ *   grados = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN
+ *
+ * STEERING_RATIO (volante:rueda) from the rack (87.9 mm/rev): 360 deg column
+ * -> 72.1 deg wheel = 5.0:1 (the 84.5 deg / 4.3:1 geometry is the alternate).
+ * MOTOR_TO_COLUMN = 1.1 (column:motor 1:1.1) is the stage between DV-STEERING's
+ * output shaft and the column that its internal REDUCTORA=20 does NOT model;
+ * if that 1.1 is already folded into DV-STEERING's REDUCTORA, set it to 1.0.
+ *
+ * Replaces the old norm * STEER_FULL_LOCK_DEG(65) placeholder (#71): 65 baked in
+ * a column:wheel ratio of only 65/28 = 2.3 vs the real ~5.0, so the wheels
+ * turned less than half the commanded angle and the LWS (column) diverged from
+ * the road-wheel command on the bench.
+ *
+ * OPEN (uDV team, #71):
+ *   - sign convention (ROS +z = CCW/left) still to confirm on-car;
+ *   - road-wheel ceiling: at 5.0:1 the +/-60 grados clamp caps the road wheel
+ *     at ~11 deg (60 / 5.0 / 1.1). If that IS the mechanical limit, the
+ *     pipeline's max_steer_deg(28) should drop to match so norm=1 == full lock;
+ *     if the car reaches more, the ratio or the clamp differs. */
+static constexpr float    MAX_STEER_ROADWHEEL_DEG  = 28.0f;  /* = control_node max_steer_deg   */
+static constexpr float    STEERING_RATIO           = 5.0f;   /* column : road-wheel (72.1 deg) */
+static constexpr float    MOTOR_TO_COLUMN          = 1.1f;   /* DV-STEERING output : column    */
+static constexpr float    STEER_GRADOS_MAX_DEG     = 60.0f;  /* DV-STEERING angulo_limite_motor */
+
+/* Normalised road-wheel command [-1..1] -> DV-STEERING "grados" (0x521). */
+static inline float steer_norm_to_grados(float norm)
+{
+    float g = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN;
+    if (g >  STEER_GRADOS_MAX_DEG) g =  STEER_GRADOS_MAX_DEG;
+    if (g < -STEER_GRADOS_MAX_DEG) g = -STEER_GRADOS_MAX_DEG;
+    return g;
+}
 /* DV ready-to-drive request (0x510) retry period until the ECU confirms
  * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
 static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
@@ -95,7 +127,7 @@ static constexpr uint32_t READY_DWELL_MS           = 5000u;
  *    cadence (inspection sweep / EBS-test hold).
  *  - send_accel / send_steer: the pipeline drive, paced by drive_tx_due to the
  *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x521
- *    angle = norm * STEER_FULL_LOCK_DEG. They are separate so a stale link can
+ *    angle = steer_norm_to_grados(norm). They are separate so a stale link can
  *    zero the torque WITHOUT commanding steering — a 0x521 zero would snap the
  *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
 static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
@@ -114,7 +146,7 @@ static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_d
         Can::sendAccel(cmd.send_accel ? cmd.accel_norm : 0.0f);
         if (cmd.send_steer)
         {
-            Can::sendSteeringAngle(cmd.steer_norm * STEER_FULL_LOCK_DEG);
+            Can::sendSteeringAngle(steer_norm_to_grados(cmd.steer_norm));
         }
     }
 }
