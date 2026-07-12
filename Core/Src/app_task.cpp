@@ -440,7 +440,9 @@ extern "C" void StartAppTask(void *argument)
                 as_in.steer_emergency                                    ? EMERG_STEER_GRAVE :
                 (!as_in.ts_on && (previous_as_state == ASState::DRIVING ||
                                   previous_as_state == ASState::READY))  ? EMERG_TS_LOSS :
-                (as_in.dv_emergency && as_in.mission_needs_pipeline)     ? EMERG_DV_STATUS_EMERG :
+                (as_in.dv_emergency && as_in.mission_needs_pipeline &&
+                 (previous_as_state == ASState::DRIVING ||
+                  previous_as_state == ASState::READY))                  ? EMERG_DV_STATUS_EMERG :
                 (previous_as_state == ASState::DRIVING &&
                  as_in.mission_needs_pipeline && !as_in.dv_fresh)        ? EMERG_DV_LOST_HB :
                                                                            EMERG_UNKNOWN;
