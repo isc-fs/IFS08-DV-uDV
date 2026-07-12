@@ -78,8 +78,8 @@ static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
 /* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1], where +/-1 is
  * the pipeline's max road-wheel angle (control_node max_steer_deg). The DV
  * steering controller (0x521) takes an absolute angle in degrees in its own
- * output-shaft frame ("grados" -> Ir_a_Grados in IFS08-DV-STEERING), which it
- * clamps to +/-60 (angulo_limite_motor; emergency shutoff +/-70). Convert the
+ * output-shaft frame ("grados" -> Ir_a_Grados in IFS08-DV-STEERING). The column
+ * mechanical limit is +/-100 deg, so grados is clamped there. Convert the
  * normalised road-wheel command through the real IFS-08 steering kinematics:
  *
  *   grados = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN
@@ -95,16 +95,22 @@ static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
  * turned less than half the commanded angle and the LWS (column) diverged from
  * the road-wheel command on the bench.
  *
+ * Closed set: the +/-100 column clamp / effective ratio E=5.5 gives a road-wheel
+ * ceiling of 100/5.5 = ~18.2 deg. MAX_STEER_ROADWHEEL_DEG is set to that so
+ * norm=1 lands exactly on the clamp (linear across the whole range, no early
+ * saturation, reaches the mechanical limit at full command).
+ *
  * OPEN (uDV team, #71):
  *   - sign convention (ROS +z = CCW/left) still to confirm on-car;
- *   - road-wheel ceiling: at 5.0:1 the +/-60 grados clamp caps the road wheel
- *     at ~11 deg (60 / 5.0 / 1.1). If that IS the mechanical limit, the
- *     pipeline's max_steer_deg(28) should drop to match so norm=1 == full lock;
- *     if the car reaches more, the ratio or the clamp differs. */
-static constexpr float    MAX_STEER_ROADWHEEL_DEG  = 28.0f;  /* = control_node max_steer_deg   */
+ *   - pipeline: control_node max_steer_deg MUST be set to the SAME 18.2 (not 28)
+ *     or norm's meaning diverges — the car can't exceed ~18.2 deg road-wheel;
+ *   - if MOTOR_TO_COLUMN(1.1) is already folded into DV-STEERING's REDUCTORA,
+ *     E=5.0 -> ceiling 20.0, so set both MAX_STEER_ROADWHEEL_DEG and the
+ *     pipeline max_steer_deg to 20.0 instead. */
+static constexpr float    MAX_STEER_ROADWHEEL_DEG  = 18.2f;  /* = clamp/E (100/5.5); MUST match control_node max_steer_deg */
 static constexpr float    STEERING_RATIO           = 5.0f;   /* column : road-wheel (72.1 deg) */
-static constexpr float    MOTOR_TO_COLUMN          = 1.1f;   /* DV-STEERING output : column    */
-static constexpr float    STEER_GRADOS_MAX_DEG     = 60.0f;  /* DV-STEERING angulo_limite_motor */
+static constexpr float    MOTOR_TO_COLUMN          = 1.1f;   /* DV-STEERING output : column (E = 5.0*1.1 = 5.5) */
+static constexpr float    STEER_GRADOS_MAX_DEG     = 100.0f; /* column mechanical limit +/-100 deg */
 
 /* Normalised road-wheel command [-1..1] -> DV-STEERING "grados" (0x521). */
 static inline float steer_norm_to_grados(float norm)
