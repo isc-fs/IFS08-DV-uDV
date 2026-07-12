@@ -19,23 +19,21 @@
  *
  * Standstill source: NOT the live vehicle-speed signal. In an emergency the AS
  * SDC opens and the tractive system is shut down, so the ECU's motor-rpm relay
- * (0x506) becomes unreliable for the whole window this code runs — it can stick
- * at the last moving value (the ECU applies no staleness guard, IFS08-CE-ECU
- * vehicle_service.cpp) or read a false zero. Instead the caller captures the
- * last-known shaft rpm ONCE on the EMERGENCY-entry edge (while 0x506 is still
- * valid) and turns it into a feedforward time-to-standstill via
- * emergency_stop_time_ms() below; the freeze then runs off the local clock,
- * independent of any tractive-system signal after the edge.
+ * (0x506) is unreliable for the whole window this code runs — it can stick at
+ * the last moving value (no ECU staleness guard, IFS08-CE-ECU
+ * vehicle_service.cpp) or read a false zero. Instead the caller derives
+ * `standstill` from the IMU zero-velocity detector (zupt.h, run in imu_task on
+ * the always-powered uDV board — no tractive-system dependency), with
+ * EMERG_STOP_MAX_MS as a fixed time backstop so the wheels never actuate
+ * indefinitely if the car never reads "quiet" (persistent vibration / stale IMU).
  *
- * PURE: no HAL / RTOS / CAN / float-libm dependency. The caller carries
- * `target_deg` as the ramp state, computes `standstill` from the feedforward
- * deadline, and applies the result on the CAN bus (Can::sendSteeringStart /
- * sendSteeringAngle / sendSteeringStop). See app_task.cpp's EMERGENCY case.
+ * PURE: no HAL / RTOS / CAN / libm dependency. The caller carries `target_deg`
+ * as the ramp state, passes in `standstill`, and applies the result on the CAN
+ * bus (Can::sendSteeringStart / sendSteeringAngle / sendSteeringStop). See
+ * app_task.cpp's EMERGENCY case.
  */
 #ifndef EMERGENCY_CENTERING_HPP
 #define EMERGENCY_CENTERING_HPP
-
-#include <stdint.h>
 
 /* Intuitive tuning knob: how long to bring the wheels from FULL LOCK back to
  * centre. Keep it AT OR BELOW the EBS time-to-standstill, or the standstill
@@ -62,40 +60,13 @@
 #define EMERG_CENTER_TOL_DEG           1.0f
 #endif
 
-/* Feedforward standstill model. Under EBS braking the shaft rpm bleeds off at
- * roughly this rate (|rpm| lost per second); time-to-standstill from the rpm
- * captured at the emergency edge is |rpm0| / this. COMMISSION: measure from a
- * 0x506 log of a real EBS stop (|rpm0| / stop_time_s). Pick it a touch HIGH so
- * the estimate is SHORT — err toward freezing early rather than actuating past
- * standstill (the safe direction: "don't move it at standstill"). */
-#ifndef EMERG_DECEL_RPM_PER_S
-#define EMERG_DECEL_RPM_PER_S          2000.0f
-#endif
-
-/* Hard cap on the estimated centring window (ms). Backstop so an implausibly
- * large or stuck captured rpm can't keep the wheels actuating indefinitely —
- * after this, the freeze fires regardless. Set above the worst-case EBS stop. */
+/* Fixed time backstop (ms): the wheels never actuate longer than this in an
+ * emergency, even if the IMU never reports standstill (persistent vibration
+ * keeps it "not quiet", or the IMU reading goes stale). A pure time cap — not a
+ * measured constant. Set above the worst-case EBS stop time. */
 #ifndef EMERG_STOP_MAX_MS
 #define EMERG_STOP_MAX_MS              4000u
 #endif
-
-/**
- * @brief Feedforward estimate of time-to-standstill (ms) from a captured shaft
- *        rpm, assuming constant EBS deceleration (EMERG_DECEL_RPM_PER_S).
- *
- * Sign-agnostic (uses |rpm0|). 0 rpm -> 0 ms (already stopped -> freeze at
- * once). Clamped to EMERG_STOP_MAX_MS so a bogus/stuck capture can't extend the
- * window without bound. Pure; no libm (manual abs, float divide).
- */
-inline uint32_t emergency_stop_time_ms(int32_t rpm0)
-{
-    float r = (float)rpm0;
-    if (r < 0.0f) r = -r;                      /* |rpm0|, no libm */
-    float ms = (r / EMERG_DECEL_RPM_PER_S) * 1000.0f;
-    if (ms <= 0.0f)                    return 0u;
-    if (ms >= (float)EMERG_STOP_MAX_MS) return EMERG_STOP_MAX_MS;
-    return (uint32_t)ms;
-}
 
 /** Inputs for one tick of the ramp. */
 struct EmergCenterIn {

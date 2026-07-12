@@ -12,13 +12,11 @@
  */
 
 /* Pin the tuning knobs so the arithmetic is deterministic (the header guards
- * each with #ifndef). 40 deg/s @ 20 ms tick => 0.8 deg/step; tol 1.0 deg;
- * 2000 rpm/s decel => stop_ms = |rpm0|/2; window capped at 4000 ms. */
+ * each with #ifndef). 40 deg/s @ 20 ms tick => 0.8 deg/step; tol 1.0 deg. */
 #define EMERG_CENTER_RATE_DEG_S   40.0f
 #define EMERG_CENTER_TOL_DEG      1.0f
-#define EMERG_DECEL_RPM_PER_S     2000.0f
-#define EMERG_STOP_MAX_MS         4000u
 
+#include <cstdint>
 #include "test.h"
 #include "emergency_centering.hpp"
 
@@ -107,31 +105,20 @@ static void test_full_ramp_duration(void)
     ASSERT_NEAR_FLOAT(t_s, EMERG_CENTER_FULLLOCK_DEG / EMERG_CENTER_RATE_DEG_S, 2.0f * DT);
 }
 
-/* Feedforward time-to-standstill from the rpm captured at the emergency edge:
- * |rpm0| / decel, sign-agnostic, 0 -> 0, clamped to the max window. */
-static void test_stop_time_estimate(void)
-{
-    ASSERT_EQ_INT(emergency_stop_time_ms(0),      0);       /* stopped -> freeze now */
-    ASSERT_EQ_INT(emergency_stop_time_ms(2000),   1000);    /* 2000/2000 s */
-    ASSERT_EQ_INT(emergency_stop_time_ms(500),    250);
-    ASSERT_EQ_INT(emergency_stop_time_ms(-1000),  500);     /* uses |rpm0| */
-    ASSERT_EQ_INT(emergency_stop_time_ms(100000), (long)EMERG_STOP_MAX_MS);  /* clamp */
-}
-
-/* End-to-end composition as app_task runs it: seed a deadline from rpm0 on the
- * edge, then each tick derive standstill from the local clock (never live rpm)
- * and feed the ramp. Returns the resting setpoint and whether it froze while
- * still off-centre. */
-static void run_emergency(int32_t rpm0, float start_deg,
+/* End-to-end composition as app_task runs it: the ramp is fed a `standstill`
+ * flag that flips true at `standstill_at_ms` — sourced on the car from the IMU
+ * ZUPT detector or the EMERG_STOP_MAX_MS time backstop, whichever comes first
+ * (the ramp doesn't care which). Returns the resting setpoint and whether it
+ * froze while still off-centre. */
+static void run_emergency(uint32_t standstill_at_ms, float start_deg,
                           float* out_final, bool* out_frozen_offcenter)
 {
-    uint32_t t        = 1000u;                               /* arbitrary start tick */
-    uint32_t deadline = t + emergency_stop_time_ms(rpm0);
-    float    target   = start_deg;
+    uint32_t t          = 1000u;   /* arbitrary emergency-entry tick */
+    float    target     = start_deg;
     bool     frozen_off = false;
 
     for (int i = 0; i < 100000; ++i) {
-        bool standstill = ((int32_t)(t - deadline) >= 0);    /* wrap-safe, as app_task */
+        bool standstill = (t >= standstill_at_ms);
         EmergCenterIn in = { target, standstill, DT };
         EmergCenterOut o = emergency_center_step(in);
         target = o.new_target_deg;
@@ -146,33 +133,32 @@ static void run_emergency(int32_t rpm0, float start_deg,
     *out_frozen_offcenter = frozen_off;
 }
 
-/* High speed: the stop window (2000 ms) outlasts the centring ramp (~1500 ms
- * from 60 deg), so the wheels fully centre and stop via the centred branch. */
-static void test_feedforward_high_speed_centers(void)
+/* Standstill declared late (2000 ms) — the ramp (~1500 ms from 60 deg) finishes
+ * first, so the wheels fully centre and stop via the centred branch. */
+static void test_late_standstill_centers(void)
 {
     float final_deg; bool frozen_off;
-    run_emergency(/*rpm0*/ 4000, /*start*/ 60.0f, &final_deg, &frozen_off);
+    run_emergency(/*standstill_at*/ 1000u + 2000u, /*start*/ 60.0f, &final_deg, &frozen_off);
     ASSERT_FALSE(frozen_off);
     ASSERT_TRUE(final_deg <= EMERG_CENTER_TOL_DEG && final_deg >= -EMERG_CENTER_TOL_DEG);
 }
 
-/* Low speed: the stop window (200 ms) is far shorter than the ramp, so the
- * feedforward freeze truncates centring with the wheel still well off-centre —
- * the "don't move it at standstill even if not centred" requirement. */
-static void test_feedforward_low_speed_freezes_offcenter(void)
+/* Standstill declared early (200 ms in) — the freeze truncates centring with the
+ * wheel still well off-centre: "don't move it at standstill even if not centred". */
+static void test_early_standstill_freezes_offcenter(void)
 {
     float final_deg; bool frozen_off;
-    run_emergency(/*rpm0*/ 400, /*start*/ 60.0f, &final_deg, &frozen_off);
+    run_emergency(/*standstill_at*/ 1000u + 200u, /*start*/ 60.0f, &final_deg, &frozen_off);
     ASSERT_TRUE(frozen_off);
     ASSERT_TRUE(final_deg > 40.0f);        /* only ~8 deg of travel in 200 ms */
 }
 
-/* Zero rpm at the edge (slow / stopped / entered from READY): freeze on the
- * first tick, wheel left exactly where it was — no actuation at standstill. */
-static void test_feedforward_zero_rpm_no_motion(void)
+/* Standstill from the first tick (already stopped / entered from READY): freeze
+ * immediately, wheel left exactly where it was — no actuation at standstill. */
+static void test_immediate_standstill_no_motion(void)
 {
     float final_deg; bool frozen_off;
-    run_emergency(/*rpm0*/ 0, /*start*/ 30.0f, &final_deg, &frozen_off);
+    run_emergency(/*standstill_at*/ 1000u, /*start*/ 30.0f, &final_deg, &frozen_off);
     ASSERT_TRUE(frozen_off);
     ASSERT_NEAR_FLOAT(final_deg, 30.0f, 1e-6f);   /* unchanged */
 }
@@ -185,9 +171,8 @@ int main(void)
     TEST_CASE(test_centered_stops);
     TEST_CASE(test_no_overshoot);
     TEST_CASE(test_full_ramp_duration);
-    TEST_CASE(test_stop_time_estimate);
-    TEST_CASE(test_feedforward_high_speed_centers);
-    TEST_CASE(test_feedforward_low_speed_freezes_offcenter);
-    TEST_CASE(test_feedforward_zero_rpm_no_motion);
+    TEST_CASE(test_late_standstill_centers);
+    TEST_CASE(test_early_standstill_freezes_offcenter);
+    TEST_CASE(test_immediate_standstill_no_motion);
     TEST_END();
 }

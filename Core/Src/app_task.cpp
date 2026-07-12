@@ -37,6 +37,7 @@ extern "C" {
 
 extern "C" {
     #include "dv_interface.h"   /* dv/status + ctrl/cmd contract bytes + timings */
+    #include "imu_task.h"       /* imu_zupt_standstill() — IMU standstill for emergency centre */
 }
 
 /* ------------------------------------------------------------------------
@@ -267,12 +268,11 @@ extern "C" void StartAppTask(void *argument)
     /* Emergency steering-centering ramp state (emergency_centering.hpp). Seeded
      * from the live steering angle on the EMERGENCY-entry edge, then ramped
      * toward 0 while the car is still rolling; the ramp itself runs in the
-     * EMERGENCY switch case below. emerg_stop_deadline_ms is the feedforward
-     * time-to-standstill: captured from the shaft rpm on the entry edge (while
-     * 0x506 is still valid) so the freeze does not depend on a tractive-system
-     * signal that is being shut down for the whole emergency. */
-    float          emerg_target_deg     = 0.0f;
-    uint32_t       emerg_stop_deadline_ms = 0u;
+     * EMERGENCY switch case below. emerg_start_ms stamps the entry edge for the
+     * EMERG_STOP_MAX_MS time backstop; standstill itself comes from the IMU
+     * ZUPT detector (imu_zupt_standstill), not any tractive-system signal. */
+    float          emerg_target_deg = 0.0f;
+    uint32_t       emerg_start_ms    = 0u;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -482,15 +482,7 @@ extern "C" void StartAppTask(void *argument)
         if (as_state == ASState::EMERGENCY && previous_as_state != ASState::EMERGENCY)
         {
             emerg_target_deg = g_steer_angle_actual.load();
-            /* Capture the last-known shaft rpm NOW, while 0x506 is still valid
-             * (the TS is only just being shut down), and turn it into a
-             * feedforward deadline for standstill. After this edge the freeze
-             * runs off the local clock — never the live rpm, which becomes
-             * unreliable the instant the SDC opens (see emergency_centering.hpp).
-             * rpm ~ 0 (slow / stopped / entered from READY) => deadline == now
-             * => centring is a no-op, the safe default. */
-            emerg_stop_deadline_ms =
-                now_ms + emergency_stop_time_ms(g_can_motor_rpm.load());
+            emerg_start_ms   = now_ms;   /* for the EMERG_STOP_MAX_MS backstop */
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -760,11 +752,16 @@ extern "C" void StartAppTask(void *argument)
                     {
                         EmergCenterIn ci;
                         ci.target_deg = emerg_target_deg;
-                        /* Standstill from the feedforward deadline captured on
-                         * the entry edge, NOT the live rpm (unreliable once the
-                         * SDC is open). Wrap-safe tick comparison. */
+                        /* Standstill from the IMU ZUPT detector (imu_task, run
+                         * on the always-powered board), NOT any tractive-system
+                         * signal — which is being shut down for this whole
+                         * window. Stale IMU (>100 ms) reads not-standstill, so a
+                         * dead IMU can't be mistaken for "stopped"; the
+                         * EMERG_STOP_MAX_MS backstop then bounds actuation, and
+                         * the safety monitor resets on a stalled IMU task. */
                         ci.standstill =
-                            ((int32_t)(now_ms - emerg_stop_deadline_ms) >= 0);
+                            imu_zupt_standstill(now_ms, /*window_ms*/ 100u) ||
+                            ((uint32_t)(now_ms - emerg_start_ms) >= EMERG_STOP_MAX_MS);
                         ci.dt_s       = (float)TORQUE_TX_PERIOD_MS / 1000.0f;
                         EmergCenterOut co = emergency_center_step(ci);
                         emerg_target_deg = co.new_target_deg;
