@@ -50,4 +50,18 @@ std::atomic<uint8_t>  g_res_raw0{0};        /* last 0x191 data[0] (pit-diag) */
 std::atomic<uint16_t> g_res_rx_frame_count{0}; /* total FDCAN1 RES-queue frames (pit-diag) */
 std::atomic<uint16_t> g_nmt_sent_count{0};     /* NMT set-operational TX count (pit-diag) */
 
+// Diagnostic (diag/emergency-reason-debug): last AS EMERGENCY cause + the
+// received /dv/status age at that edge. Written by app_task, read via the
+// can_c_get_* accessors below. Observational only.
+std::atomic<uint8_t>  g_as_emergency_reason{EMERG_NONE};
+std::atomic<uint32_t> g_as_emergency_dv_age_ms{0};
+
+// C-callable accessors for the diagnostics above (the steering-calib atomics
+// had none yet). extern "C" so the C /debug formatter in ros_task.c can read
+// these C++ atomics.
+extern "C" uint8_t  can_c_get_as_emergency_reason(void)    { return g_as_emergency_reason.load(); }
+extern "C" uint32_t can_c_get_as_emergency_dv_age_ms(void) { return g_as_emergency_dv_age_ms.load(); }
+extern "C" uint8_t  can_c_get_steer_calib_phase(void)      { return g_steer_calib_phase.load(); }
+extern "C" uint8_t  can_c_get_steer_calib_error(void)      { return g_steer_calib_error.load(); }
+
 
