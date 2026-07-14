@@ -53,7 +53,7 @@ SENS_CFLAGS := -std=c11 -I$(MOCKS) -I$(CORE_INC) -Wall -Wextra -g -O0
 
 BINS := test_safety_eval test_state_machine test_rules_compliance \
         test_as_transition test_as_actuation test_missions test_attitude \
-        test_bmi088_convert
+        test_bmi088_convert test_emergency_centering test_zupt
 
 # Mission suite — pure mission bodies + registry, no HAL/RTOS/CAN. Strict flags
 # (-Werror): new dependency-free code, held to the same bar as safety_eval.
@@ -98,6 +98,17 @@ test_as_actuation: test_as_actuation.cpp
 test_missions: $(MISSION_SRCS)
 	$(CXX) $(CXXFLAGS) -o $@ $(MISSION_SRCS)
 
+# ---- suite: pure emergency steering-centering ramp ----------------------
+# Header-only pure logic (emergency_centering.hpp), no HAL/RTOS/CAN. Strict
+# flags (-Werror), same bar as safety_eval / missions.
+test_emergency_centering: test_emergency_centering.cpp
+	$(CXX) $(CXXFLAGS) -o $@ test_emergency_centering.cpp
+
+# ---- suite: pure zero-velocity (standstill) detector --------------------
+# Header-only pure logic (zupt.h), no HAL/RTOS. Strict flags (-Werror). C.
+test_zupt: test_zupt.c
+	$(CC) $(CFLAGS) -o $@ test_zupt.c -lm
+
 # ---- suite 5: attitude math (complementary filter, roll/pitch) ----------
 # Links the real Core/Src/attitude.c against the HAL mock; needs libm.
 test_attitude: test_attitude.c $(CORE_SRC)/attitude.c mocks/hal_stubs.c mocks/i2c_utils_stubs.c
@@ -119,6 +130,8 @@ test: $(BINS)
 	@echo "=== test_missions ===";         ./test_missions
 	@echo "=== test_attitude ===";         ./test_attitude
 	@echo "=== test_bmi088_convert ===";   ./test_bmi088_convert
+	@echo "=== test_emergency_centering ==="; ./test_emergency_centering
+	@echo "=== test_zupt ===";               ./test_zupt
 
 clean:
 	rm -rf $(BINS) *.o *.dSYM
