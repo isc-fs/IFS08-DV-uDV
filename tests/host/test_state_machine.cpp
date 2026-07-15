@@ -109,7 +109,7 @@ static void reset_world(void)
 }
 
 /* Model the ECU's 100 ms 0x504 VCU_ts_active cyclic: publish a frame stamped at
- * the CURRENT mock time. TS is sourced from CAN, not the TSMS pin (#179), so a
+ * the CURRENT mock time. TS is sourced from CAN, not the TSMS pin (#180), so a
  * test that advances s_now_ms past TS_ACTIVE_STALE_MS must re-publish exactly as
  * the real ECU would. A frame that stops arriving is MEANT to read as TS-off —
  * that fail-safe is the point of the change, and test_sm_ts_stale_is_off covers it. */
@@ -178,7 +178,7 @@ static void test_ebs_happy_path(void)
     s_pressure1 = 5.0f; s_pressure2 = 5.0f;      // both tanks > 3 bar
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitTS);
     CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
-    s_asms_on = true; ts_can_publish(true);      // ASMS(A3) + fresh ECU 0x504 (#179)
+    s_asms_on = true; ts_can_publish(true);      // ASMS(A3) + fresh ECU 0x504 (#180)
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
     CHECK(s_ebs_pin1 == false);                  // A1 fired (LOW)
     g_can_brake_over_limit.store(true);
@@ -302,7 +302,7 @@ static void test_sm_driving(void)
     CHECK(sm.getState() == ASState::DRIVING);
 }
 
-/* ---- TS now comes from the ECU on CAN 0x504, not the TSMS pin (#179) -----
+/* ---- TS now comes from the ECU on CAN 0x504, not the TSMS pin (#180) -----
  * The whole point of the change is that silence must read as "TS off". These
  * pin the fail-safe so nobody re-latches a stale TS by accident. */
 

@@ -5,7 +5,7 @@
 
 #include "ebs_manager.hpp"
 #include "bench_stubs.h"
-#include "can_globals.h"   /* can_ts_active_fresh — 0x504 TS view (#179) */
+#include "can_globals.h"   /* can_ts_active_fresh — 0x504 TS view (#180) */
 #include <atomic>
 
 extern std::atomic<bool> g_can_brake_over_limit;
@@ -70,7 +70,7 @@ EBSInitState EbsManager::initSequenceStep()
         case EBSInitState::WaitTS:
             /* TS comes from the ECU on CAN 0x504, not the TSMS pin — same
              * source and same reasoning as StateManager::updateSignals() (see
-             * the comment there; issue #179). ASMS stays an explicit, separate
+             * the comment there; #180). ASMS stays an explicit, separate
              * condition rather than being folded into "TS active".
              * On a bench with no ECU this needs BENCH_STUB_TS=1, else the
              * self-check parks here forever. */

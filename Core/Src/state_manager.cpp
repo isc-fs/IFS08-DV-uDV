@@ -43,7 +43,7 @@ void StateManager::updateSignals()
      * means precharge complete / AIRs closed — the real thing. The historical
      * comment here said "nothing on the car transmits 0x504"; that was true once
      * and is now stale — the ECU sends it at 100 ms, ungated
-     * (IFS08-CE-ECU control_task.cpp, vcu_ts_active.def). See issue #179.
+     * (IFS08-CE-ECU control_task.cpp, vcu_ts_active.def). See uDV #180 / ECU isc-fs/IFS08-CE-ECU#127.
      *
      * ASMS is NOT folded in any more: it is its own signal and the AS
      * transition already consumes it separately (as_in.asms_on). */
