@@ -87,9 +87,15 @@ static void reset_world(void)
     s_asms_on = false; s_tsms_on = false; s_sdc_ready = false;
     s_pressure1 = 0.0f; s_pressure2 = 0.0f;
     s_ebs_pin1 = false; s_ebs_pin2 = false;
-    s_sdc_closed = false; s_now_ms = 0;
+    /* Start the mock clock at a NON-ZERO tick. hardware_io_now_ms() is HAL_GetTick,
+     * which has been running since HAL_Init long before FDCAN is up, so a real
+     * 0x504 can never be stamped at tick 0 — and 0 is the "never received"
+     * sentinel in can_ts_active_fresh() (same idiom as g_res_last_rx_tick). At 0
+     * the mock would make a freshly-published frame read as never-seen. */
+    s_sdc_closed = false; s_now_ms = 1000;
 
     g_can_ts_active.store(false);
+    g_can_ts_active_stamp_ms.store(0);   /* 0 = no 0x504 ever seen -> TS off */
     g_can_sdc_res_open.store(false);
     g_can_brake_over_limit.store(false);
     g_can_mission_id.store(-1);   /* -1 = none; 0 is a valid 0-based mission */
@@ -102,6 +108,17 @@ static void reset_world(void)
     StateManager::getInstance().reset();
 }
 
+/* Model the ECU's 100 ms 0x504 VCU_ts_active cyclic: publish a frame stamped at
+ * the CURRENT mock time. TS is sourced from CAN, not the TSMS pin (#180), so a
+ * test that advances s_now_ms past TS_ACTIVE_STALE_MS must re-publish exactly as
+ * the real ECU would. A frame that stops arriving is MEANT to read as TS-off —
+ * that fail-safe is the point of the change, and test_sm_ts_stale_is_off covers it. */
+static void ts_can_publish(bool active)
+{
+    g_can_ts_active.store(active);
+    g_can_ts_active_stamp_ms.store(s_now_ms);
+}
+
 /* Step the EBS init FSM all the way to Done with nominal hardware. */
 static void drive_ebs_to_done(EbsManager& ebs)
 {
@@ -109,7 +126,7 @@ static void drive_ebs_to_done(EbsManager& ebs)
     ebs.initSequenceStep();                        // WaitLow -> CheckPressure
     s_pressure1 = 5.0f; s_pressure2 = 5.0f;        // both tanks > 3 bar
     ebs.initSequenceStep();                        // CheckPressure -> WaitTS (closes SDC)
-    s_asms_on = true; s_tsms_on = true;            // TS = ASMS(A3) && TSMS(A6)
+    s_asms_on = true; ts_can_publish(true);        // ASMS(A3) + fresh ECU 0x504
     ebs.initSequenceStep();                        // WaitTS -> CheckActuator1 (A1 on)
     g_can_brake_over_limit.store(true);
     ebs.initSequenceStep();                        // CheckActuator1 -> WaitInter (A1 off)
@@ -122,7 +139,7 @@ static void drive_ebs_to_done(EbsManager& ebs)
 static void set_drive_preconditions(void)
 {
     s_asms_on = true;
-    s_tsms_on = true;                              // TS = ASMS(A3) && TSMS(A6)
+    ts_can_publish(true);                          // fresh ECU 0x504 -> TS live
     g_can_mission_id.store(5);
     g_set_mission_ready.store(true);
 }
@@ -161,7 +178,7 @@ static void test_ebs_happy_path(void)
     s_pressure1 = 5.0f; s_pressure2 = 5.0f;      // both tanks > 3 bar
     CHECK(ebs.initSequenceStep() == EBSInitState::WaitTS);
     CHECK(s_sdc_closed == true);                 // SDC closed on entering WaitTS
-    s_asms_on = true; s_tsms_on = true;          // TS = ASMS(A3) && TSMS(A6)
+    s_asms_on = true; ts_can_publish(true);      // ASMS(A3) + fresh ECU 0x504 (#180)
     CHECK(ebs.initSequenceStep() == EBSInitState::CheckActuator1);
     CHECK(s_ebs_pin1 == false);                  // A1 fired (LOW)
     g_can_brake_over_limit.store(true);
@@ -285,6 +302,69 @@ static void test_sm_driving(void)
     CHECK(sm.getState() == ASState::DRIVING);
 }
 
+/* ---- TS now comes from the ECU on CAN 0x504, not the TSMS pin (#180) -----
+ * The whole point of the change is that silence must read as "TS off". These
+ * pin the fail-safe so nobody re-latches a stale TS by accident. */
+
+/* A fresh 0x504 saying "TS down" -> not ready, even with everything else met. */
+static void test_sm_ts_can_false_is_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    drive_ebs_to_done(EbsManager::getInstance());
+    set_drive_preconditions();
+    g_can_brake_over_limit.store(true);
+    ts_can_publish(false);                // ECU: precharge not complete / AIRs open
+    sm.update();
+    CHECK(sm.getSignals().ts_active == false);
+    CHECK(sm.getState() == ASState::OFF);
+}
+
+/* THE regression this change exists for: the ECU goes quiet mid-run. The old
+ * pin-based read could not see this at all (the TSMS stays physically closed
+ * while the AMS opens the AIRs), so the car kept believing the TS was live.
+ * A stale 0x504 must now read as TS-off — which trips Emergency from
+ * READY/DRIVING in as_transition. */
+static void test_sm_ts_stale_is_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    drive_ebs_to_done(EbsManager::getInstance());
+    set_drive_preconditions();
+    g_can_brake_over_limit.store(true);
+    sm.update();
+    CHECK(sm.getSignals().ts_active == true);    // fresh: TS live
+
+    /* ECU stops transmitting. The atomic still holds `true` — only the age
+     * tells us nobody is home. */
+    s_now_ms += TS_ACTIVE_STALE_MS;              // exactly at the window -> stale
+    sm.update();
+    CHECK(g_can_ts_active.load() == true);       // the latched value is UNCHANGED...
+    CHECK(sm.getSignals().ts_active == false);   // ...but we correctly read TS off
+    CHECK(sm.getState() == ASState::OFF);
+}
+
+/* Never received at all (no ECU on the bus) -> TS off, not "assume live". */
+static void test_sm_ts_never_received_is_off(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    sm.update();
+    CHECK(sm.getSignals().ts_active == false);
+}
+
+/* Just inside the window still counts as fresh (no off-by-one that would make
+ * a healthy 100 ms cyclic flicker). */
+static void test_sm_ts_just_fresh_is_on(void)
+{
+    reset_world();
+    StateManager& sm = StateManager::getInstance();
+    ts_can_publish(true);
+    s_now_ms += (TS_ACTIVE_STALE_MS - 1u);
+    sm.update();
+    CHECK(sm.getSignals().ts_active == true);
+}
+
 static void test_sm_preconditions_but_no_brakes_no_r2d_is_off(void)
 {
     reset_world();
@@ -367,6 +447,10 @@ int main(void)
     test_sm_preconditions_without_ebs_done_is_off();
     test_sm_ready();
     test_sm_driving();
+    test_sm_ts_can_false_is_off();
+    test_sm_ts_stale_is_off();
+    test_sm_ts_never_received_is_off();
+    test_sm_ts_just_fresh_is_on();
     test_sm_preconditions_but_no_brakes_no_r2d_is_off();
     test_sm_emergency_on_ebs_active();
     test_sm_emergency_when_finished_but_moving();
