@@ -138,7 +138,8 @@ static constexpr uint32_t READY_DWELL_MS           = 5000u;
  *    angle = steer_norm_to_grados(norm). They are separate so a stale link can
  *    zero the torque WITHOUT commanding steering — a 0x521 zero would snap the
  *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
-static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
+static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due,
+                                      bool inhibit_accel)
 {
     if (cmd.send_steer_angle)
     {
@@ -150,8 +151,15 @@ static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_d
          * DRIVING even when the mission commands no torque (inspection): send
          * the commanded accel, or an explicit 0. That holds the ECU's DV mode
          * with a fresh zero rather than letting the stream go stale (the ECU
-         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true). */
-        Can::sendAccel(cmd.send_accel ? cmd.accel_norm : 0.0f);
+         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true).
+         *
+         * inhibit_accel (the DV_STATUS_STOPPING end-of-mission stop, issue #176)
+         * forces that explicit 0 without silencing the stream: braking against
+         * the mission's own torque would fight the EBS. Steering is deliberately
+         * NOT inhibited — the wheels must stay where the mission put them while
+         * the car stops (a snap to centre mid-stop is exactly what the separate
+         * send_steer / send_steer_angle split above exists to avoid). */
+        Can::sendAccel((cmd.send_accel && !inhibit_accel) ? cmd.accel_norm : 0.0f);
         if (cmd.send_steer)
         {
             Can::sendSteeringAngle(steer_norm_to_grados(cmd.steer_norm));
@@ -327,14 +335,14 @@ extern "C" void StartAppTask(void *argument)
      * masquerade as a flight build. Folds away when all toggles are 0. */
     if (BENCH_STUB_EBS_INIT || BENCH_STUB_EBS_SENSORS || BENCH_STUB_SDC ||
         BENCH_STUB_DVPC || BENCH_STUB_RES || BENCH_STUB_STEERING ||
-        BENCH_STUB_IMU_ROS)
+        BENCH_STUB_IMU_ROS || BENCH_STUB_DV_STOPPING)
     {
         char stub_buf[128];   /* debugQueue element size */
         snprintf(stub_buf, sizeof(stub_buf),
-                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d imu_ros=%d)",
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d imu_ros=%d dv_stopping=%d)",
                  BENCH_STUB_EBS_INIT, BENCH_STUB_EBS_SENSORS, BENCH_STUB_SDC,
                  BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING,
-                 BENCH_STUB_IMU_ROS);
+                 BENCH_STUB_IMU_ROS, BENCH_STUB_DV_STOPPING);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
     }
 
@@ -467,6 +475,25 @@ extern "C" void StartAppTask(void *argument)
 
         as_state = as_next_state(previous_as_state, as_in);
 
+        /* End-of-mission stop (issue #176): the pipeline reports STOPPING when
+         * the mission is over and the car must reach the standstill that AS
+         * FINISHED requires. It fires the EBS with the SDC left closed and the
+         * AS state left in DRIVING, then the pipeline sends FINISHED once the
+         * car has actually stopped — that byte drives the normal DRIVING->
+         * FINISHED transition above, so as_next_state needs no STOPPING rule.
+         *
+         * Folded here (not in as_next_state) because STOPPING changes only the
+         * ACTUATION, never the state. Gated on mission_needs_pipeline for the
+         * same reason dv_emergency is: a standalone mission has no pipeline, so
+         * a stray byte 7 must not brake it. Freshness is folded in so a dead
+         * link cannot hold the brakes on via a stale 7 — and cannot silently
+         * release them either, because dv_lost_driving trips EMERGENCY (which
+         * fires the EBS regardless) on the very same tick. */
+        const bool dv_stopping =
+            (!BENCH_STUB_DV_STOPPING) &&
+            dv_fresh && (dv_status == DV_STATUS_STOPPING) &&
+            as_in.mission_needs_pipeline;
+
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
          * edges:
          *   READY -> DRIVING (GO): energise the steering, (re)start the mission
@@ -545,7 +572,7 @@ extern "C" void StartAppTask(void *argument)
          * init self-test (T15.2) until it completes; once Done/Failed OFF uses
          * the steady rule like every other state. */
         {
-            const AsActuation act = as_actuation(as_state, asms_on);
+            const AsActuation act = as_actuation(as_state, asms_on, dv_stopping);
             const bool off_init_running =
                 asms_on && (as_state == ASState::OFF) &&
                 (ebs_state != EBSInitState::Done) &&
@@ -730,7 +757,8 @@ extern "C" void StartAppTask(void *argument)
                             /* Pipeline missions stream the 0x507 torque paced to
                              * the ECU's 20 ms cycle (torque_tx_due); a mission's
                              * steering-angle channel keeps its own cadence. */
-                            app_apply_mission_command(active_mission->on_tick(&ctx), torque_tx_due);
+                            app_apply_mission_command(active_mission->on_tick(&ctx),
+                                                      torque_tx_due, dv_stopping);
                         }
                         if (active_mission->is_complete != nullptr &&
                             active_mission->is_complete(&ctx))

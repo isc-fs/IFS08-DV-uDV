@@ -21,7 +21,13 @@ react to the other's — the two old micro-ROS actions (`SetMission`,
 | DVPC→uDV | `activate_steering` | `std_srvs/SetBool` | service | serve (enable steering motor) |
 
 Byte values: AS `OFF=0 EMERGENCY=1 READY=2 DRIVING=3 FINISHED=4`;
-DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6`.
+DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6 STOPPING=7`.
+
+Unknown / unhandled `dv/status` bytes are ignored by design: the firmware only
+compares the byte for equality against the values it acts on, so an unrecognised
+one changes no actuation and no AS state — it merely keeps the heartbeat fresh.
+`RUNNING=3` has always relied on this (nothing matches it explicitly). That is
+what lets either side add a byte without a lockstep flash.
 
 `ctrl/cmd`: `linear.x` = throttle [-1,1], `angular.z` = steering [-1,1].
 
@@ -36,7 +42,15 @@ DV `IDLE=0 PREPARING=1 READY=2 RUNNING=3 FINISHED=4 EMERGENCY=5 FAILED=6`.
 4. DVPC activates → `dv/status = RUNNING` and streams `ctrl/cmd`. The
    firmware actuates it **only while AS Driving** and zeroes it if the
    stream goes stale (`DV_CTRL_CMD_STALE_MS`).
-5. `dv/status = FINISHED` → AS Finished (latches until ASMS off).
+5. *(optional)* `dv/status = STOPPING` → the **end-of-mission stop** (#176):
+   the uDV fires the EBS and zeroes the torque **with the SDC left closed and
+   the AS state left in Driving**. It is not an emergency — it exists only so
+   the car can reach the standstill AS Finished requires. The pipeline follows
+   with `FINISHED` once the car has actually stopped. Gated on a pipeline
+   mission; `BENCH_STUB_DV_STOPPING=1` makes it a no-op for bench work.
+   **This is not a service brake** — the EBS is binary, so it must only be used
+   for the final stop, never to modulate speed during a run.
+6. `dv/status = FINISHED` → AS Finished (latches until ASMS off).
    `dv/status = EMERGENCY`/`FAILED`, RES e-stop, TS loss, or a **stale
    `dv/status` mid-run** → AS Emergency + EBS.
 

@@ -57,6 +57,15 @@
  *     UNCALIBRATED steering that must not be driven. Calibration (0x30) is NOT
  *     suppressed — that path must still work to bring the steering up.
  *
+ *   BENCH_STUB_DV_STOPPING — ignore the /dv/status DV_STATUS_STOPPING byte
+ *     (7, issue #176) for ACTUATION only: the byte is still received, still
+ *     keeps the pipeline heartbeat fresh, and still shows up on /debug + pit-diag,
+ *     but it does NOT fire the EBS and does NOT inhibit the torque. For bench /
+ *     rolling-road work where the end-of-mission stop handshake must be exercised
+ *     without dumping the air tanks (each stop costs a recharge) — and for the
+ *     first on-car runs, where the pipeline can be allowed to emit byte 7 while
+ *     the uDV still only coasts. Turn it OFF to get the real stop.
+ *
  *   BENCH_STUB_IMU_ROS — suppress ONLY the ROS `/imu` publish (ros_task.c).
  *     For the `prerun/` branch type: replaying a recorded rosbag ON the car so
  *     the bag's `/imu` is the only source (else the live publish and the bag
@@ -89,6 +98,9 @@
 #endif
 #ifndef BENCH_STUB_IMU_ROS
 #define BENCH_STUB_IMU_ROS     0
+#endif
+#ifndef BENCH_STUB_DV_STOPPING
+#define BENCH_STUB_DV_STOPPING 0
 #endif
 
 /* EBS_INIT skips the whole sequence (no actuation); EBS_SENSORS runs it for real

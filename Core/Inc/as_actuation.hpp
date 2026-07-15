@@ -42,11 +42,35 @@ struct AsActuation {
  *  - The AS SDC is OPENED in the terminal safe states FINISHED and EMERGENCY,
  *    which de-energises the Tractive System (TSAL returns to green) and fires
  *    the EBS via the fail-safe path. (Only reachable with ASMS on.)
+ *
+ * @param dv_stopping  the pipeline commanded the end-of-mission stop
+ *   (/dv/status == DV_STATUS_STOPPING, issue #176) and it applies to the run.
+ *   The caller folds in freshness AND mission_needs_pipeline, the same way
+ *   as_transition.hpp's dv_* inputs already fold in freshness — so a stale
+ *   link or a standalone mission reads false here.
+ *
+ *   It fires the EBS *while staying in DRIVING with the SDC closed*, which is
+ *   the one combination the AS state table has no row for. That is intentional
+ *   and is NOT a new electrical capability: D1/D2 (EBS actuators) and D4 (AS
+ *   SDC) are independent GPIOs, and "brakes fired + SDC closed" is already the
+ *   steady state of AS READY and of post-init AS OFF. It exists only so the car
+ *   can reach the standstill that AS FINISHED requires — not as a service brake
+ *   (the EBS is binary; there is nothing to modulate).
+ *
+ *   ORDERING NOTE: ASMS-off still wins. A human pushing the car with the ASMS
+ *   off must get released brakes no matter what the pipeline is saying, so
+ *   `!asms_on` stays first in the OR and dv_stopping can never override it.
+ *
+ *   A dv_stopping that goes stale mid-stop does NOT silently release the
+ *   brakes: as_next_state's dv_lost_driving rule trips EMERGENCY on the same
+ *   tick (it runs before this in app_task's loop), and EMERGENCY fires the EBS
+ *   anyway. So the brakes stay on through the failure.
  */
-inline AsActuation as_actuation(ASState state, bool asms_on)
+inline AsActuation as_actuation(ASState state, bool asms_on, bool dv_stopping)
 {
     AsActuation a{};
-    a.ebs_release = (!asms_on) || (state == ASState::DRIVING);
+    a.ebs_release = (!asms_on) ||
+                    (state == ASState::DRIVING && !dv_stopping);
     a.sdc_open    = asms_on &&
                     (state == ASState::FINISHED || state == ASState::EMERGENCY);
     return a;
