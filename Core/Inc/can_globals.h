@@ -40,7 +40,35 @@ extern std::atomic<bool> g_can_r2d;             /* ECU 0x511 DV R2D confirm */
 extern std::atomic<bool> g_imu_vehicle_standstill; /* |rpm| < thresh (ECU 0x506) */
 extern std::atomic<int>  g_can_mission_id;
 extern std::atomic<bool> g_can_listen_go;
+/* ECU 0x504 VCU_ts_active byte0: the TRACTIVE SYSTEM is live. The ECU derives
+ * it from its own ok_precharge / HV-live view (AMS 0x020 ACU_ok_precharge, set
+ * iff the AMS FSM is in Run|Charge), so it means "precharge complete, AIRs
+ * closed" — NOT "somebody flipped the TSMS". Read it through
+ * can_ts_active_fresh(), never raw: a held-stale value is exactly the failure
+ * this replaced. */
 extern std::atomic<bool> g_can_ts_active;       /* ECU 0x504 */
+/* hardware_io_now_ms() tick of the last 0x504 (0 = never received). MUST be
+ * stamped with the SAME clock can_ts_active_fresh() compares against — HAL_GetTick
+ * and osKernelGetTickCount have different origins (HAL starts at HAL_Init, the
+ * RTOS tick at scheduler start), so mixing them would offset the age by the
+ * whole pre-scheduler init and read permanently stale. */
+extern std::atomic<uint32_t> g_can_ts_active_stamp_ms;
+/* 0x504 is a 100 ms cyclic, so 400 ms = 4 missed frames: jitter-safe and under
+ * the FS-Rules T11.9.4 500 ms detect-and-safe cap. Same window and reasoning as
+ * DV_STATUS_STALE_MS on the pipeline heartbeat. */
+#define TS_ACTIVE_STALE_MS 400u
+
+/**
+ * @brief  True iff a FRESH ECU 0x504 says the tractive system is live.
+ *
+ * Fail-safe by construction: never received, stale, or byte0 == 0 all read
+ * false. A false while AS READY/DRIVING trips Emergency (as_transition), which
+ * is the intended response to "the ECU stopped telling us the TS is up".
+ *
+ * @param now_ms MUST come from hardware_io_now_ms() — the clock the 0x504 stamp
+ *               is taken with (see g_can_ts_active_stamp_ms).
+ */
+bool can_ts_active_fresh(uint32_t now_ms);
 /* ECU 0x505 verdict: brake pressure above the hard-braking limit
  * (config::BrakeDvHardRaw, ECU-owned). Replaces the old float32 "bar"
  * reading — the ECU sends the verdict, not the value. */

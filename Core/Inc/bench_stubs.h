@@ -57,6 +57,13 @@
  *     UNCALIBRATED steering that must not be driven. Calibration (0x30) is NOT
  *     suppressed — that path must still work to bring the steering up.
  *
+ *   BENCH_STUB_TS — while NO real ECU 0x504 has arrived, can_ts_active_fresh()
+ *     reports the tractive system LIVE so a bench with no ECU can reach AS READY.
+ *     Goes inert the moment a real 0x504 lands (a real ECU saying "TS down" then
+ *     always wins). REQUIRED for any desk bench without the ACU bus now that TS
+ *     comes from CAN and not the TSMS pin — without it the state machine sees TS
+ *     permanently off. Do NOT set on the car: it would mask a genuinely dead ECU.
+ *
  *   BENCH_STUB_IMU_ROS — suppress ONLY the ROS `/imu` publish (ros_task.c).
  *     For the `prerun/` branch type: replaying a recorded rosbag ON the car so
  *     the bag's `/imu` is the only source (else the live publish and the bag
@@ -89,6 +96,9 @@
 #endif
 #ifndef BENCH_STUB_IMU_ROS
 #define BENCH_STUB_IMU_ROS     0
+#endif
+#ifndef BENCH_STUB_TS
+#define BENCH_STUB_TS          0
 #endif
 
 /* EBS_INIT skips the whole sequence (no actuation); EBS_SENSORS runs it for real
