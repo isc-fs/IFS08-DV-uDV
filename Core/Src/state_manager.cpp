@@ -23,10 +23,31 @@ void StateManager::updateSignals()
 {
     // Read from HardwareIO (digital inputs) and CAN atomics
     signals_.asms_on = hardware_io_read_asms_on();
-    // TS active is sensed locally on the uDV board: TSMS (A6) AND ASMS (A3)
-    // both HIGH. (Previously waited for CAN 0x504 TS_ACTIVE, which nothing on
-    // the car transmits, so the state machine saw TS permanently off.)
-    signals_.ts_active = signals_.asms_on && hardware_io_read_tsms_on();
+    /* TS active comes from the ECU on CAN 0x504 (VCU_ts_active), NOT from a
+     * local pin.
+     *
+     * The old local read was `asms_on && hardware_io_read_tsms_on()` (TSMS on
+     * A6). That measures the wrong thing: the TSMS is a SWITCH POSITION. It
+     * says a human closed the master switch and 24 V is present on the shutdown
+     * line — it says nothing about whether the tractive system is actually
+     * energised. Precharge can still be in progress, and the AMS can open the
+     * AIRs (cell fault, IMD, temperature) with the TSMS still physically closed.
+     *
+     * That gap is the dangerous direction: with the pin, an AMS-initiated TS
+     * loss mid-run is INVISIBLE to us, so the state machine keeps believing the
+     * TS is live and keeps commanding torque instead of tripping the
+     * `!ts_on while READY/DRIVING -> EMERGENCY` rule in as_transition.hpp.
+     *
+     * 0x504 carries the ECU's own ok_precharge / HV-live view (chained from the
+     * AMS's 0x020 ACU_ok_precharge, set iff its FSM is in Run|Charge), so it
+     * means precharge complete / AIRs closed — the real thing. The historical
+     * comment here said "nothing on the car transmits 0x504"; that was true once
+     * and is now stale — the ECU sends it at 100 ms, ungated
+     * (IFS08-CE-ECU control_task.cpp, vcu_ts_active.def). See uDV #180 / ECU isc-fs/IFS08-CE-ECU#127.
+     *
+     * ASMS is NOT folded in any more: it is its own signal and the AS
+     * transition already consumes it separately (as_in.asms_on). */
+    signals_.ts_active = can_ts_active_fresh(hardware_io_now_ms());
     // sdc_res_open comes via CAN 0x506 ("RES opened the SDC"). On-board derivation
     // from A1=RES_1_IN was considered but rejected (only 1 RES channel reaches the
     // MCU). See docs/STATE_MACHINE_INPUTS.md
@@ -41,7 +62,16 @@ void StateManager::updateSignals()
                                    es == EBSInitState::WaitInterActuatorCheck ||
                                    es == EBSInitState::CheckActuator2);
     signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
-    signals_.abs_checks_ok = ebs_.ASBChecksOK();
+    /* Raw ASB stored-energy read: BOTH tanks above 3 bar (A5/A4). Read ONCE per
+     * tick and reused for abs_checks_ok below — checkStoragePressures() does two
+     * 640.5-cycle ADC conversions, and calling ASBChecksOK() separately would
+     * double that for no new information. Raw on purpose: app_task debounces it
+     * before it reaches the AS transition (a single noisy sample must not latch
+     * Emergency). */
+    signals_.asb_pressure_ok = ebs_.checkStoragePressures();
+    /* Identical to the previous ebs_.ASBChecksOK(), inlined to reuse the read
+     * above (ASBChecksOK == init Done && checkStoragePressures). */
+    signals_.abs_checks_ok = (es == EBSInitState::Done) && signals_.asb_pressure_ok;
     // brakes_engaged comes via CAN 0x505 (VCU_brake_over_limit): the ECU's
     // binary verdict that its brake sensor reads above the hard-braking
     // limit (BrakeDvHardRaw, ECU-owned — no uDV-side threshold to tune).

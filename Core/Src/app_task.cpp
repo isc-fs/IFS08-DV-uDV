@@ -26,6 +26,7 @@ extern "C" {
 #include "state_manager.hpp"
 #include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
 #include "as_actuation.hpp"    /* pure safe-state actuation decision (host-tested) */
+#include "as_stop_latch.hpp"   /* pure DV_STOPPING debounce+latch (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -75,19 +76,74 @@ static MissionCtx app_build_mission_ctx(uint32_t now_ms, uint32_t elapsed_ms)
  * every torque/steer TX to it (the control loop itself runs ~1 kHz and
  * would otherwise flood the shared ACU bus). */
 static constexpr uint32_t TORQUE_TX_PERIOD_MS      = 20u;
-/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1]; the steering
- * controller takes an absolute angle on 0x521 (0.01 deg units). Full-lock
- * span for the conversion, kept UNDER the steering controller's 70 deg
- * cutoff (PIPELINE_INTERFACE.md G3) with margin.
- * TODO(commission, #71): measure the real full-lock angle + steering ratio
- * and the sign convention (ROS +z = CCW/left) on the car. */
-static constexpr float    STEER_FULL_LOCK_DEG      = 65.0f;
+/* Pipeline steering: /ctrl/cmd angular.z is normalised [-1..1], where +/-1 is
+ * the pipeline's max road-wheel angle (control_node max_steer_deg). The DV
+ * steering controller (0x521) takes an absolute angle in degrees in its own
+ * output-shaft frame ("grados" -> Ir_a_Grados in IFS08-DV-STEERING). The column
+ * mechanical limit is +/-100 deg, so grados is clamped there. Convert the
+ * normalised road-wheel command through the real IFS-08 steering kinematics:
+ *
+ *   grados = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN
+ *
+ * STEERING_RATIO (volante:rueda) from the rack (87.9 mm/rev): the two candidate
+ * geometries are 72.1 deg wheel = 5.0:1 and 84.5 deg wheel = 4.3:1. We take the
+ * MORE CONSERVATIVE 5.0:1 (smaller road-wheel authority: 18.2 vs 21.1 deg ceiling).
+ * MOTOR_TO_COLUMN = 1.1 (column:motor 1:1.1) is the stage between DV-STEERING's
+ * output shaft and the column that its internal REDUCTORA=20 does NOT model;
+ * if that 1.1 is already folded into DV-STEERING's REDUCTORA, set it to 1.0.
+ *
+ * Replaces the old norm * STEER_FULL_LOCK_DEG(65) placeholder (#71): 65 baked in
+ * a column:wheel ratio of only 65/28 = 2.3 vs the real ~5.0, so the wheels
+ * turned less than half the commanded angle and the LWS (column) diverged from
+ * the road-wheel command on the bench.
+ *
+ * Closed set: the +/-100 column clamp / effective ratio E=5.5 gives a road-wheel
+ * ceiling of 100/5.5 = ~18.2 deg. MAX_STEER_ROADWHEEL_DEG is set to that so
+ * norm=1 lands exactly on the clamp (linear across the whole range, no early
+ * saturation, reaches the mechanical limit at full command).
+ *
+ * Sign convention (ROS +z = CCW/left) is handled in IFS08-DV-STEERING, not here.
+ *
+ * OPEN (uDV team, #71):
+ *   - pipeline: control_node max_steer_deg MUST be set to the SAME 18.2 (not 28)
+ *     or norm's meaning diverges — the car can't exceed ~18.2 deg road-wheel;
+ *   - if MOTOR_TO_COLUMN(1.1) is already folded into DV-STEERING's REDUCTORA,
+ *     E=5.0 -> ceiling 20.0, so set both MAX_STEER_ROADWHEEL_DEG and the
+ *     pipeline max_steer_deg to 20.0 instead. */
+static constexpr float    MAX_STEER_ROADWHEEL_DEG  = 18.2f;  /* = clamp/E (100/5.5); MUST match control_node max_steer_deg */
+static constexpr float    STEERING_RATIO           = 5.0f;   /* column : road-wheel (72.1 deg) */
+static constexpr float    MOTOR_TO_COLUMN          = 1.1f;   /* DV-STEERING output : column (E = 5.0*1.1 = 5.5) */
+static constexpr float    STEER_GRADOS_MAX_DEG     = 100.0f; /* column mechanical limit +/-100 deg */
+
+/* Normalised road-wheel command [-1..1] -> DV-STEERING "grados" (0x521). */
+static inline float steer_norm_to_grados(float norm)
+{
+    float g = norm * MAX_STEER_ROADWHEEL_DEG * STEERING_RATIO * MOTOR_TO_COLUMN;
+    if (g >  STEER_GRADOS_MAX_DEG) g =  STEER_GRADOS_MAX_DEG;
+    if (g < -STEER_GRADOS_MAX_DEG) g = -STEER_GRADOS_MAX_DEG;
+    return g;
+}
 /* DV ready-to-drive request (0x510) retry period until the ECU confirms
  * on 0x511 (acyclic; the ECU latches the edge for the drive cycle). */
 static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
 /* Mandated minimum time in AS READY before a RES GO may be honoured
  * (FS-Rules AS-Ready dwell). Gates READY->DRIVING via as_in.ready_dwell_elapsed. */
 static constexpr uint32_t READY_DWELL_MS           = 5000u;
+/* ASB low-pressure debounce: the tanks must read below 3 bar CONTINUOUSLY for
+ * this long before the AS transition is told the stored energy is gone.
+ *
+ * Needed because the trip is expensive and one-way: !asb_pressure_ok while
+ * armed raises Emergency, which LATCHES until ASMS-off — so a single spurious
+ * low sample ends the run. The pressure signal is DC behind a 10k/1k divider
+ * and the loop samples it at ~1 kHz, so real noise is uncorrelated sample to
+ * sample while a genuine leak/vent lasts far longer than this window. (ADC3
+ * channel-to-channel crosstalk on exactly these taps is not hypothetical — see
+ * the long-sample-time fix in hardware_io.c.)
+ *
+ * 100 ms is ~100 consecutive low samples: uncrossable by noise, and far inside
+ * the FS-Rules T11.9.4 500 ms detect-and-safe bound. It costs nothing on a real
+ * loss — the tanks cannot refill in 100 ms. */
+static constexpr uint32_t ASB_LOW_DEBOUNCE_MS       = 100u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
@@ -95,10 +151,11 @@ static constexpr uint32_t READY_DWELL_MS           = 5000u;
  *    cadence (inspection sweep / EBS-test hold).
  *  - send_accel / send_steer: the pipeline drive, paced by drive_tx_due to the
  *    ECU's 20 ms torque cycle. send_accel -> 0x507 torque; send_steer -> 0x521
- *    angle = norm * STEER_FULL_LOCK_DEG. They are separate so a stale link can
+ *    angle = steer_norm_to_grados(norm). They are separate so a stale link can
  *    zero the torque WITHOUT commanding steering — a 0x521 zero would snap the
  *    wheel to center mid-corner (the normalised 0x508 steer frame was retired). */
-static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due)
+static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_due,
+                                      bool inhibit_accel)
 {
     if (cmd.send_steer_angle)
     {
@@ -110,11 +167,18 @@ static void app_apply_mission_command(const MissionCommand& cmd, bool drive_tx_d
          * DRIVING even when the mission commands no torque (inspection): send
          * the commanded accel, or an explicit 0. That holds the ECU's DV mode
          * with a fresh zero rather than letting the stream go stale (the ECU
-         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true). */
-        Can::sendAccel(cmd.send_accel ? cmd.accel_norm : 0.0f);
+         * treats stale as 0 anyway, but an explicit 0 keeps dv_fresh true).
+         *
+         * inhibit_accel (the DV_STATUS_STOPPING end-of-mission stop, issue #176)
+         * forces that explicit 0 without silencing the stream: braking against
+         * the mission's own torque would fight the EBS. Steering is deliberately
+         * NOT inhibited — the wheels must stay where the mission put them while
+         * the car stops (a snap to centre mid-stop is exactly what the separate
+         * send_steer / send_steer_angle split above exists to avoid). */
+        Can::sendAccel((cmd.send_accel && !inhibit_accel) ? cmd.accel_norm : 0.0f);
         if (cmd.send_steer)
         {
-            Can::sendSteeringAngle(cmd.steer_norm * STEER_FULL_LOCK_DEG);
+            Can::sendSteeringAngle(steer_norm_to_grados(cmd.steer_norm));
         }
     }
 }
@@ -240,6 +304,9 @@ extern "C" void StartAppTask(void *argument)
     ASState as_state = ASState::OFF;
     ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
     uint32_t ready_start_time = 0;
+    /* Tick the ASB tanks first read below 3 bar; 0 = currently reading ok.
+     * Drives the ASB_LOW_DEBOUNCE_MS window (see the read in the loop). */
+    uint32_t asb_low_since_ms = 0;
     int last_mission_id = -1;
     bool set_mission_sent = false;
     bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
@@ -262,6 +329,10 @@ extern "C" void StartAppTask(void *argument)
     uint32_t       mission_time     = 0;
     bool           mission_complete = false;
     const Mission* active_mission   = nullptr;
+    /* DV_STOPPING sticky latch (#176). Once armed during a run it holds until
+     * the run leaves DRIVING (stop_latch_next clears it there). Persists across
+     * loop iterations — the whole point is that a 7->3 revert can't lift it. */
+    bool           dv_stop_latched  = false;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -286,13 +357,15 @@ extern "C" void StartAppTask(void *argument)
      * itself on /debug once at boot — a stubbed image must never
      * masquerade as a flight build. Folds away when all toggles are 0. */
     if (BENCH_STUB_EBS_INIT || BENCH_STUB_EBS_SENSORS || BENCH_STUB_SDC ||
-        BENCH_STUB_DVPC || BENCH_STUB_RES || BENCH_STUB_STEERING)
+        BENCH_STUB_DVPC || BENCH_STUB_RES || BENCH_STUB_STEERING ||
+        BENCH_STUB_IMU_ROS || BENCH_STUB_TS || BENCH_STUB_DV_STOPPING)
     {
-        char stub_buf[128];   /* debugQueue element size */
+        char stub_buf[128];   /* debugQueue element size (116 chars all-on) */
         snprintf(stub_buf, sizeof(stub_buf),
-                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d)",
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d imu_ros=%d ts=%d dv_stopping=%d)",
                  BENCH_STUB_EBS_INIT, BENCH_STUB_EBS_SENSORS, BENCH_STUB_SDC,
-                 BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING);
+                 BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING,
+                 BENCH_STUB_IMU_ROS, BENCH_STUB_TS, BENCH_STUB_DV_STOPPING);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
     }
 
@@ -387,6 +460,18 @@ extern "C" void StartAppTask(void *argument)
         as_in.res_ok        = res_ok;
         as_in.steer_emergency = steer_emergency;
         as_in.ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
+        /* ASB stored energy, debounced (see ASB_LOW_DEBOUNCE_MS). Stays "ok"
+         * until the tanks have read low CONTINUOUSLY for the window; any single
+         * good sample re-arms it. One-way in the dangerous direction only: once
+         * the window elapses the transition raises Emergency, which latches. */
+        {
+            const bool asb_raw_ok = state_mgr.getSignals().asb_pressure_ok;
+            if (asb_raw_ok)                 asb_low_since_ms = 0u;
+            else if (asb_low_since_ms == 0u) asb_low_since_ms = now_ms;
+            as_in.asb_pressure_ok =
+                asb_raw_ok ||
+                ((uint32_t)(now_ms - asb_low_since_ms) < ASB_LOW_DEBOUNCE_MS);
+        }
         as_in.dv_fresh      = dv_fresh;
         as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);
         as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
@@ -402,6 +487,10 @@ extern "C" void StartAppTask(void *argument)
         as_in.mission_needs_pipeline = (gate_mission != nullptr) && gate_mission->needs_pipeline;
         as_in.mission_complete       = mission_complete;
         as_in.mission_valid          = (mission != nullptr);
+        /* Standstill (ECU 0x506 rpm) — lets an end-of-mission FINISH win over the
+         * ASB low-pressure trip once the car is actually stopped (see
+         * as_transition.hpp finishing_at_standstill). */
+        as_in.vehicle_standstill     = state_mgr.getSignals().vehicle_standstill;
         /* FS-Rules AS-Ready dwell: a GO is only honoured after the car has been
          * in READY for >= READY_DWELL_MS. ready_start_time is stamped on the
          * READY-entry tick below (0 while not in READY), so this reads false on
@@ -424,6 +513,42 @@ extern "C" void StartAppTask(void *argument)
         }
 
         as_state = as_next_state(previous_as_state, as_in);
+
+        /* End-of-mission stop (issue #176): the pipeline reports STOPPING when
+         * the mission is over and the car must reach the standstill that AS
+         * FINISHED requires. It fires the EBS with the SDC left closed and the
+         * AS state left in DRIVING, then the pipeline sends FINISHED once the
+         * car has actually stopped — that byte drives the normal DRIVING->
+         * FINISHED transition above, so as_next_state needs no STOPPING rule.
+         *
+         * Folded here (not in as_next_state) because STOPPING changes only the
+         * ACTUATION, never the state. Gated on mission_needs_pipeline for the
+         * same reason dv_emergency is: a standalone mission has no pipeline, so
+         * a stray byte 7 must not brake it. Freshness is folded in so a dead
+         * link cannot hold the brakes on via a stale 7 — and cannot silently
+         * release them either, because dv_lost_driving trips EMERGENCY (which
+         * fires the EBS regardless) on the very same tick. */
+        /* Debounced ARM request for the end-of-mission stop. All three must
+         * hold: not stubbed off, fresh link, a pipeline mission, AND at least
+         * DV_STOPPING_MIN_STREAK consecutive STOPPING messages (g_dv_stopping_streak,
+         * counted at the message boundary in ros_set_dv_status — a loop-tick
+         * count would pass on one spurious byte, see that comment). The current
+         * byte need not still be STOPPING: the streak already proves it was, and
+         * the latch below makes the decision sticky regardless. */
+        const bool dv_stop_arm =
+            (!BENCH_STUB_DV_STOPPING) &&
+            dv_fresh && as_in.mission_needs_pipeline &&
+            (g_dv_stopping_streak.load() >= DV_STOPPING_MIN_STREAK);
+
+        /* Sticky latch: once armed during a run the stop holds until the run
+         * ends (leaving DRIVING clears it — see stop_latch_next). This is what
+         * makes byte 7 un-releasable: a 7->3 revert or a 7<->3 chatter cannot
+         * lift the brakes or vent the tanks. dv_stop_latched persists across
+         * loop iterations (declared with the other run state above). */
+        dv_stop_latched = stop_latch_next(dv_stop_latched,
+                                          as_state == ASState::DRIVING,
+                                          dv_stop_arm);
+        const bool dv_stopping = dv_stop_latched;
 
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
          * edges:
@@ -459,6 +584,11 @@ extern "C" void StartAppTask(void *argument)
         if (previous_as_state == ASState::DRIVING && as_state != ASState::DRIVING)
         {
             active_mission = nullptr;
+            /* Reset the STOPPING streak so the NEXT run must earn its own fresh
+             * DV_STOPPING_MIN_STREAK before it can brake — the debounce is
+             * per-run, not carried across missions. (The latch itself already
+             * cleared via stop_latch_next when we left DRIVING.) */
+            g_dv_stopping_streak.store(0u);
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);
@@ -503,7 +633,7 @@ extern "C" void StartAppTask(void *argument)
          * init self-test (T15.2) until it completes; once Done/Failed OFF uses
          * the steady rule like every other state. */
         {
-            const AsActuation act = as_actuation(as_state, asms_on);
+            const AsActuation act = as_actuation(as_state, asms_on, dv_stopping);
             const bool off_init_running =
                 asms_on && (as_state == ASState::OFF) &&
                 (ebs_state != EBSInitState::Done) &&
@@ -688,7 +818,8 @@ extern "C" void StartAppTask(void *argument)
                             /* Pipeline missions stream the 0x507 torque paced to
                              * the ECU's 20 ms cycle (torque_tx_due); a mission's
                              * steering-angle channel keeps its own cadence. */
-                            app_apply_mission_command(active_mission->on_tick(&ctx), torque_tx_due);
+                            app_apply_mission_command(active_mission->on_tick(&ctx),
+                                                      torque_tx_due, dv_stopping);
                         }
                         if (active_mission->is_complete != nullptr &&
                             active_mission->is_complete(&ctx))

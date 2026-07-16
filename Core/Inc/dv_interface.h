@@ -56,6 +56,20 @@ extern "C" {
 #define DV_STATUS_FINISHED  4u   /* mission complete                    */
 #define DV_STATUS_EMERGENCY 5u   /* pipeline raised EBS                 */
 #define DV_STATUS_FAILED    6u   /* prepare/activate error              */
+/* End-of-mission stop (issue #176). The mission is over and the car must be
+ * brought to a standstill so AS Finished — which the rules only allow at a
+ * standstill — becomes reachable. NOT an emergency: the SDC stays CLOSED and
+ * the AS state stays DRIVING; the pipeline follows with DV_STATUS_FINISHED
+ * once the car has actually stopped, and that byte performs the normal
+ * DRIVING->FINISHED transition (EBS + SDC open).
+ *
+ * This is deliberately NOT a service brake. The IFS08 has no pipeline-
+ * controllable service brake; the only brake pneumatics are the two EBS
+ * actuators, which are binary (fire / release, no modulation). So this byte
+ * buys exactly one thing — the final stop that closes out a mission — and must
+ * not be used to modulate speed during a run. See docs/PIPELINE_INTERFACE.md.
+ */
+#define DV_STATUS_STOPPING  7u   /* brake to standstill, SDC stays closed */
 
 /* Interface topic / service names (empty-namespace node cubemx_node). */
 #define DV_TOPIC_ASSI_STATE   "assi/state"

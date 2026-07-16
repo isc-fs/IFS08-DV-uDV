@@ -23,6 +23,8 @@ struct StateManagerSignals {
     bool sdc_res_open = false;      // SDC resistor open (can)
     bool ebs_activated = false;     // EBS activated (hardware io)
     bool abs_checks_ok = false;     // All brake system checks passed (hardware io)
+    bool asb_pressure_ok = false;   // BOTH ASB tanks > 3 bar (A5/A4), RAW/undebounced
+                                    // — app_task debounces before the AS transition
     bool brakes_engaged = false;    // Brakes actively engaged (can)
     bool mission_selected = false;  // Mission selected and set ready (ros)
     bool r2d = false;               // Ready to Drive signal (can)

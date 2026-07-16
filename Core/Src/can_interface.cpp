@@ -1,5 +1,6 @@
 #include "can_interface.hpp"
 #include "as_state.h"
+#include "hardware_io.h"   /* hardware_io_now_ms — the 0x504 TS stamp clock */
 #include "bench_stubs.h"   /* BENCH_STUB_RES (all 0 on dev) */
 #include "pit_diag.h"      /* CAN_ID_PITDIAG_ARM + pit_diag_arm_from_can */
 #include <cstring>
@@ -406,6 +407,12 @@ void rx_dispatch(const can_msg_t *msg)    //CAN FDCAN3
     case CAN_ID_TS_ACTIVE:               /* 0x504 — byte0 bool */
         if (msg->dlc >= 1U) {
             g_can_ts_active.store(msg->data[0] != 0U);
+            /* Stamp with hardware_io_now_ms() — the SAME clock
+             * can_ts_active_fresh() compares against. It is deliberately NOT
+             * osKernelGetTickCount() (which the RES stamp below uses): the two
+             * have different origins, and mixing them here would make every
+             * 0x504 look permanently stale. */
+            g_can_ts_active_stamp_ms.store(hardware_io_now_ms());
         }
         break;
 

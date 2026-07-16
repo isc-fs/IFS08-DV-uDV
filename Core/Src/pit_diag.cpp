@@ -80,7 +80,10 @@ static inline uint8_t stub_mask(void)
                      (BENCH_STUB_DVPC        ? 0x02u : 0u) |
                      (BENCH_STUB_EBS_SENSORS ? 0x04u : 0u) |
                      (BENCH_STUB_SDC         ? 0x08u : 0u) |
-                     (BENCH_STUB_STEERING    ? 0x10u : 0u));
+                     (BENCH_STUB_STEERING    ? 0x10u : 0u) |
+                     (BENCH_STUB_IMU_ROS     ? 0x20u : 0u) |
+                     (BENCH_STUB_TS          ? 0x40u : 0u) |
+                     (BENCH_STUB_DV_STOPPING ? 0x80u : 0u));
 }
 
 /* ---- frame builders ----------------------------------------------------- */

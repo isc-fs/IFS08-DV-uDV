@@ -52,8 +52,8 @@ MOCKS       := mocks
 SENS_CFLAGS := -std=c11 -I$(MOCKS) -I$(CORE_INC) -Wall -Wextra -g -O0
 
 BINS := test_safety_eval test_state_machine test_rules_compliance \
-        test_as_transition test_as_actuation test_missions test_attitude \
-        test_bmi088_convert
+        test_as_transition test_as_actuation test_as_stop_latch test_missions \
+        test_attitude test_bmi088_convert
 
 # Mission suite — pure mission bodies + registry, no HAL/RTOS/CAN. Strict flags
 # (-Werror): new dependency-free code, held to the same bar as safety_eval.
@@ -92,6 +92,10 @@ test_as_transition: test_as_transition.cpp
 test_as_actuation: test_as_actuation.cpp
 	$(CXX) $(SM_CXXFLAGS) -o $@ test_as_actuation.cpp
 
+# Header-only as_stop_latch.hpp (DV_STOPPING debounce+latch). No deps at all.
+test_as_stop_latch: test_as_stop_latch.cpp
+	$(CXX) $(SM_CXXFLAGS) -o $@ test_as_stop_latch.cpp
+
 # ---- suite 4b: mission registry + per-mission bodies --------------------
 # Pure modules (mission.h only): link the real mission sources directly, no
 # stubs. Strict CXXFLAGS with -Werror.
@@ -116,6 +120,7 @@ test: $(BINS)
 	@echo "=== test_rules_compliance ==="; ./test_rules_compliance
 	@echo "=== test_as_transition ===";    ./test_as_transition
 	@echo "=== test_as_actuation ===";     ./test_as_actuation
+	@echo "=== test_as_stop_latch ===";    ./test_as_stop_latch
 	@echo "=== test_missions ===";         ./test_missions
 	@echo "=== test_attitude ===";         ./test_attitude
 	@echo "=== test_bmi088_convert ===";   ./test_bmi088_convert
