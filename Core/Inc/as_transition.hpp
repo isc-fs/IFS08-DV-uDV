@@ -79,26 +79,37 @@ struct AsInputs {
  */
 inline ASState as_next_state(ASState prev, const AsInputs& in)
 {
+    /* ARMED = the two states in which the car is committed to (or about to)
+     * move under autonomous control. The safe-state triggers that only make
+     * sense once armed (TS loss, ASB drained, a pipeline-raised emergency) all
+     * gate on this — named once so the three can never drift apart. OFF and the
+     * two terminal states are handled separately above/within. */
+    const bool armed = (prev == ASState::DRIVING) || (prev == ASState::READY);
+
+    /* The mission has ended: a standalone mission self-finished (e.g. the
+     * inspection sweep timer) OR a pipeline mission's mission_control reported
+     * FINISHED. This is the DRIVING->FINISHED trigger; it is ALSO the core of
+     * finishing_at_standstill below, so it is named once. */
+    const bool mission_finishing =
+        in.mission_complete || (in.mission_needs_pipeline && in.dv_finished);
+
     /* Pipeline heartbeat lost while driving (link / DVPC dead) — only for a
      * mission that actually depends on the pipeline. A standalone open-loop
      * mission (inspection / EBS test) has no heartbeat to lose. */
     const bool dv_lost_driving =
         (prev == ASState::DRIVING) && in.mission_needs_pipeline && !in.dv_fresh;
 
-    /* A genuine end-of-mission finish, AT STANDSTILL: the mission is over
-     * (standalone self-finish or pipeline FINISHED) and the car is stopped.
-     * At that point FINISHED wins over the ASB low-pressure trip below — the
-     * braking that ended the mission may itself have drawn the tanks under 3
-     * bar, and a completed mission that stopped the car should report Finished,
-     * not Emergency. This only changes the REPORTED terminal state, never the
-     * actuation: as_actuation fires the EBS + opens the SDC in BOTH FINISHED
-     * and EMERGENCY, and the car is already stopped. It yields ONLY the ASB
-     * trip — a real emergency (e-stop, steering grave-fault, TS loss, pipeline
-     * emergency / lost heartbeat) still forces Emergency even here. */
+    /* A genuine end-of-mission finish, AT STANDSTILL: the mission is over and
+     * the car is stopped. At that point FINISHED wins over the ASB low-pressure
+     * trip below — the braking that ended the mission may itself have drawn the
+     * tanks under 3 bar, and a completed mission that stopped the car should
+     * report Finished, not Emergency. This only changes the REPORTED terminal
+     * state, never the actuation: as_actuation fires the EBS + opens the SDC in
+     * BOTH FINISHED and EMERGENCY, and the car is already stopped. It yields
+     * ONLY the ASB trip — a real emergency (e-stop, steering grave-fault, TS
+     * loss, pipeline emergency / lost heartbeat) still forces Emergency here. */
     const bool finishing_at_standstill =
-        (prev == ASState::DRIVING) && in.vehicle_standstill &&
-        (in.mission_complete ||
-         (in.mission_needs_pipeline && in.dv_finished));
+        (prev == ASState::DRIVING) && in.vehicle_standstill && mission_finishing;
 
     if (!in.asms_on)
         return ASState::OFF;                       /* ASMS off always wins  */
@@ -107,12 +118,12 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
     if (prev == ASState::FINISHED)
         return ASState::FINISHED;                  /* latches until ASMS off */
     if (in.res_estop
-        || in.steer_emergency  /* steering grave-fault: unconditional, like e-stop */
-        || (!in.ts_on && (prev == ASState::DRIVING || prev == ASState::READY))
+        || in.steer_emergency          /* steering grave-fault: unconditional, like e-stop */
+        || (!in.ts_on && armed)        /* TS lost while armed */
         /* ASB stored energy gone while ARMED: either air tank below 3 bar means
          * the EBS may no longer be able to stop the car, so the car must not
-         * keep driving on a brake that might not fire. Same shape and scope as
-         * the ts_on rule — deliberately ONLY while READY/DRIVING:
+         * keep driving on a brake that might not fire. Same scope as the ts_on
+         * rule (armed only):
          *
          *   - In OFF the tanks are legitimately empty/filling at power-on, and
          *     Emergency LATCHES until ASMS-off. Tripping there would mean a car
@@ -121,22 +132,20 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
          *     and by the EBS init self-check (CheckPressure -> Failed).
          *   - EMERGENCY/FINISHED already returned above (they latch), and both
          *     hold the EBS fired anyway.
+         *   - finishing_at_standstill carves out a completed mission that has
+         *     stopped: it reports FINISHED just below rather than Emergency.
          *
          * Note this is the FIRST live consumer of tank pressure: ASBChecksOK()
          * gated only AS Ready, and abs_checks_ok was never an AsInputs field, so
          * until now a tank could drain mid-run with nothing noticing. */
-        || (!in.asb_pressure_ok && !finishing_at_standstill
-                                && (prev == ASState::DRIVING || prev == ASState::READY))
-        || (in.dv_emergency && in.mission_needs_pipeline
-                            && (prev == ASState::DRIVING || prev == ASState::READY))
-        || dv_lost_driving)
+        || (!in.asb_pressure_ok && armed && !finishing_at_standstill)
+        || (in.dv_emergency && in.mission_needs_pipeline && armed)  /* pipeline raised EBS */
+        || dv_lost_driving)            /* pipeline heartbeat lost mid-run */
         return ASState::EMERGENCY;
     /* DRIVING -> FINISHED: a pipeline mission ends when mission_control reports
      * FINISHED; a standalone mission ends when its own open-loop logic raises
      * mission_complete (e.g. the inspection sweep timer elapsed). */
-    if (prev == ASState::DRIVING
-        && (in.mission_complete
-            || (in.mission_needs_pipeline && in.dv_finished)))
+    if (prev == ASState::DRIVING && mission_finishing)
         return ASState::FINISHED;
     if (prev == ASState::DRIVING)
         return ASState::DRIVING;                   /* DRIVING is sticky: GO is a
