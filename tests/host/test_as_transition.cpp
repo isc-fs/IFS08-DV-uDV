@@ -84,7 +84,7 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
                      bool ebs_done = true, bool steer_emerg = false,
                      bool needs_pipeline = true, bool mission_complete = false,
                      bool mission_valid = true, bool ready_dwell = true,
-                     bool asb_p_ok = true)
+                     bool asb_p_ok = true, bool standstill = false)
 {
     AsInputs in{};
     in.asms_on         = asms;
@@ -105,6 +105,7 @@ static AsInputs make(bool asms, bool ts, ResKind res, DvKind dv,
     in.mission_valid          = mission_valid;
     in.ready_dwell_elapsed    = ready_dwell;
     in.asb_pressure_ok        = asb_p_ok;
+    in.vehicle_standstill     = standstill;
     return in;
 }
 
@@ -321,6 +322,50 @@ static void test_asb_pressure(void)
              make(false, true, RES_OK, DV_FRESH_OTHER, true, false,
                   true, false, true, true, false),
              ASState::OFF);
+
+    // --- FINISH wins at standstill with a completed mission, even low tanks ---
+    // 12th make() arg is vehicle_standstill.
+    // Standalone mission complete + STOPPED + tanks LOW -> FINISHED (not
+    // Emergency): the stop that ended the mission may have drained the tanks,
+    // and the car is already halted. This is the case that motivated the whole
+    // finishing_at_standstill carve-out.
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_OK, DV_FRESH_OTHER, true, false,
+                  /*needs_pipeline=*/false, /*mission_complete=*/true,
+                  true, true, /*asb_ok=*/false, /*standstill=*/true),
+             ASState::FINISHED);
+
+    // Pipeline mission, fresh DV FINISHED + STOPPED + tanks LOW -> FINISHED.
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_OK, DV_FRESH_FINISHED, true, false,
+                  /*needs_pipeline=*/true, /*mission_complete=*/false,
+                  true, true, /*asb_ok=*/false, /*standstill=*/true),
+             ASState::FINISHED);
+
+    // Same finish but STILL MOVING (not standstill) + tanks LOW -> Emergency:
+    // a car that hasn't stopped with no brake energy is a real emergency, and
+    // the finish does NOT get to override that.
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_OK, DV_FRESH_OTHER, true, false,
+                  /*needs_pipeline=*/false, /*mission_complete=*/true,
+                  true, true, /*asb_ok=*/false, /*standstill=*/false),
+             ASState::EMERGENCY);
+
+    // A HARD emergency still wins even at a finished standstill: e-stop during
+    // the finish -> Emergency, not FINISHED. (Tanks healthy here to isolate it.)
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_ESTOP, DV_FRESH_OTHER, true, false,
+                  /*needs_pipeline=*/false, /*mission_complete=*/true,
+                  true, true, /*asb_ok=*/true, /*standstill=*/true),
+             ASState::EMERGENCY);
+
+    // Control: mission complete + STOPPED + tanks HEALTHY -> FINISHED (proves
+    // the low-tank cases above finish for the right reason, not a fluke).
+    CHECK_EQ(ASState::DRIVING,
+             make(true, true, RES_OK, DV_FRESH_OTHER, true, false,
+                  /*needs_pipeline=*/false, /*mission_complete=*/true,
+                  true, true, /*asb_ok=*/true, /*standstill=*/true),
+             ASState::FINISHED);
 }
 
 static void test_invariants(void)
@@ -341,10 +386,12 @@ static void test_invariants(void)
               for (int mv = 0; mv < 2; ++mv)
               for (int dw = 0; dw < 2; ++dw)
               for (int ap = 0; ap < 2; ++ap)
+              for (int ss = 0; ss < 2; ++ss)
               for (ResKind res : ress)
               for (DvKind dv : dvs) {
                 AsInputs in = make(asms != 0, ts != 0, res, dv, ebs != 0, se != 0,
-                                   np != 0, mc != 0, mv != 0, dw != 0, ap != 0);
+                                   np != 0, mc != 0, mv != 0, dw != 0, ap != 0,
+                                   ss != 0);
                 ASState out = as_next_state(prev, in);
 
                 // INV1 fail-safe: ASMS off => OFF, no exceptions.
@@ -384,10 +431,29 @@ static void test_invariants(void)
                 // able to stop it, so it must not keep driving. Armed only:
                 // OFF legitimately has flat tanks while filling, and Emergency
                 // latches, so tripping there would strand the car forever.
+                // EXCEPTION: a genuine finish at standstill (mission over AND
+                // stopped) reports FINISHED instead — the braking that ended
+                // the mission may have drained the tanks, and the car is
+                // already halted. That exception is asserted by INV5d below.
+                const bool finishing_at_standstill =
+                    (prev == ASState::DRIVING) && in.vehicle_standstill &&
+                    (in.mission_complete ||
+                     (in.mission_needs_pipeline && in.dv_finished));
                 if (prev != ASState::EMERGENCY && prev != ASState::FINISHED &&
-                    !in.asb_pressure_ok &&
+                    !in.asb_pressure_ok && !finishing_at_standstill &&
                     (prev == ASState::DRIVING || prev == ASState::READY)) {
                     CHECK_TRUE(out == ASState::EMERGENCY);
+                }
+
+                // INV5d finish wins at standstill: a completed mission that has
+                // stopped the car reports FINISHED even with the tanks below 3
+                // bar — but ONLY when no HARD emergency (e-stop, steering fault,
+                // TS loss, pipeline emerg / lost heartbeat) is also present.
+                // Those still win over a finish.
+                if (finishing_at_standstill && !in.res_estop &&
+                    !in.steer_emergency && in.ts_on &&
+                    !(in.mission_needs_pipeline && (!in.dv_fresh || in.dv_emergency))) {
+                    CHECK_TRUE(out == ASState::FINISHED);
                 }
 
                 // INV5c no stored energy, no arming: flat tanks can never reach
@@ -442,15 +508,14 @@ static void test_invariants(void)
 
                 // INV10 self-finish: from DRIVING, mission_complete ends the
                 // run in FINISHED unless a higher-priority safe-state exit
-                // (ASMS off / e-stop / steering fault / TS loss / ASB tanks
-                // drained / pipeline emerg or lost) fires first.
-                // ASB pressure joins that list by the same precedence TS loss
-                // already had: both sit in the Emergency block above the
-                // DRIVING->FINISHED rule, so a car that finishes its mission
-                // in an unsafe condition reports Emergency, not Finished.
+                // (ASMS off / e-stop / steering fault / TS loss / pipeline
+                // emerg or lost) fires first. ASB low pressure is ALSO such an
+                // exit — EXCEPT at standstill, where the finish wins (INV5d).
+                // So FINISHED is guaranteed when the tanks are healthy OR the
+                // car is stopped.
                 if (prev == ASState::DRIVING && in.mission_complete &&
                     !in.res_estop && !in.steer_emergency && in.ts_on &&
-                    in.asb_pressure_ok &&
+                    (in.asb_pressure_ok || in.vehicle_standstill) &&
                     !(in.mission_needs_pipeline &&
                       (!in.dv_fresh || in.dv_emergency))) {
                     CHECK_TRUE(out == ASState::FINISHED);

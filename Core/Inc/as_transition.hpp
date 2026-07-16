@@ -52,6 +52,12 @@ struct AsInputs {
                                     and a stale pipeline never trips it. */
     bool mission_complete; /**< a standalone mission self-reported done (e.g. the
                                 inspection sweep timer elapsed) -> DRIVING to FINISHED */
+    bool vehicle_standstill; /**< the car is stopped (|rpm| < threshold, ECU 0x506).
+                                Lets a genuine end-of-mission FINISH win over the ASB
+                                low-pressure trip: the braking that ended the mission
+                                may itself have drawn the tanks below 3 bar, and a
+                                completed mission that stopped the car should report
+                                Finished, not Emergency. */
     bool mission_valid;    /**< the selected AMI code maps to a real mission
                                 (mission_for_code != nullptr). GO is refused when
                                 false, so an unknown / SHUTDOWN code can never enter
@@ -79,6 +85,21 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
     const bool dv_lost_driving =
         (prev == ASState::DRIVING) && in.mission_needs_pipeline && !in.dv_fresh;
 
+    /* A genuine end-of-mission finish, AT STANDSTILL: the mission is over
+     * (standalone self-finish or pipeline FINISHED) and the car is stopped.
+     * At that point FINISHED wins over the ASB low-pressure trip below — the
+     * braking that ended the mission may itself have drawn the tanks under 3
+     * bar, and a completed mission that stopped the car should report Finished,
+     * not Emergency. This only changes the REPORTED terminal state, never the
+     * actuation: as_actuation fires the EBS + opens the SDC in BOTH FINISHED
+     * and EMERGENCY, and the car is already stopped. It yields ONLY the ASB
+     * trip — a real emergency (e-stop, steering grave-fault, TS loss, pipeline
+     * emergency / lost heartbeat) still forces Emergency even here. */
+    const bool finishing_at_standstill =
+        (prev == ASState::DRIVING) && in.vehicle_standstill &&
+        (in.mission_complete ||
+         (in.mission_needs_pipeline && in.dv_finished));
+
     if (!in.asms_on)
         return ASState::OFF;                       /* ASMS off always wins  */
     if (prev == ASState::EMERGENCY)
@@ -104,7 +125,8 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
          * Note this is the FIRST live consumer of tank pressure: ASBChecksOK()
          * gated only AS Ready, and abs_checks_ok was never an AsInputs field, so
          * until now a tank could drain mid-run with nothing noticing. */
-        || (!in.asb_pressure_ok && (prev == ASState::DRIVING || prev == ASState::READY))
+        || (!in.asb_pressure_ok && !finishing_at_standstill
+                                && (prev == ASState::DRIVING || prev == ASState::READY))
         || (in.dv_emergency && in.mission_needs_pipeline
                             && (prev == ASState::DRIVING || prev == ASState::READY))
         || dv_lost_driving)

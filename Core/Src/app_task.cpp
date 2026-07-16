@@ -474,6 +474,10 @@ extern "C" void StartAppTask(void *argument)
         as_in.mission_needs_pipeline = (gate_mission != nullptr) && gate_mission->needs_pipeline;
         as_in.mission_complete       = mission_complete;
         as_in.mission_valid          = (mission != nullptr);
+        /* Standstill (ECU 0x506 rpm) — lets an end-of-mission FINISH win over the
+         * ASB low-pressure trip once the car is actually stopped (see
+         * as_transition.hpp finishing_at_standstill). */
+        as_in.vehicle_standstill     = state_mgr.getSignals().vehicle_standstill;
         /* FS-Rules AS-Ready dwell: a GO is only honoured after the car has been
          * in READY for >= READY_DWELL_MS. ready_start_time is stamped on the
          * READY-entry tick below (0 while not in READY), so this reads false on
