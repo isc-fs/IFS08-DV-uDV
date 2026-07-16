@@ -335,14 +335,14 @@ extern "C" void StartAppTask(void *argument)
      * masquerade as a flight build. Folds away when all toggles are 0. */
     if (BENCH_STUB_EBS_INIT || BENCH_STUB_EBS_SENSORS || BENCH_STUB_SDC ||
         BENCH_STUB_DVPC || BENCH_STUB_RES || BENCH_STUB_STEERING ||
-        BENCH_STUB_IMU_ROS || BENCH_STUB_DV_STOPPING)
+        BENCH_STUB_IMU_ROS || BENCH_STUB_TS || BENCH_STUB_DV_STOPPING)
     {
-        char stub_buf[128];   /* debugQueue element size */
+        char stub_buf[128];   /* debugQueue element size (116 chars all-on) */
         snprintf(stub_buf, sizeof(stub_buf),
-                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d imu_ros=%d dv_stopping=%d)",
+                 "debug: BENCH STUBS COMPILED IN (ebs_init=%d ebs_sensors=%d sdc=%d dvpc=%d res=%d steering=%d imu_ros=%d ts=%d dv_stopping=%d)",
                  BENCH_STUB_EBS_INIT, BENCH_STUB_EBS_SENSORS, BENCH_STUB_SDC,
                  BENCH_STUB_DVPC, BENCH_STUB_RES, BENCH_STUB_STEERING,
-                 BENCH_STUB_IMU_ROS, BENCH_STUB_DV_STOPPING);
+                 BENCH_STUB_IMU_ROS, BENCH_STUB_TS, BENCH_STUB_DV_STOPPING);
         (void)osMessageQueuePut(debugQueueHandle, &stub_buf, 0, 0);
     }
 
