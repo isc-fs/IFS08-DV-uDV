@@ -62,7 +62,16 @@ void StateManager::updateSignals()
                                    es == EBSInitState::WaitInterActuatorCheck ||
                                    es == EBSInitState::CheckActuator2);
     signals_.ebs_activated = (!in_actuator_check && hardware_io_is_ebs_active());
-    signals_.abs_checks_ok = ebs_.ASBChecksOK();
+    /* Raw ASB stored-energy read: BOTH tanks above 3 bar (A5/A4). Read ONCE per
+     * tick and reused for abs_checks_ok below — checkStoragePressures() does two
+     * 640.5-cycle ADC conversions, and calling ASBChecksOK() separately would
+     * double that for no new information. Raw on purpose: app_task debounces it
+     * before it reaches the AS transition (a single noisy sample must not latch
+     * Emergency). */
+    signals_.asb_pressure_ok = ebs_.checkStoragePressures();
+    /* Identical to the previous ebs_.ASBChecksOK(), inlined to reuse the read
+     * above (ASBChecksOK == init Done && checkStoragePressures). */
+    signals_.abs_checks_ok = (es == EBSInitState::Done) && signals_.asb_pressure_ok;
     // brakes_engaged comes via CAN 0x505 (VCU_brake_over_limit): the ECU's
     // binary verdict that its brake sensor reads above the hard-braking
     // limit (BrakeDvHardRaw, ECU-owned — no uDV-side threshold to tune).
