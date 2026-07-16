@@ -26,6 +26,7 @@ extern "C" {
 #include "state_manager.hpp"
 #include "as_transition.hpp"   /* pure AS transition decision (host-tested) */
 #include "as_actuation.hpp"    /* pure safe-state actuation decision (host-tested) */
+#include "as_stop_latch.hpp"   /* pure DV_STOPPING debounce+latch (host-tested) */
 #include "ebs_manager.hpp"
 #include "ros_task_commands.h"
 #include "can_interface.hpp"
@@ -310,6 +311,10 @@ extern "C" void StartAppTask(void *argument)
     uint32_t       mission_time     = 0;
     bool           mission_complete = false;
     const Mission* active_mission   = nullptr;
+    /* DV_STOPPING sticky latch (#176). Once armed during a run it holds until
+     * the run leaves DRIVING (stop_latch_next clears it there). Persists across
+     * loop iterations — the whole point is that a 7->3 revert can't lift it. */
+    bool           dv_stop_latched  = false;
 
     // Send initial OFF status via CAN
     Can::sendAssiStatus(StateManager::getAssiStatusCode(as_state));
@@ -489,10 +494,27 @@ extern "C" void StartAppTask(void *argument)
          * link cannot hold the brakes on via a stale 7 — and cannot silently
          * release them either, because dv_lost_driving trips EMERGENCY (which
          * fires the EBS regardless) on the very same tick. */
-        const bool dv_stopping =
+        /* Debounced ARM request for the end-of-mission stop. All three must
+         * hold: not stubbed off, fresh link, a pipeline mission, AND at least
+         * DV_STOPPING_MIN_STREAK consecutive STOPPING messages (g_dv_stopping_streak,
+         * counted at the message boundary in ros_set_dv_status — a loop-tick
+         * count would pass on one spurious byte, see that comment). The current
+         * byte need not still be STOPPING: the streak already proves it was, and
+         * the latch below makes the decision sticky regardless. */
+        const bool dv_stop_arm =
             (!BENCH_STUB_DV_STOPPING) &&
-            dv_fresh && (dv_status == DV_STATUS_STOPPING) &&
-            as_in.mission_needs_pipeline;
+            dv_fresh && as_in.mission_needs_pipeline &&
+            (g_dv_stopping_streak.load() >= DV_STOPPING_MIN_STREAK);
+
+        /* Sticky latch: once armed during a run the stop holds until the run
+         * ends (leaving DRIVING clears it — see stop_latch_next). This is what
+         * makes byte 7 un-releasable: a 7->3 revert or a 7<->3 chatter cannot
+         * lift the brakes or vent the tanks. dv_stop_latched persists across
+         * loop iterations (declared with the other run state above). */
+        dv_stop_latched = stop_latch_next(dv_stop_latched,
+                                          as_state == ASState::DRIVING,
+                                          dv_stop_arm);
+        const bool dv_stopping = dv_stop_latched;
 
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state
          * edges:
@@ -528,6 +550,11 @@ extern "C" void StartAppTask(void *argument)
         if (previous_as_state == ASState::DRIVING && as_state != ASState::DRIVING)
         {
             active_mission = nullptr;
+            /* Reset the STOPPING streak so the NEXT run must earn its own fresh
+             * DV_STOPPING_MIN_STREAK before it can brake — the debounce is
+             * per-run, not carried across missions. (The latch itself already
+             * cleared via stop_latch_next when we left DRIVING.) */
+            g_dv_stopping_streak.store(0u);
         }
 
         sync_state_telemetry(state_mgr, ebs, as_state);

@@ -50,6 +50,13 @@ what lets either side add a byte without a lockstep flash.
    mission; `BENCH_STUB_DV_STOPPING=1` makes it a no-op for bench work.
    **This is not a service brake** — the EBS is binary, so it must only be used
    for the final stop, never to modulate speed during a run.
+   **Debounced + latched:** the stop arms only after **`DV_STOPPING_MIN_STREAK`
+   (3) consecutive** STOPPING messages (~200–300 ms at 10 Hz), so a single
+   spurious byte can't stab the brakes; and once armed it is **sticky for the
+   rest of the run** — reverting to `RUNNING` (byte 3) will NOT release it. To
+   end the stop, send `FINISHED` (→ AS Finished) or let the link go stale
+   (→ Emergency). The latch clears when the run leaves Driving; the next run
+   must earn its own fresh streak.
 6. `dv/status = FINISHED` → AS Finished (latches until ASMS off).
    `dv/status = EMERGENCY`/`FAILED`, RES e-stop, TS loss, or a **stale
    `dv/status` mid-run** → AS Emergency + EBS.
