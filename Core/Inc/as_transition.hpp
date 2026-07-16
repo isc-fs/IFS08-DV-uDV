@@ -30,6 +30,12 @@ struct AsInputs {
     bool res_ok;        /**< RES received, no e-stop / go                  */
     bool steer_emergency; /**< steering reported ESTADO_MOTOR_EMERGENCIA (grave) */
     bool ebs_init_done; /**< EBS init sequence reached EBSInitState::Done   */
+    bool asb_pressure_ok; /**< BOTH ASB air tanks above ACTUATOR_STORAGE_THRESHOLD
+                               (3 bar) — i.e. the EBS still has the stored energy to
+                               actually stop the car. False when EITHER sensor (A5
+                               actuator-1 / A4 actuator-2) reads below it.
+                               Debounced by the caller (see app_task): a single noisy
+                               ADC sample must not latch Emergency and kill a run. */
     bool ready_dwell_elapsed; /**< the car has been in AS READY for the mandated
                                  minimum dwell (>= 5 s, FS-Rules) — a GO received
                                  before it elapses must be refused. Sourced in
@@ -82,6 +88,23 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
     if (in.res_estop
         || in.steer_emergency  /* steering grave-fault: unconditional, like e-stop */
         || (!in.ts_on && (prev == ASState::DRIVING || prev == ASState::READY))
+        /* ASB stored energy gone while ARMED: either air tank below 3 bar means
+         * the EBS may no longer be able to stop the car, so the car must not
+         * keep driving on a brake that might not fire. Same shape and scope as
+         * the ts_on rule — deliberately ONLY while READY/DRIVING:
+         *
+         *   - In OFF the tanks are legitimately empty/filling at power-on, and
+         *     Emergency LATCHES until ASMS-off. Tripping there would mean a car
+         *     that boots with flat tanks could never arm even after filling them.
+         *     OFF is instead covered by the READY gate below (no pressure, no arm)
+         *     and by the EBS init self-check (CheckPressure -> Failed).
+         *   - EMERGENCY/FINISHED already returned above (they latch), and both
+         *     hold the EBS fired anyway.
+         *
+         * Note this is the FIRST live consumer of tank pressure: ASBChecksOK()
+         * gated only AS Ready, and abs_checks_ok was never an AsInputs field, so
+         * until now a tank could drain mid-run with nothing noticing. */
+        || (!in.asb_pressure_ok && (prev == ASState::DRIVING || prev == ASState::READY))
         || (in.dv_emergency && in.mission_needs_pipeline
                             && (prev == ASState::DRIVING || prev == ASState::READY))
         || dv_lost_driving)
@@ -122,7 +145,13 @@ inline ASState as_next_state(ASState prev, const AsInputs& in)
      * app_task only advances the init FSM while in OFF, so arming before
      * Done would strand it (ASBChecksOK never true). A Failed init keeps
      * the car in OFF. */
-    if (in.res_ok && in.ts_on && in.ebs_init_done)
+    /* asb_pressure_ok also gates ARMING, not just the mid-run trip. Without it
+     * a car whose tanks drained AFTER a passing init self-check could still
+     * reach READY: ebs_init_done is a one-shot latch on the init FSM, and the
+     * live pressure read (ASBChecksOK) reached only StateManager::updateState(),
+     * which is dead for AS decisions. The gate is what makes "no stored energy,
+     * no arming" true in the state machine rather than just in the init. */
+    if (in.res_ok && in.ts_on && in.ebs_init_done && in.asb_pressure_ok)
         return ASState::READY;
     return prev;                                    /* no change */
 }

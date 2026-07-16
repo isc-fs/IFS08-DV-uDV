@@ -128,6 +128,21 @@ static constexpr uint32_t R2D_REQ_PERIOD_MS        = 100u;
 /* Mandated minimum time in AS READY before a RES GO may be honoured
  * (FS-Rules AS-Ready dwell). Gates READY->DRIVING via as_in.ready_dwell_elapsed. */
 static constexpr uint32_t READY_DWELL_MS           = 5000u;
+/* ASB low-pressure debounce: the tanks must read below 3 bar CONTINUOUSLY for
+ * this long before the AS transition is told the stored energy is gone.
+ *
+ * Needed because the trip is expensive and one-way: !asb_pressure_ok while
+ * armed raises Emergency, which LATCHES until ASMS-off — so a single spurious
+ * low sample ends the run. The pressure signal is DC behind a 10k/1k divider
+ * and the loop samples it at ~1 kHz, so real noise is uncorrelated sample to
+ * sample while a genuine leak/vent lasts far longer than this window. (ADC3
+ * channel-to-channel crosstalk on exactly these taps is not hypothetical — see
+ * the long-sample-time fix in hardware_io.c.)
+ *
+ * 100 ms is ~100 consecutive low samples: uncrossable by noise, and far inside
+ * the FS-Rules T11.9.4 500 ms detect-and-safe bound. It costs nothing on a real
+ * loss — the tanks cannot refill in 100 ms. */
+static constexpr uint32_t ASB_LOW_DEBOUNCE_MS       = 100u;
 
 /* Apply a mission's actuation intent to the CAN bus (the only place a mission
  * result reaches hardware). Two independent actuator paths:
@@ -280,6 +295,9 @@ extern "C" void StartAppTask(void *argument)
     ASState as_state = ASState::OFF;
     ASState last_as_state = ASState::OFF;  // Track last state for ASSI updates
     uint32_t ready_start_time = 0;
+    /* Tick the ASB tanks first read below 3 bar; 0 = currently reading ok.
+     * Drives the ASB_LOW_DEBOUNCE_MS window (see the read in the loop). */
+    uint32_t asb_low_since_ms = 0;
     int last_mission_id = -1;
     bool set_mission_sent = false;
     bool start_mission_sent = false;   /* CAN start-mission fallback (dev) */
@@ -429,6 +447,18 @@ extern "C" void StartAppTask(void *argument)
         as_in.res_ok        = res_ok;
         as_in.steer_emergency = steer_emergency;
         as_in.ebs_init_done = (ebs.getInitState() == EBSInitState::Done);
+        /* ASB stored energy, debounced (see ASB_LOW_DEBOUNCE_MS). Stays "ok"
+         * until the tanks have read low CONTINUOUSLY for the window; any single
+         * good sample re-arms it. One-way in the dangerous direction only: once
+         * the window elapses the transition raises Emergency, which latches. */
+        {
+            const bool asb_raw_ok = state_mgr.getSignals().asb_pressure_ok;
+            if (asb_raw_ok)                 asb_low_since_ms = 0u;
+            else if (asb_low_since_ms == 0u) asb_low_since_ms = now_ms;
+            as_in.asb_pressure_ok =
+                asb_raw_ok ||
+                ((uint32_t)(now_ms - asb_low_since_ms) < ASB_LOW_DEBOUNCE_MS);
+        }
         as_in.dv_fresh      = dv_fresh;
         as_in.dv_ready     = dv_fresh && (dv_status == DV_STATUS_READY);
         as_in.dv_finished  = dv_fresh && (dv_status == DV_STATUS_FINISHED);
