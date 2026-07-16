@@ -57,6 +57,16 @@
  *     UNCALIBRATED steering that must not be driven. Calibration (0x30) is NOT
  *     suppressed — that path must still work to bring the steering up.
  *
+ *   BENCH_STUB_DV_STOPPING — ignore the /dv/status DV_STATUS_STOPPING byte
+ *     (7, issue #176) for ACTUATION only: the byte is still received, still
+ *     keeps the pipeline heartbeat fresh, and still shows up on /debug + pit-diag,
+ *     but it does NOT fire the EBS and does NOT inhibit the torque. For bench /
+ *     rolling-road work where the end-of-mission stop handshake must be exercised
+ *     without dumping the air tanks (each stop costs a recharge) — and for the
+ *     first on-car runs, where the pipeline can be allowed to emit byte 7 while
+ *     the uDV still only coasts. Turn it OFF to get the real stop.
+ *     (pit-diag stub mask bit 0x80 — 0x40 is BENCH_STUB_TS.)
+ *
  *   BENCH_STUB_TS — while NO real ECU 0x504 has arrived, can_ts_active_fresh()
  *     reports the tractive system LIVE so a bench with no ECU can reach AS READY.
  *     Goes inert the moment a real 0x504 lands (a real ECU saying "TS down" then
@@ -99,6 +109,9 @@
 #endif
 #ifndef BENCH_STUB_TS
 #define BENCH_STUB_TS          0
+#endif
+#ifndef BENCH_STUB_DV_STOPPING
+#define BENCH_STUB_DV_STOPPING 0
 #endif
 
 /* EBS_INIT skips the whole sequence (no actuation); EBS_SENSORS runs it for real

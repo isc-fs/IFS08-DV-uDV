@@ -22,6 +22,11 @@ extern std::atomic<bool>  g_set_mission_ready;
 // ros_task micro-ROS callbacks (via the C bridge), read by AppTask.
 extern std::atomic<uint8_t>  g_dv_status;           // latest dv/status byte
 extern std::atomic<uint32_t> g_dv_status_stamp_ms;  // its arrival tick (0 = never)
+/* Consecutive DV_STATUS_STOPPING messages (#176 debounce). Incremented once per
+ * message in ros_set_dv_status (the message boundary — NOT per app_task tick,
+ * which re-reads the latched byte ~100x/msg); reset by any other byte. AppTask
+ * arms the stop only at >= DV_STOPPING_MIN_STREAK. */
+extern std::atomic<uint8_t>  g_dv_stopping_streak;
 extern std::atomic<uint32_t> g_ctrl_cmd_stamp_ms;   // last ctrl/cmd tick (0 = never)
 
 // State telemetry snapshot, owned by AppTask and published by RosTask

@@ -14,6 +14,7 @@ std::atomic<bool>  g_set_mission_ready{false};
 // Stock-typed pipeline interface state (see dv_interface.h).
 std::atomic<uint8_t>  g_dv_status{DV_STATUS_IDLE};
 std::atomic<uint32_t> g_dv_status_stamp_ms{0};
+std::atomic<uint8_t>  g_dv_stopping_streak{0};   // consecutive STOPPING msgs (#176)
 std::atomic<uint32_t> g_ctrl_cmd_stamp_ms{0};
 
 // State telemetry snapshot, owned by AppTask and published by RosTask
@@ -109,6 +110,21 @@ extern "C" void ros_set_ctrl_cmd_norm(float throttle_norm, float steering_norm,
 
 extern "C" void ros_set_dv_status(uint8_t status, uint32_t now_ms)
 {
+    /* Consecutive-STOPPING streak (issue #176 debounce, Option A). Counted HERE,
+     * at the message boundary, NOT in app_task: this callback runs exactly once
+     * per received /dv/status message, whereas g_dv_status is a latched atomic
+     * that app_task re-reads ~100x per message (1 kHz loop vs 10 Hz stream). A
+     * streak counted in the loop would be satisfied in ~3 ms by a SINGLE
+     * spurious byte 7 — it must count distinct messages. Any non-STOPPING byte
+     * resets it, so only an uninterrupted run of STOPPING messages accumulates.
+     * Saturates at 255 (only the >= threshold comparison matters). app_task
+     * consumes it via g_dv_stopping_streak alongside the freshness check. */
+    if (status == DV_STATUS_STOPPING) {
+        uint8_t n = g_dv_stopping_streak.load();
+        if (n < 255u) g_dv_stopping_streak.store((uint8_t)(n + 1u));
+    } else {
+        g_dv_stopping_streak.store(0u);
+    }
     g_dv_status.store(status);
     g_dv_status_stamp_ms.store(now_ms);
 }
