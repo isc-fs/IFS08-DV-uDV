@@ -43,6 +43,39 @@ Snapshot at handover:
   (superseded by DV_STOPPING), `feat/71-steering-ratio` (kinematics in main; its one unique
   bit — the 0x7AA emergency-cause telemetry — was salvaged into #192), `feat/pd15-iwdg-notok-led`.
 
+### How to actually move it — use a git transfer, NOT a "copy from local"
+
+**Everything that matters is version-controlled**, including the full test suite (source,
+mocks, stubs, Makefile — see §8). Only *build artifacts* are gitignored (`build/`, the compiled
+host-test binaries, `*.o`, `*.dSYM`), and those regenerate. So a git-native transfer carries the
+complete, correct tree — and a "commit my local folder" copy would be **worse**: it risks
+dragging the ignored build junk into the new repo.
+
+Recommended, in order of preference:
+
+1. **Mirror push (keeps full history + all branches + tags).** In an empty new repo:
+   ```bash
+   git clone --bare git@github.com:isc-fs/IFS08-DV-uDV.git
+   cd IFS08-DV-uDV.git
+   git push --mirror git@github.com:isc-fs/<new-repo>.git
+   ```
+   Then in a fresh working clone of the new repo, re-point the **submodule** at whatever
+   `micro_ros_stm32cubemx_utils` fork the new season uses (`.gitmodules` URL) and
+   `git submodule update --init --recursive`. Prune the branches you don't want (§1/§3).
+2. **Snapshot import (fresh history, cleaner, loses PR history).** Import only `main`'s tree as
+   an initial commit in the new repo. Do it with `git archive` / `git worktree`, **not** a
+   Finder copy, so `.gitignore` is honoured and no build junk comes along:
+   ```bash
+   git archive --format=tar main | (mkdir ../new && cd ../new && tar xf -)
+   ```
+   Add the submodule fresh in the new repo.
+
+**Do NOT** `cp -r` the working directory or "upload from local" — it pulls in `build/`, the
+compiled `test_*` binaries, `.o`/`.dSYM`, and any local scratch, none of which belong in git.
+
+Either way the **submodule** is the one thing a plain push/archive won't fully carry (it's a
+pointer, not content) — re-init it in the new repo per §6.
+
 ---
 
 ## 2. Architecture in one screen
@@ -164,7 +197,7 @@ extension). `isc-fs/iskapps` is **releases only**. pit-diag frames: `0x7A0` stat
 
 ---
 
-## 6. Build · flash · test
+## 6. Build & flash
 
 ```bash
 # Clone WITH submodules (required — libmicroros lives there)
@@ -173,8 +206,6 @@ git clone --recurse-submodules -b dev git@github.com:isc-fs/<new-repo>.git
 make                 # FLIGHT build (all stubs 0) -> build/binaries/uDV.{elf,hex,bin}
 make BENCH="-DBENCH_STUB_TS=1 -DBENCH_STUB_DVPC=1"   # bench build via -D overrides (no source edit)
 make clean
-
-cd tests/host && make test    # 10 host suites (~149,637 checks) — run on every change
 ```
 
 - Toolchain: `arm-none-eabi-gcc` (auto-detected on macOS; override `GCC_PATH=`).
@@ -188,7 +219,57 @@ cd tests/host && make test    # 10 host suites (~149,637 checks) — run on ever
 
 ---
 
-## 7. ⚠️ Gotchas that silently break the car
+## 7. Testing — read this, it's the safety backbone
+
+The whole architecture is shaped around **making the safety-critical logic testable off-target**.
+The AS state machine, the EBS/SDC actuation, the DV_STOPPING latch, the mission bodies, and the
+watchdog are all extracted into **pure functions with no HAL / RTOS / ROS dependency**, so they
+run and are exhaustively swept on a laptop with no board. **Treat the test suite as part of the
+firmware, not an optional extra** — a change that breaks a host test is a change that breaks the
+car.
+
+### The suite: `tests/host/` — `make test`
+
+```bash
+cd tests/host && make test     # builds + runs all 10 suites; exits non-zero on any failure
+```
+
+Host-native (plain `c++`/`cc`, no ARM, no HAL, no scheduler — RTOS/HAL headers are shadowed by
+`tests/host/stubs/` + `tests/host/mocks/`). **~149,637 checks, 0 failures** at handover.
+
+| Suite | Covers |
+|---|---|
+| `build_integrity` | Makefile↔CMake source parity, orphan/missing sources, `extern "C"` task entry points — catches link-breaking build drift the logic suites can't see |
+| `test_safety_eval` | IWDG two-tier watchdog stall detection (`safety_eval.c`) |
+| `test_state_machine` | AS state machine + EBS init sequence — links the **real** `state_manager.cpp`/`ebs_manager.cpp` against a controllable `hardware_io` stub |
+| `test_as_transition` | **The exhaustive AS-transition sweep** (`as_transition.hpp`) — every reachable combination of inputs × prev-state. ~147k of the total checks. **This is the safety core's guard.** |
+| `test_as_actuation` | pure EBS-release / SDC-open decision per AS state (`as_actuation.hpp`) |
+| `test_as_stop_latch` | DV_STOPPING debounce (3 msgs) + sticky latch (`as_stop_latch.hpp`) |
+| `test_missions` | mission registry + each mission body (inspection sweep, pipeline relay, EBS-test) |
+| `test_rules_compliance` | FS-Rules timing-budget `static_assert`s |
+| `test_attitude` / `test_bmi088_convert` | complementary-filter roll/pitch + BMI088 raw→scaled |
+
+### The rule for adding safety logic
+Any new **emergency trigger** or **actuation rule** must land as (a) a named term in the pure
+function, (b) a case in the exhaustive sweep, and (c) — if it's an emergency — an
+`AsEmergencyReason` enum value + `0x7AA` telemetry entry (or the cause is a mystery on the bench).
+This is how the ASB trip, DV_STOPPING, finish-at-standstill, and the emergency-cause telemetry
+were all added this cycle.
+
+### ⚠️ CI does NOT run the host tests — close this gap
+GitHub Actions (`.github/workflows/build.yml`) **only builds** the firmware (flight + CMake, on
+ubuntu + macOS, verifies artifacts + size). It does **not** run `make test`. So the ~149k-check
+safety suite is currently **local-discipline only** — a PR can go green without the tests having
+run. **Strongly recommend the new repo add a `make test` job to CI** (it's fast, host-native,
+needs no ARM toolchain) so the safety sweep gates every merge. This is the single most valuable
+CI improvement to make on import.
+
+Tests are **fully version-controlled** (all 10 sources + `mocks/` + `stubs/` + `Makefile`); only
+the compiled binaries are gitignored — so they travel with any git transfer (§1).
+
+---
+
+## 8. ⚠️ Gotchas that silently break the car
 
 1. **CubeMX regen re-applies must-fix values.** After any `.ioc` regeneration:
    - **FDCAN message-RAM offsets** (`Core/Src/fdcan.c`) MUST be `FDCAN1=0 / FDCAN2=640 /
@@ -208,7 +289,7 @@ cd tests/host && make test    # 10 host suites (~149,637 checks) — run on ever
 
 ---
 
-## 8. Validation state at handover
+## 9. Validation state at handover
 
 | | State |
 |---|---|
@@ -225,7 +306,7 @@ cd tests/host && make test    # 10 host suites (~149,637 checks) — run on ever
 
 ---
 
-## 9. Key decisions & rationale (season memory)
+## 10. Key decisions & rationale (season memory)
 
 Carry these — they're the "why" behind the code and easy to accidentally undo:
 
