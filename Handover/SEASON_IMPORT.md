@@ -10,9 +10,10 @@ will silently break the car if you miss them.
 > this doc is the migration layer on top.
 
 Snapshot at handover:
-- **`main` = `c3f8350`**, **`dev` = `f6ca95b`** — ⚠️ **dev is 4 commits ahead of main** (the
-  0x7AA AS-Emergency-cause telemetry, #192). **Promote `dev` → `main` before importing** so
-  `main` is the clean import point.
+- **Trunks:** `main` (stable — the import point) and `dev` (integration; everything lands here
+  first, then promotes to `main` via PR). They were **synced at this handover** (`dev` promoted
+  to `main`). If `dev` has drifted ahead by the time you import, **promote `dev` → `main` first**
+  so `main` is clean.
 - **Submodule** `micro_ros_stm32cubemx_utils` @ `3539782` (fork, branch `humble-isc`).
 - Board: **STM32H733XG** (Cortex-M7, 528 MHz), FreeRTOS + micro-ROS over USB CDC.
 
