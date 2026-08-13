@@ -256,13 +256,14 @@ function, (b) a case in the exhaustive sweep, and (c) — if it's an emergency �
 This is how the ASB trip, DV_STOPPING, finish-at-standstill, and the emergency-cause telemetry
 were all added this cycle.
 
-### ⚠️ CI does NOT run the host tests — close this gap
-GitHub Actions (`.github/workflows/build.yml`) **only builds** the firmware (flight + CMake, on
-ubuntu + macOS, verifies artifacts + size). It does **not** run `make test`. So the ~149k-check
-safety suite is currently **local-discipline only** — a PR can go green without the tests having
-run. **Strongly recommend the new repo add a `make test` job to CI** (it's fast, host-native,
-needs no ARM toolchain) so the safety sweep gates every merge. This is the single most valuable
-CI improvement to make on import.
+### CI runs the host tests (added this cycle) — but make it a *required* check
+`.github/workflows/host-tests.yml` runs `make -C tests/host test` on every push (main/dev/feat/fix)
+and PR (ubuntu, no ARM toolchain, ~seconds). It was added this cycle to close the gap where
+`build.yml` only *built* the firmware and the ~149k-check safety suite never ran in CI.
+**One step remains: promote `host-tests / host unit tests (make test)` to a REQUIRED status check**
+in the new repo's branch protection for `dev` and `main`, so a red suite actually *blocks* the
+merge instead of just showing red. The workflow + job name are deliberately distinct so this is a
+one-line branch-protection edit. Carry `host-tests.yml` over with the rest of `.github/`.
 
 Tests are **fully version-controlled** (all 10 sources + `mocks/` + `stubs/` + `Makefile`); only
 the compiled binaries are gitignored — so they travel with any git transfer (§1).
