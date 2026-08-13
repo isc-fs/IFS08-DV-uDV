@@ -1,0 +1,45 @@
+name: Host tests
+
+# Runs the off-target host unit suite (tests/host/ — the pure AS state machine,
+# actuation, DV_STOPPING latch, missions, safety-eval, build-integrity, sensor
+# math). ~149k checks, no ARM toolchain and no submodule needed: the suite is
+# plain C/C++ with tests/host/{stubs,mocks} shadowing the RTOS + HAL headers.
+# This is the safety-logic gate — keep it green.
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+  workflow_dispatch:
+
+# Same as the build workflow: cancel a superseded run on the same ref rather
+# than leaving it queued.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    name: host unit tests (make test)
+    runs-on: ubuntu-latest
+    # The suite runs in a few seconds once a runner is assigned; bound the job
+    # so runner scarcity fails fast instead of hanging.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        # No submodules: the host suite never links libmicroros.
+        uses: actions/checkout@v6
+
+      - name: Show compiler
+        run: c++ --version
+
+      - name: Run host test suite
+        # make -C changes into tests/host first, so the Makefile's ../../Core
+        # relative paths and ./check_build_integrity.sh resolve correctly.
+        # `make test` exits non-zero on any suite failure.
+        run: make -C tests/host test
