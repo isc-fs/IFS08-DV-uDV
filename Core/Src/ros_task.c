@@ -254,6 +254,21 @@ static const char *res_status_name(int32_t s)
    the last publish (prev != cur) it is shown as "AS PREV->CUR", else "AS CUR".
    sig is packed with the AS_SIG_* bits from as_state.h; res is the raw
    can_c_get_res_status() code. */
+/* diag/emergency-reason-debug: name the latched AS EMERGENCY cause. */
+static const char *emerg_reason_name(uint8_t r)
+{
+  switch (r) {
+    case EMERG_NONE:            return "none";
+    case EMERG_ASMS_OFF:        return "asms_off";
+    case EMERG_RES_ESTOP:       return "res_estop";
+    case EMERG_STEER_GRAVE:     return "steer_grave";
+    case EMERG_TS_LOSS:         return "ts_loss";
+    case EMERG_ASB_LOW:         return "asb_low";
+    case EMERG_DV_STATUS_EMERG: return "dv_status_emerg";
+    case EMERG_DV_LOST_HB:      return "dv_lost_hb";
+    default:                    return "unknown";
+  }
+}
 static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
                                uint8_t as, uint16_t sig, uint8_t ebs, int32_t res,
                                int32_t mission)
@@ -272,9 +287,18 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
   if (mission < 0) snprintf(mission_tok, sizeof(mission_tok), "none");
   else             snprintf(mission_tok, sizeof(mission_tok), "%ld", (long)mission);
 
+  /* dv_age token: "n/a" when /dv/status was never received at the trip
+   * (AS_EMERG_DV_AGE_NEVER), else "<ms>ms" — a raw %lu would print a huge
+   * time-since-boot number for the never-seen case (Copilot #192). */
+  uint32_t dv_age = can_c_get_as_emergency_dv_age_ms();
+  char dv_age_tok[16];
+  if (dv_age == AS_EMERG_DV_AGE_NEVER) snprintf(dv_age_tok, sizeof(dv_age_tok), "n/a");
+  else snprintf(dv_age_tok, sizeof(dv_age_tok), "%lums", (unsigned long)dv_age);
+
   snprintf(buf, n,
     "%s || ASMS:%s TS:%s SDC:%s EBS:%s ABS:%s || "
-    "brakes:%s mission:%s R2D:%s motion:%s finished:%s || RES:%s || EBSinit:%s",
+    "brakes:%s mission:%s R2D:%s motion:%s finished:%s || RES:%s || EBSinit:%s"
+    " || emerg:%s dv_age:%s steer:%d cal:%u.%u",
     as_tok,
     (sig & AS_SIG_ASMS_ON)        ? "on"         : "off",
     (sig & AS_SIG_TS_ACTIVE)      ? "on"         : "off",
@@ -287,7 +311,12 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
     (sig & AS_SIG_STANDSTILL)     ? "standstill" : "moving",
     (sig & AS_SIG_MISSION_DONE)   ? "yes"        : "no",
     res_status_name(res),
-    ebs_init_name(ebs));
+    ebs_init_name(ebs),
+    emerg_reason_name(can_c_get_as_emergency_reason()),
+    dv_age_tok,
+    (int)can_c_get_steer_motor_state(),
+    (unsigned)can_c_get_steer_calib_phase(),
+    (unsigned)can_c_get_steer_calib_error());
 }
 
 void ros_task_run(void)
