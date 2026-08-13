@@ -302,6 +302,35 @@ static void send_ebs(void)
     tx8(CAN_ID_PITDIAG_EBS, d);
 }
 
+/* Latched AS EMERGENCY cause (#165) on CAN. The /debug string that names the
+ * cause rides the micro-ROS session — but the prime suspect is that very
+ * session dropping (dv_lost_hb), so /debug may be down exactly when the trip
+ * happens. This relays the latched reason + the /dv/status age AT the trip over
+ * the pit-diag CAN stream, which is independent of the ROS link. Mirrors the
+ * "emerg:.. dv_age:.. steer:.. cal:.." /debug fields. Reason stays latched
+ * until the next EMERGENCY edge, so a pit tool that connects afterwards still
+ * reads it. */
+static void send_emerg(void)
+{
+    uint32_t age   = can_c_get_as_emergency_dv_age_ms();
+    /* 0xFFFF == "never seen" (matches age_ms() in this file), reserved for the
+     * AS_EMERG_DV_AGE_NEVER sentinel; a genuinely very old age clamps to 0xFFFE
+     * so the two cases stay distinguishable downstream (Copilot #192). */
+    uint16_t age16 = (age == AS_EMERG_DV_AGE_NEVER) ? 0xFFFFu
+                   : (age > 0xFFFEu)                ? 0xFFFEu
+                   : (uint16_t)age;
+    uint8_t d[8] = {
+        can_c_get_as_emergency_reason(),                 /* [0] AsEmergencyReason enum        */
+        (uint8_t)(age16 & 0xFFu),                        /* [1-2] /dv/status age at trip ms LE */
+        (uint8_t)(age16 >> 8),
+        (uint8_t)(int8_t)can_c_get_steer_motor_state(),  /* [3] ESTADO_MOTOR (steer_grave ctx) */
+        can_c_get_steer_calib_phase(),                   /* [4] 0x529 calib phase (0..10)      */
+        can_c_get_steer_calib_error(),                   /* [5] 0x529 calib error (0..8)       */
+        0u, 0u,                                          /* [6-7] spare                        */
+    };
+    tx8(CAN_ID_PITDIAG_EMERG, d);
+}
+
 /* ---- cadence ------------------------------------------------------------ */
 void pit_diag_service(uint32_t now_ms)
 {
@@ -321,6 +350,7 @@ void pit_diag_service(uint32_t now_ms)
         send_steer();
         send_calib_dbg();
         send_ebs();
+        send_emerg();
     }
     if ((uint32_t)(now_ms - last_slow) >= 1000u) {
         last_slow = now_ms;
