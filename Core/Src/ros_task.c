@@ -287,10 +287,18 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
   if (mission < 0) snprintf(mission_tok, sizeof(mission_tok), "none");
   else             snprintf(mission_tok, sizeof(mission_tok), "%ld", (long)mission);
 
+  /* dv_age token: "n/a" when /dv/status was never received at the trip
+   * (AS_EMERG_DV_AGE_NEVER), else "<ms>ms" — a raw %lu would print a huge
+   * time-since-boot number for the never-seen case (Copilot #192). */
+  uint32_t dv_age = can_c_get_as_emergency_dv_age_ms();
+  char dv_age_tok[16];
+  if (dv_age == AS_EMERG_DV_AGE_NEVER) snprintf(dv_age_tok, sizeof(dv_age_tok), "n/a");
+  else snprintf(dv_age_tok, sizeof(dv_age_tok), "%lums", (unsigned long)dv_age);
+
   snprintf(buf, n,
     "%s || ASMS:%s TS:%s SDC:%s EBS:%s ABS:%s || "
     "brakes:%s mission:%s R2D:%s motion:%s finished:%s || RES:%s || EBSinit:%s"
-    " || emerg:%s dv_age:%lums steer:%d cal:%u.%u",
+    " || emerg:%s dv_age:%s steer:%d cal:%u.%u",
     as_tok,
     (sig & AS_SIG_ASMS_ON)        ? "on"         : "off",
     (sig & AS_SIG_TS_ACTIVE)      ? "on"         : "off",
@@ -305,7 +313,7 @@ static void format_state_debug(char *buf, size_t n, uint8_t prev_as,
     res_status_name(res),
     ebs_init_name(ebs),
     emerg_reason_name(can_c_get_as_emergency_reason()),
-    (unsigned long)can_c_get_as_emergency_dv_age_ms(),
+    dv_age_tok,
     (int)can_c_get_steer_motor_state(),
     (unsigned)can_c_get_steer_calib_phase(),
     (unsigned)can_c_get_steer_calib_error());

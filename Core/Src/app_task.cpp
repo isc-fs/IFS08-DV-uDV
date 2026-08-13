@@ -574,7 +574,11 @@ extern "C" void StartAppTask(void *argument)
                                                            ? EMERG_DV_LOST_HB :
                                                              EMERG_UNKNOWN;
             g_as_emergency_reason.store(reason);
-            g_as_emergency_dv_age_ms.store(now_ms - g_dv_status_stamp_ms.load());
+            /* Sentinel when /dv/status was never received (stamp 0) — else the
+             * age is time-since-boot for a non-DV emergency (Copilot #192). */
+            const uint32_t dv_stamp = g_dv_status_stamp_ms.load();
+            g_as_emergency_dv_age_ms.store(
+                dv_stamp ? (now_ms - dv_stamp) : AS_EMERG_DV_AGE_NEVER);
         }
 
         /* Steering-motor lifecycle + mission lifecycle, driven off the AS-state

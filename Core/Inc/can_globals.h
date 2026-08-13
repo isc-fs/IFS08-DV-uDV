@@ -178,7 +178,16 @@ enum AsEmergencyReason {
     EMERG_UNKNOWN,
 };
 
-/* C-callable accessors — implemented in can_interface.cpp, usable from C files */
+/* Sentinel for g_as_emergency_dv_age_ms when /dv/status was NEVER received at
+ * the trip (stamp == 0): the raw now_ms - stamp would otherwise read as
+ * time-since-boot (a non-DV emergency — e-stop / ASB / TS — can fire with the
+ * pipeline never connected). Formatters render this "n/a" and the 0x7AA frame
+ * maps it to 0xFFFF, matching pit-diag's age_ms() "never seen" convention. */
+#define AS_EMERG_DV_AGE_NEVER 0xFFFFFFFFu
+
+/* C-callable accessors — most in can_interface.cpp; the emergency-cause and
+ * steer-calib accessors (can_c_get_as_emergency_* / can_c_get_steer_calib_*)
+ * are in can_globals.cpp. All usable from C files. */
 #ifdef __cplusplus
 extern "C" {
 #endif

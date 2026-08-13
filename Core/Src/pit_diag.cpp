@@ -313,7 +313,12 @@ static void send_ebs(void)
 static void send_emerg(void)
 {
     uint32_t age   = can_c_get_as_emergency_dv_age_ms();
-    uint16_t age16 = (age > 0xFFFFu) ? 0xFFFFu : (uint16_t)age;
+    /* 0xFFFF == "never seen" (matches age_ms() in this file), reserved for the
+     * AS_EMERG_DV_AGE_NEVER sentinel; a genuinely very old age clamps to 0xFFFE
+     * so the two cases stay distinguishable downstream (Copilot #192). */
+    uint16_t age16 = (age == AS_EMERG_DV_AGE_NEVER) ? 0xFFFFu
+                   : (age > 0xFFFEu)                ? 0xFFFEu
+                   : (uint16_t)age;
     uint8_t d[8] = {
         can_c_get_as_emergency_reason(),                 /* [0] AsEmergencyReason enum        */
         (uint8_t)(age16 & 0xFFu),                        /* [1-2] /dv/status age at trip ms LE */
