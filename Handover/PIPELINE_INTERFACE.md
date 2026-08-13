@@ -73,8 +73,10 @@ cap for detecting a lost safety-critical message.
   tracked in this repo (it is built locally via Docker into the
   `micro_ros_stm32cubemx_utils` submodule), so an **older locally-built lib**
   compiled with `RMW_UXRCE_MAX_SERVICES=1` would **silently fail to register**
-  `force_ebs` (the 2nd service) — the pipeline's emergency-brake call would do
-  nothing. `colcon.meta` is now committed at `SERVICES=2`, `SUBSCRIPTIONS=6`
+  `force_ebs` (the 2nd service). This is a *correctness* gap, **not a braking
+  one** — `force_ebs` is a redundant/bench hook; the emergency brake is driven
+  by `dv/status = EMERGENCY` → AS Emergency → `as_actuation()` (a subscriber,
+  unaffected by the service cap). `colcon.meta` is now committed at `SERVICES=2`, `SUBSCRIPTIONS=6`
   (verify:
   `micro_ros_stm32cubemx_utils/microros_static_library/library_generation/colcon.meta`);
   **rebuild the static library** (see CLAUDE.md → "Rebuild micro-ROS static
@@ -130,7 +132,10 @@ they aren't lost.
    Confirm a controlled stop in AS Finished meets the rules (service brake vs.
    EBS-hold), or add an explicit brake in the FINISHED case.
 
-4. **`/force_ebs` service registration (safety-critical).** Covered above:
-   until `libmicroros.a` is rebuilt with `MAX_SERVICES=2`, the pipeline's
-   emergency-brake service may be unregistered — which would itself be a
-   safety-rule failure. Close this before any track test.
+4. **`/force_ebs` service registration (correctness, not safety-critical).**
+   Until `libmicroros.a` is rebuilt with `MAX_SERVICES=2` the service is
+   unregistered — but emergency **braking is unaffected**: the pipeline also
+   drives `dv/status = EMERGENCY`, which latches AS Emergency + EBS via
+   `as_actuation()` (a subscriber, not the service). `force_ebs` is a
+   redundant/bench actuator path that does not latch; rebuild to restore it,
+   but it is not a braking dependency.
