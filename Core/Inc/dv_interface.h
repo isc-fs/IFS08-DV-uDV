@@ -17,8 +17,11 @@
  *     dv/status     std_msgs/UInt8        pipeline lifecycle byte (below)
  *     ctrl/cmd      geometry_msgs/Twist   linear.x = throttle  [-1, 1]
  *                                         angular.z = steering [-1, 1]
- *     force_ebs     std_srvs/SetBool      emergency-brake request (served
- *                                         by the uDV; see force_ebs_callback)
+ *     force_ebs     std_srvs/SetBool      redundant EBS request / bench hook,
+ *                                         NON-latching (served by the uDV; see
+ *                                         force_ebs_callback). The actuating
+ *                                         emergency path is dv/status ==
+ *                                         EMERGENCY -> AS Emergency -> EBS.
  *
  * Both UInt8 byte topics are each other's liveness heartbeat and must be
  * published at a steady cadence (>= ~2 Hz, not edge-only): a stale

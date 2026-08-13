@@ -8,3 +8,5 @@ test_attitude
 test_bmi088_convert
 *.o
 *.dSYM/
+test_as_actuation
+test_as_stop_latch

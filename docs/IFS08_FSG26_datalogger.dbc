@@ -1,0 +1,142 @@
+VERSION "IFS08_FSG26_DL_v1.0"
+
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: UDV RES DL
+
+
+BO_ 1280 DV_driving_dynamics_1: 8 UDV
+ SG_ Speed_actual : 0|8@1+ (1,0) [0|255] "m/s" DL
+ SG_ Speed_target : 8|8@1+ (1,0) [0|255] "m/s" DL
+ SG_ Steering_angle_actual : 16|8@1- (0.5,0) [-64|63.5] "deg" DL
+ SG_ Steering_angle_target : 24|8@1- (0.5,0) [-64|63.5] "deg" DL
+ SG_ Brake_hydr_actual : 32|8@1+ (1,0) [0|100] "%" DL
+ SG_ Brake_hydr_target : 40|8@1+ (1,0) [0|100] "%" DL
+ SG_ Motor_moment_actual : 48|8@1- (1,0) [-100|100] "%" DL
+ SG_ Motor_moment_target : 56|8@1- (1,0) [-100|100] "%" DL
+
+BO_ 1281 DV_driving_dynamics_2: 6 UDV
+ SG_ Acceleration_longitudinal : 0|16@1- (0.001953125,0) [-64|63.998046875] "m/s^2" DL
+ SG_ Acceleration_lateral : 16|16@1- (0.001953125,0) [-64|63.998046875] "m/s^2" DL
+ SG_ Yaw_rate : 32|16@1- (0.0078125,0) [-256|255.9921875] "deg/s" DL
+
+BO_ 1282 DV_system_status: 5 UDV
+ SG_ AS_state : 0|3@1+ (1,0) [0|7] "" DL
+ SG_ ASB_EBS_state : 3|2@1+ (1,0) [0|3] "" DL
+ SG_ AMI_state : 5|3@1+ (1,0) [0|7] "" DL
+ SG_ Steering_state : 8|1@1+ (1,0) [0|1] "" DL
+ SG_ ASB_redundancy_state : 9|2@1+ (1,0) [0|3] "" DL
+ SG_ Lap_counter : 11|4@1+ (1,0) [0|15] "" DL
+ SG_ Cones_count_actual : 15|8@1+ (1,0) [0|255] "" DL
+ SG_ Cones_count_all : 23|17@1+ (1,0) [0|131071] "" DL
+
+BO_ 1297 DV_ASF_1_safety: 8 UDV
+ SG_ ASF_EBS_pressure_front : 0|16@1+ (0.1,0) [0|25] "bar" DL
+ SG_ ASF_EBS_pressure_rear : 16|16@1+ (0.1,0) [0|25] "bar" DL
+ SG_ ASF_EBS_init_state : 32|4@1+ (1,0) [0|8] "" DL
+ SG_ ASF_EBS_activated : 36|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_emergency_latched : 37|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_SDC_open : 38|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_watchdog_ok : 39|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_ASMS_on : 40|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_TS_active : 41|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_ASB_checks_ok : 42|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_brakes_engaged : 43|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_R2D : 44|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_standstill : 45|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_mission_finished : 46|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_mission_valid : 47|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_brake_pressure_front : 48|8@1+ (1,0) [0|100] "%" DL
+ SG_ ASF_brake_pressure_rear : 56|8@1+ (1,0) [0|100] "%" DL
+
+BO_ 1298 DV_ASF_2_steering: 8 UDV
+ SG_ ASF_steering_angle : 0|16@1- (0.1,0) [-780|780] "deg" DL
+ SG_ ASF_steering_target : 16|16@1- (0.1,0) [-780|780] "deg" DL
+ SG_ ASF_steering_motor_state : 32|8@1- (1,0) [-1|2] "" DL
+ SG_ ASF_steering_sensor_ok : 40|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_steering_calibrated : 41|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_steering_boot_cal_ok : 42|1@1+ (1,0) [0|1] "" DL
+ SG_ ASF_motor_rpm : 48|16@1- (1,0) [-20000|20000] "rpm" DL
+
+BO_ 0 NMT_control: 2 UDV
+ SG_ NMT_requested_state : 0|8@1+ (1,0) [0|255] "" RES
+ SG_ NMT_node_id : 8|8@1+ (1,0) [0|127] "" RES
+
+
+
+CM_ "IFS08 (ISC Racing) FSG 2026 Data Logger DBC. CAN content transmitted by the AS master ECU on the RES-shared Data Logger bus. Classic CAN, 1 Mbit/s, 11-bit IDs, little-endian. DV frames and ASF frames cycle every 100 ms.";
+CM_ BU_ UDV "Autonomous system master ECU.";
+CM_ BU_ RES "Gross-Funk GF2000i RES receiver, CANopen Node-ID 0x011.";
+CM_ BU_ DL "FSG Data Logger.";
+CM_ BO_ 1280 "DS 2.2 Table 2, 0x500. Cycle 100 ms.";
+CM_ SG_ 1280 Steering_angle_actual "0.5 deg/bit, ISO 8855 sign convention (positive = left).";
+CM_ SG_ 1280 Steering_angle_target "0.5 deg/bit, ISO 8855 sign convention (positive = left).";
+CM_ BO_ 1281 "DS 2.2 Table 2, 0x501. Cycle 100 ms.";
+CM_ SG_ 1281 Acceleration_longitudinal "Scale 1/512 m/s^2 per bit.";
+CM_ SG_ 1281 Acceleration_lateral "Scale 1/512 m/s^2 per bit.";
+CM_ SG_ 1281 Yaw_rate "Scale 1/128 deg/s per bit.";
+CM_ BO_ 1282 "DS 2.2 Table 2, 0x502. Cycle 100 ms.";
+CM_ SG_ 1282 AMI_state "Selected autonomous mission.";
+CM_ SG_ 1282 Steering_state "0 = actuator unavailable, 1 = available and responding.";
+CM_ BO_ 1297 "ASF message 1/2 (DS 2.5). Vehicle-individual set monitored by the ASB for redundancy and fault detection. Cycle 100 ms.";
+CM_ SG_ 1297 ASF_EBS_pressure_front "EBS pneumatic accumulator, front circuit.";
+CM_ SG_ 1297 ASF_EBS_pressure_rear "EBS pneumatic accumulator, rear circuit.";
+CM_ SG_ 1297 ASF_EBS_init_state "EBS self-check sequence: 0 start, 8 done, 7 failed.";
+CM_ SG_ 1297 ASF_SDC_open "Shutdown circuit open.";
+CM_ BO_ 1298 "ASF message 2/2 (DS 2.5). Steering actuator redundancy monitoring. Cycle 100 ms.";
+CM_ SG_ 1298 ASF_steering_angle "Measured steering angle, 0.1 deg/bit.";
+CM_ SG_ 1298 ASF_steering_target "Commanded steering angle, 0.1 deg/bit.";
+CM_ BO_ 0 "CANopen NMT node control (AS master). Start/operational to all nodes.";
+
+BA_DEF_ "BusType" STRING ;
+BA_DEF_ "Baudrate" INT 0 1000000;
+BA_DEF_ BO_ "GenMsgCycleTime" INT 0 10000;
+BA_DEF_DEF_ "BusType" "CAN";
+BA_DEF_DEF_ "Baudrate" 1000000;
+BA_DEF_DEF_ "GenMsgCycleTime" 0;
+BA_ "Baudrate" 1000000;
+BA_ "GenMsgCycleTime" BO_ 1280 100;
+BA_ "GenMsgCycleTime" BO_ 1281 100;
+BA_ "GenMsgCycleTime" BO_ 1282 100;
+BA_ "GenMsgCycleTime" BO_ 1297 100;
+BA_ "GenMsgCycleTime" BO_ 1298 100;
+
+VAL_ 1282 AS_state 1 "OFF" 2 "READY" 3 "DRIVING" 4 "EMERGENCY_BRAKE" 5 "FINISHED" ;
+VAL_ 1282 ASB_EBS_state 1 "DEACTIVATED" 2 "INITIAL_CHECKUP_PASSED" 3 "ACTIVATED" ;
+VAL_ 1282 AMI_state 1 "ACCELERATION" 2 "SKIDPAD" 3 "TRACKDRIVE" 4 "BRAKETEST" 5 "INSPECTION" 6 "AUTOCROSS" ;
+VAL_ 1282 Steering_state 0 "UNAVAILABLE" 1 "AVAILABLE" ;
+VAL_ 1282 ASB_redundancy_state 1 "DEACTIVATED" 2 "ENGAGED" 3 "INITIAL_CHECKUP_PASSED" ;
+VAL_ 1297 ASF_EBS_init_state 0 "START" 1 "WAIT_LOW" 2 "CHECK_PRESSURE" 3 "WAIT_TS" 4 "CHECK_ACTUATOR_1" 5 "WAIT_INTER_ACTUATOR_CHECK" 6 "CHECK_ACTUATOR_2" 7 "FAILED" 8 "DONE" ;
+VAL_ 1298 ASF_steering_motor_state -1 "EMERGENCY" 0 "OFF" 1 "ON" 2 "CALIBRATING" ;
+VAL_ 0 NMT_requested_state 1 "START_OPERATIONAL" ;
