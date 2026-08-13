@@ -31,9 +31,14 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout
-        # No submodules: the host suite never links libmicroros.
+      - name: Checkout (with submodules)
+        # The host TEST binaries never link libmicroros, but `make test` also runs
+        # check_build_integrity.sh, which verifies every source the ROOT Makefile
+        # references exists on disk — and that list includes submodule sources
+        # (microros transport/allocators). Without the submodule that check fails.
         uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - name: Show compiler
         run: c++ --version
